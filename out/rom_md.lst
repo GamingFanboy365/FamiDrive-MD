@@ -1,4 +1,4 @@
- AS V1.42 Beta [Bld 118] - source file md.asm - page 1 - 4/13/2021 19:48:59
+ AS V1.42 Beta [Bld 118] - source file md.asm - page 1 - 10/8/2026 21:55:27
 
 
        1/       0 :                     ; ===========================================================================
@@ -716,15 +716,15 @@
      366/     3F8 : 0839 0000 00A1 1100 .wait:		btst	#0,(z80_bus).l
      367/     400 : 66F6                		bne.s	.wait
      368/     402 : 3D5F 0004           		move.w	(sp)+,4(a6)
-     369/     406 : 33FC 0100 00A1 1100 		move.w	#$0100,(z80_bus).l
-     370/     40E : 2D7C 9400 9340 0004 		move.l	#$94009340,4(a6)
-     371/     416 : 2D7C 96C0 9533 0004 		move.l	#$96009500+(((RAM_Fami_Emu+vdpPalette)<<7)&$FF0000)|(((RAM_Fami_Emu+vdpPalette)>>1)&$FF),4(a6)
-     372/     41E : 3D7C 977F 0004      		move.w	#$9700|(((RAM_Fami_Emu+vdpPalette)>>17)&$7F),4(a6)
-     373/     424 : 3D7C C000 0004      		move.w	#$C000,4(a6)
-     374/     42A : 3F3C 0080           		move.w	#$0000|$80,-(sp)
-     375/     42E : 0839 0000 00A1 1100 .wait2:		btst	#0,(z80_bus).l
-     376/     436 : 66F6                		bne.s	.wait2
-     377/     438 : 3D5F 0004           		move.w	(sp)+,4(a6)
+     369/     406 : 2D7C 9400 9340 0004 		move.l	#$94009340,4(a6)
+     370/     40E : 2D7C 96C0 9533 0004 		move.l	#$96009500+(((RAM_Fami_Emu+vdpPalette)<<7)&$FF0000)|(((RAM_Fami_Emu+vdpPalette)>>1)&$FF),4(a6)
+     371/     416 : 3D7C 977F 0004      		move.w	#$9700|(((RAM_Fami_Emu+vdpPalette)>>17)&$7F),4(a6)
+     372/     41C : 3D7C C000 0004      		move.w	#$C000,4(a6)
+     373/     422 : 3F3C 0080           		move.w	#$0000|$80,-(sp)
+     374/     426 : 0839 0000 00A1 1100 .wait2:		btst	#0,(z80_bus).l
+     375/     42E : 66F6                		bne.s	.wait2
+     376/     430 : 3D5F 0004           		move.w	(sp)+,4(a6)
+     377/     434 : 33FC 0000 00A1 1100 		move.w	#0,(z80_bus).l			; Release Z80
      378/     43C :                     
      379/     43C : 426C 0058           		clr.w	vdpHintSp0(a4)
      380/     440 : 397C 0001 005A      		move.w	#1,FamiMdVint(a4)
@@ -761,7 +761,7 @@
      411/     46C : 51C9 FFFC           		dbf	d1,.clrram
      412/     470 : 4BF9 FFFF A000      		lea	(RAM_Fami_PPU).l,a5
      413/     476 : 7000                		moveq	#0,d0
-     414/     478 : 323C 1000           		move.w	#$4000/4,d1
+     414/     478 : 323C 0FFF           		move.w	#($4000/4)-1,d1
      415/     47C :                     .clrvram:
      416/     47C : 2AC0                		move.l	d0,(a5)+
      417/     47E : 51C9 FFFC           		dbf	d1,.clrvram
@@ -3360,7 +3360,7 @@
     3007/    1A94 :                     ; ----------------------------------------------------------------
     3008/    1A94 :                     
     3009/    1A94 :                     loc_23F4:
-    3010/    1A94 : 3E31 3000           		move.w	(a1,d3.w),d7
+    3010/    1A94 : 1E31 3000           		move.b	(a1,d3.w),d7	; byte read: d3 can be odd (word read = address error)
     3011/    1A98 : 4E75                		rts
     3012/    1A9A :                     ; ----------------------------------------------------------------
     3013/    1A9A :                     
@@ -3469,7 +3469,7 @@
     3116/    1B34 : EB4C                		lsl.w	#5,d4
     3117/    1B36 : DAC4                		adda	d4,a5
     3118/    1B38 : 284B                		move.l	a3,a4
-    3119/    1B3A : 383C 07FE           		move.w	#($1FFF/4)-1,d4
+    3119/    1B3A : 383C 07FF           		move.w	#($2000/4)-1,d4
     3120/    1B3E :                     .copychr:
     3121/    1B3E : 28DD                		move.l	(a5)+,(a4)+
     3122/    1B40 : 51CC FFFC           		dbf	d4,.copychr
@@ -4211,7 +4211,7 @@
     3858/    8000 :                     
     3859/    8000 :                     ROM_FILE:	binclude "roms/nestest.nes"
     3860/    E010 :                     
- AS V1.42 Beta [Bld 118] - source file md.asm - page 2 - 4/13/2021 19:48:59
+ AS V1.42 Beta [Bld 118] - source file md.asm - page 2 - 10/8/2026 21:55:27
 
 
   symbol table (* = unused):
@@ -4241,7 +4241,7 @@
  CPUINPUTDATA :                  36 C |  CPUIRQ :                      7FFE - |
  CPUMAPPER :                     32 C |  CPUMODEDEC :                    3A C |
  CPUMODEINTDIS :                 3E C |  CPUNMI :                      7FFA - |
-*CPUSPRHINT :                    2A C | *DATE :                   4/13/2021 - |
+*CPUSPRHINT :                    2A C | *DATE :                   10/8/2026 - |
 *DISPENBL :                      40 - | *DMAENBL :                       10 - |
 *DOTTEDSTRUCTS :                  0 - | *DOVINT :                       588 C |
  EMUCHRROM :                      4 C |  EMULOOP :                      55E C |
@@ -4375,7 +4375,7 @@
  MD_ERROR :                     200 C |  MD_HINT :                      452 C |
  MD_INIT :                      362 C |  MD_INIT.WAIT :                 382 C |
 *MD_MARS_ID :                A130EC - |  MD_VINT :                      3AE C |
- MD_VINT.WAIT :                 3F8 C |  MD_VINT.WAIT2 :                42E C |
+ MD_VINT.WAIT :                 3F8 C |  MD_VINT.WAIT2 :                426 C |
 *MOMCPU :                     68000 - | *MOMCPUNAME :                 68000 - |
  MOSCPU :                       5DE C |  MOS_BRK :                      B56 C |
  MOS_NULL :                     7DE C |  NEMUL_LOADCHR :               2126 C |
@@ -4419,7 +4419,7 @@
 *SYS_CTRL_3 :                A1000D - | *SYS_DATA_1 :                A10003 - |
 *SYS_DATA_2 :                A10005 - | *SYS_DATA_3 :                A10007 - |
 *SYS_EXRAM :                 200000 - | *SYS_IO :                    A10001 - |
-*SYS_TMSS :                  A14000 - | *TIME :                    19:48:59 - |
+*SYS_TMSS :                  A14000 - | *TIME :                    21:55:27 - |
 *TRUE :                           1 - | *VARNULLVRAM :                  7FF - |
  VDPHINTSP0 :                    58 C |  VDPPALETTE :                    66 C |
  VDPREG00 :                      2C C |  VDPREG01 :                      2E C |
@@ -4444,7 +4444,7 @@
     443 symbols
     121 unused symbols
 
- AS V1.42 Beta [Bld 118] - source file md.asm - page 3 - 4/13/2021 19:48:59
+ AS V1.42 Beta [Bld 118] - source file md.asm - page 3 - 10/8/2026 21:55:27
 
 
   defined macros:
@@ -4456,7 +4456,7 @@ ROMPAD                                | STRUCT
 
       6 macros
 
- AS V1.42 Beta [Bld 118] - source file md.asm - page 4 - 4/13/2021 19:48:59
+ AS V1.42 Beta [Bld 118] - source file md.asm - page 4 - 10/8/2026 21:55:27
 
 
   defined functions:
@@ -4466,7 +4466,7 @@ NOTZ80                                | LOCATE
 MAPSIZE                               | DOUBLEWORD                           
 M68K_ADDR                             |
 
- AS V1.42 Beta [Bld 118] - source file md.asm - page 5 - 4/13/2021 19:48:59
+ AS V1.42 Beta [Bld 118] - source file md.asm - page 5 - 10/8/2026 21:55:27
 
 
   codepages:
@@ -4475,7 +4475,7 @@ M68K_ADDR                             |
 STANDARD (0 changed characters)
 
 
-0.02 seconds assembly time
+0.03 seconds assembly time
 
    4169 lines source file
    4181 lines incl. macro expansions
