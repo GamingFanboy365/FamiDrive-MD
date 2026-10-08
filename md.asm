@@ -366,7 +366,6 @@ MD_Vint:
 .wait:		btst	#0,(z80_bus).l
 		bne.s	.wait
 		move.w	(sp)+,4(a6)
-		move.w	#$0100,(z80_bus).l
 		move.l	#$94009340,4(a6)
 		move.l	#$96009500+(((RAM_Fami_Emu+vdpPalette)<<7)&$FF0000)|(((RAM_Fami_Emu+vdpPalette)>>1)&$FF),4(a6)
 		move.w	#$9700|(((RAM_Fami_Emu+vdpPalette)>>17)&$7F),4(a6)
@@ -375,6 +374,7 @@ MD_Vint:
 .wait2:		btst	#0,(z80_bus).l
 		bne.s	.wait2
 		move.w	(sp)+,4(a6)
+		move.w	#0,(z80_bus).l			; Release Z80
 
 		clr.w	vdpHintSp0(a4)
 		move.w	#1,FamiMdVint(a4)
@@ -411,7 +411,7 @@ Fami_LoadRom:
 		dbf	d1,.clrram
 		lea	(RAM_Fami_PPU).l,a5
 		moveq	#0,d0
-		move.w	#$4000/4,d1
+		move.w	#($4000/4)-1,d1
 .clrvram:
 		move.l	d0,(a5)+
 		dbf	d1,.clrvram
@@ -3007,7 +3007,7 @@ off_23D4:	dc.w loc_23F4-off_23D4		; $2000
 ; ----------------------------------------------------------------
 
 loc_23F4:
-		move.w	(a1,d3.w),d7
+		move.b	(a1,d3.w),d7	; byte read: d3 can be odd (word read = address error)
 		rts
 ; ----------------------------------------------------------------
 
@@ -3116,7 +3116,7 @@ wrTo_PRG:
 		lsl.w	#5,d4
 		adda	d4,a5
 		move.l	a3,a4
-		move.w	#($1FFF/4)-1,d4
+		move.w	#($2000/4)-1,d4
 .copychr:
 		move.l	(a5)+,(a4)+
 		dbf	d4,.copychr
