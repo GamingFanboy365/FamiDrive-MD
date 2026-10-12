@@ -16,10 +16,10 @@ Known issues and cleanup, roughly in priority order.
 
 ## ROM loading
 
-- [ ] **Errors for unsupported ROMs.** Unknown mappers silently run as NROM,
+- [x] **Errors for unsupported ROMs.** Unknown mappers silently run as NROM,
   PRG sizes other than 16/32 KB hit `trap #2` (silent hang), and a bad iNES
   header hangs at `bne.s *`. Show a short message on screen instead.
-- [ ] **CHR-RAM games (0 CHR banks).** `Fami_LoadRom` always copies 8 KB of CHR
+- [x] **CHR-RAM games (0 CHR banks).** `Fami_LoadRom` always copies 8 KB of CHR
   from after the PRG data; with CHR-RAM it should clear the pattern tables and
   let `$2007` writes fill them.
 - [ ] **ROM path.** The ROM is hard-coded to `roms/nestest.nes` (gitignored).
