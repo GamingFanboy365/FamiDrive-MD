@@ -8,8 +8,10 @@ Nemul, originally made by Mairtrus. Credit to Mairtrus for the original work.
 ## Features
 
 - Runs on real hardware (the original Nemul did not)
-- Mappers 0 (NROM) and 3 (CNROM)
+- Passes nestest's tests for all official 6502 opcodes
+- Mappers 0 (NROM) and 3 (CNROM), with CHR-ROM or CHR-RAM
 - Working vertical scrolling using both scroll layers (the NES map height differs from the MD's)
+- Shows an error screen, instead of a black screen, for unsupported ROMs and 68000 crashes
 
 ## Building
 
@@ -44,10 +46,12 @@ Anything else shows an error screen saying what isn't supported.
 ## Known issues
 
 - **Slow.** Emulating a 6502 plus the PPU on a 68000 is a stretch.
-- Graphics glitches from timing inaccuracy, which also affects sprite 0 hit
+- Graphics glitches from timing inaccuracy. Sprite 0 hit is approximated from the MD's scanline
+  counter, so split-screen effects can be off by a few lines
 - No sound, and no plans for it
-- 8x16 sprite mode is not implemented (it works differently from the MD's 8x16 sprites)
+- 8x16 sprites show the wrong tiles (NES 8x16 sprites work differently from the MD's)
 - Controller reading is not 6-button pad safe
 - Some games do not work
+- The fixes made in October 2026 were tested in an emulator (Genesis Plus GX), not on real hardware
 
-See [TODO.md](TODO.md) for the full list of known bugs and planned cleanup.
+See [TODO.md](TODO.md) for smaller known bugs and planned work.

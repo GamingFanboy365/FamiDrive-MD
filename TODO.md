@@ -1,44 +1,39 @@
 # TODO
 
-Known issues and cleanup, roughly in priority order.
+Known bugs and planned work, roughly in priority order. The previous list was
+finished in #1 to #6.
 
 ## Emulation
 
-- [x] **6502 status register layout.** PHP, PLP, NMI (`doVint`), BRK and RTI
-  push/pull the raw 68k CCR (`X N Z V C`) instead of the 6502 `NV-BDIZC`
-  layout, and the B flag is never set. Games that PHP then PLA and inspect the
-  bits get wrong values. Convert on push/pull (see the TODO above `emuLoop`).
-- [x] **Sprite 0 hit when off-screen.** `rdPPU_Status` reports a hit whenever
-  sprite 0 Y >= `$E0`; real hardware never does. Fix it, or document it if it
-  is an intentional anti-hang hack.
-- [x] **`$2007` read address not masked.** `rdPPU_Data` indexes the PPU buffer
-  with an unmasked `ppuAddrBase`; `wrPPU_Data` already masks to `$3FFF`.
+- [ ] **Controller reads after the 8th bit.** `APU_Input_1`/`APU_Input_2` shift
+  in zeros, so a 9th read of `$4016`/`$4017` returns 0. A standard NES pad
+  returns 1, and some games check for it. Reads while the strobe is held high
+  should also keep returning the A button.
+- [ ] **Palette reads through `$2007`.** `rdPPU_Data` buffers every read, but
+  reads from `$3F00`-`$3FFF` should return the palette byte immediately.
+- [ ] **Open bus.** Reads from write-only PPU registers return a byte of PRG-ROM
+  (`rdPPU_OpenBus`), and most reads from `$4020`-`$5FFF` return the emulator's flags
+  (`rdAPU_OpenBus`). Both should return the last value on the bus.
+- [ ] **Code running from RAM.** `mos_JSR`, `mos_BRK` and `doVint` build the
+  pushed return address from `a0` assuming it points into PRG-ROM, so JSR or an
+  NMI from code in RAM pushes a wrong address.
+- [ ] **Stack wrap in PLA.** `mos_PLA` increments the stack pointer with
+  `addi.l #$10000,d3`, so pulling at `$01FF` reads `$0200` instead of wrapping
+  to `$0100` like PLP and RTS do.
+- [ ] **Reset state.** The 6502 starts with SP = `$00` and I clear; after reset
+  it should be SP = `$FD` with I set.
+- [ ] **8x16 sprites.** `$2000` bit 5 makes MD sprites two tiles tall
+  (`ppuSprWide`), but NES 8x16 sprites take their pattern table from bit 0 of
+  the tile number and use the even/odd tile pair, so they show the wrong tiles.
 
-## ROM loading
+## Hardware
 
-- [x] **Errors for unsupported ROMs.** Unknown mappers silently run as NROM,
-  PRG sizes other than 16/32 KB hit `trap #2` (silent hang), and a bad iNES
-  header hangs at `bne.s *`. Show a short message on screen instead.
-- [x] **CHR-RAM games (0 CHR banks).** `Fami_LoadRom` always copies 8 KB of CHR
-  from after the PRG data; with CHR-RAM it should clear the pattern tables and
-  let `$2007` writes fill them.
-- [x] **ROM path.** The ROM is hard-coded to `roms/nestest.nes` (gitignored).
-  Document where to put a ROM in the README and/or make the path a `build.sh`
-  argument.
+- [ ] **6-button pads.** `readInput` reads the pad with a simple two-step TH
+  sequence that isn't safe for 6-button controllers.
+- [ ] **Test on real hardware.** The fixes in #1 to #6 were tested in Genesis
+  Plus GX only.
 
-## Repo and build
+## Cleanup
 
-- [x] **Untrack build output.** `out/rom_md.bin` and `out/rom_md.lst` are
-  tracked despite `.gitignore` (the `.bin` also embeds `nestest.nes`). KDE
-  `.directory` files are tracked in six folders.
-- [x] **Dead code.** `system/md/{system,video,sound,head}.asm` are never
-  included; `video.asm` references a nonexistent `engine/shared/*.bin`.
-- [x] **Build scripts.** `build.sh` should use `python3` and stop on failure
-  (`set -e`); add a Windows script for the bundled `asw.exe`. `p2bin.py` should
-  print clear errors and exit non-zero on failure.
-
-## Readability
-
-- [x] **Disassembler labels.** Replace `loc_XXXX`/`off_XXXX` labels and
-  `DATA XREF` comments with named opcode handlers (`op_PHP`, `op_SBC_imm`, ...).
-- [x] **Split `md.asm`** into CPU, PPU, APU/input and mapper files.
+- [ ] **Unused leftovers.** `cpuFlag2` is never read, and the `trap #2` in
+  `romGrabPrg` can't be reached now that `Fami_LoadRom` checks the PRG size.
