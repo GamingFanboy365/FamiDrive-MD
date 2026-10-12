@@ -18,16 +18,9 @@ The build uses the [AS macro assembler](http://john.ccac.rwth-aachen.de:8000/as/
 
 1. Put the NES ROM you want to embed at `roms/nestest.nes`. To use a different file name, change the
    `binclude` line at the bottom of `md.asm`.
-2. On Linux, run:
-
-   ```sh
-   ./build.sh
-   ```
-
+2. Run `./build.sh` on Linux, or `build.bat` on Windows.
 3. The Mega Drive ROM is written to `out/rom_md.bin`, with an assembly listing in `out/rom_md.lst`.
-
-There is no Windows build script yet, but `tools/AS/win32/asw.exe` takes the same arguments as the
-`asl` line in `build.sh`.
+   Build output is not tracked in git.
 
 ### Supported NES ROMs
 
