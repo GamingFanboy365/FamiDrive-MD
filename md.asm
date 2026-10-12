@@ -3100,16 +3100,29 @@ rdPPU_Status:
 		move.w	ppuStatus(a4),d7
 		move.w	#0,ppuStatus(a4)
 
-	; sprite 0 beam hit
+	; sprite 0 hit: set from sprite 0's first line until the end of
+	; the display. A sprite at Y starts on NES line Y+1, and NES line L
+	; is shown on MD line L-8. Sprites below the MD's 224 lines hit on
+	; the last line so games waiting for the hit don't hang.
+	; Hidden sprites (Y >= $EF) never hit.
 		move.w	#$2700,sr
 		move.w	ppuSp0Ypos(a4),d4
-		cmp.w	#$E0,d4
-		bge.s	.setspron
-		move.w	8(a6),d5
+		cmpi.w	#$EF,d4
+		bcc.s	return_2418
+		subq.w	#7,d4
+		bpl.s	.sp0_top
+		moveq	#0,d4
+.sp0_top:
+		cmpi.w	#$DF,d4
+		bls.s	.sp0_bottom
+		move.w	#$DF,d4
+.sp0_bottom:
+		move.w	8(a6),d5		; MD V counter
 		lsr.w	#8,d5
-		cmp.b	d5,d4
-		bne.s	return_2418
-.setspron:
+		cmpi.w	#$E0,d5
+		bcc.s	return_2418		; vblank
+		cmp.w	d4,d5
+		bcs.s	return_2418		; above sprite 0
 		ori.w	#$40,d7
 return_2418:
 
@@ -3133,6 +3146,7 @@ return_241A:				; DATA XREF: ROM:000023E4o
 rdPPU_Data:
 		move.w	ppuDataLast(a4),d7
 		move.w	ppuAddrBase(a4),d4
+		andi.w	#$3FFF,d4
 		move.b	(a3,d4.w),ppuDataLast+1(a4)
 		move.w	ppuAddrIncr(a4),d4
 		add.w	d4,ppuAddrBase(a4)
@@ -3321,7 +3335,7 @@ APU_OAMDMA:
 		eori.w	#1,d6
 		move.b	ppuOamAddr(a4,d6.w),d7
 		lea	(a2,d7.w),a5
-		move.b	d7,ppuSp0Ypos+1(a4)		; sprite 0 ypos
+		move.b	(a5),ppuSp0Ypos+1(a4)		; sprite 0 ypos
 
 		lea 	vdpSprData(a4),a3
 		moveq	#$3F,d5
