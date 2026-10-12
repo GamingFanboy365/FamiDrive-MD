@@ -658,4 +658,4 @@ EndOfRom:
 ; ROM are here
 ; ----------------------------------------------------------------
 
-ROM_FILE:	binclude "roms/nestest.nes"
+ROM_FILE:	binclude "out/nes_rom.bin"	; copied here by build.sh
