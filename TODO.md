@@ -4,14 +4,14 @@ Known issues and cleanup, roughly in priority order.
 
 ## Emulation
 
-- [ ] **6502 status register layout.** PHP, PLP, NMI (`doVint`), BRK and RTI
+- [x] **6502 status register layout.** PHP, PLP, NMI (`doVint`), BRK and RTI
   push/pull the raw 68k CCR (`X N Z V C`) instead of the 6502 `NV-BDIZC`
   layout, and the B flag is never set. Games that PHP then PLA and inspect the
   bits get wrong values. Convert on push/pull (see the TODO above `emuLoop`).
-- [ ] **Sprite 0 hit when off-screen.** `rdPPU_Status` reports a hit whenever
+- [x] **Sprite 0 hit when off-screen.** `rdPPU_Status` reports a hit whenever
   sprite 0 Y >= `$E0`; real hardware never does. Fix it, or document it if it
   is an intentional anti-hang hack.
-- [ ] **`$2007` read address not masked.** `rdPPU_Data` indexes the PPU buffer
+- [x] **`$2007` read address not masked.** `rdPPU_Data` indexes the PPU buffer
   with an unmasked `ppuAddrBase`; `wrPPU_Data` already masks to `$3FFF`.
 
 ## ROM loading

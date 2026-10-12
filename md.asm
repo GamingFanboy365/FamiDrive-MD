@@ -488,6 +488,7 @@ emuStart:
 		moveq	#0,d1
 		moveq	#0,d2
 		move.l	#$01002000,d3
+		bra.s	emuLoop
 
 ; --------------------------------------------------------
 ; a0 - Fami CPU current PC
@@ -508,23 +509,10 @@ emuStart:
 ; d7 - emu temporal input/output
 ; --------------------------------------------------------
 
-; TODO:
-; Actually implement Fami's SR, the
-; current SR is a copypaste of MD's status bits
-
-; ------------------------------------------------
-; Main Loop
-; ------------------------------------------------
-
-emuLoop:
-		tst.w	FamiMdVint(a4)
-		bne.s	famiVInt
-emuVint:
-		clr.w	d4
-		move.b	(a0)+,d4
-		add.w	d4,d4
-		move.w	mosCpu(pc,d4.w),d6
-		jmp	mosCpu(pc,d6.w)
+; The 6502's N, Z, V and C flags are kept in the 68k CCR
+; (low byte of d3, with X mirroring C) so opcodes can use
+; the 68k's own flag results. I and D are kept separately.
+; famiGetP/famiSetP convert to and from the 6502's P byte.
 
 ; ------------------------------------------------
 ; VBlank
@@ -543,7 +531,9 @@ doVint:
 		move.l	#emuVint,(RAM_EmuLoop+2).l
 		move.w	#1,cpuFamiVint(a4)
 
-		move.w	d3,d7			; Save PC and SR
+		bsr	famiGetP		; Save PC and P (B clear)
+		move.b	d5,d7
+		andi.b	#$EF,d7
 		swap	d3
 		move.l	a0,d4
 		sub.l	#RAM_Fami_ROM,d4
@@ -557,6 +547,7 @@ doVint:
 		move.b	d7,(a2,d3.w)
 		subq.b	#1,d3
 		swap	d3
+		move.w	#1,cpuModeIntDis(a4)
 
 		lea 	(RAM_Fami_ROM),a0	; PRG base
 		move.w	#cpuNMI,d6		; go to NMI
@@ -568,6 +559,21 @@ doVint:
 		movea.l	a1,a0
 		add.w	d6,a0
 		bra	emuVint
+
+; ------------------------------------------------
+; Main Loop
+; ------------------------------------------------
+
+emuLoop:
+		tst.w	FamiMdVint(a4)
+		bne.s	famiVInt
+emuVint:
+		clr.w	d4
+		move.b	(a0)+,d4
+		add.w	d4,d4
+		move.w	mosCpu(pc,d4.w),d6
+		jmp	mosCpu(pc,d6.w)	; mosCpu must stay right after this
+
 		
 ; ----------------------------------------------------------------
 mosCpu:		dc.w mos_BRK-mosCpu	; $00
@@ -1250,16 +1256,33 @@ loc_1170:
 ; ----------------------------------------------------------------
 
 mos_BRK:
+		addq.l	#1,a0			; skip the padding byte
+		bsr	famiGetP		; P with B set
+		swap	d3			; push PC, P
+		move.w	a0,d4
+		move.b	d4,d6
+		lsr.w	#8,d4
+		or.b	#$80,d4
+		move.b	d4,(a2,d3.w)
+		subq.b	#1,d3
+		move.b	d6,(a2,d3.w)
+		subq.b	#1,d3
+		move.b	d5,(a2,d3.w)
+		subq.b	#1,d3
+		swap	d3
+		move.w	#1,cpuModeIntDis(a4)
+
 		lea 	(RAM_Fami_ROM),a5
 		move.w	#cpuIRQ,d6		; go to IRQ
 		add.w	d6,a5
+		moveq	#0,d6
 		move.b	1(a5),d6
 		lsl.w	#8,d6
 		move.b	(a5),d6
-
-		move.w	#1,cpuModeIntDis(a4)
-		move.w	#1,cpuFlag2(a4)
-		bra.w	loc_1686
+		and.w	#$7FFF,d6
+		movea.l	a1,a0
+		add.l	d6,a0
+		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
 loc_118E:
@@ -2338,12 +2361,73 @@ loc_1A6A:				; DATA XREF: ROM:00000B52o
 ; ----------------------------------------------------------------
 
 loc_1A78:
-		move.w	d3,d5
+		bsr	famiGetP
 		swap	d3
 		move.b	d5,(a2,d3.w)
-		sub.w	#1,d3
+		subq.b	#1,d3
 		swap	d3
 		jmp	(RAM_EmuLoop).l
+
+; ----------------------------------------------------------------
+; Convert between the 6502 P register and the emulator's flags
+;
+; N, Z, V and C live in the 68k CCR (low byte of d3, X mirrors C),
+; I and D live in cpuModeIntDis and cpuModeDec.
+; d3 must not be swapped when calling these.
+; ----------------------------------------------------------------
+
+; Build P in d5 (bits 5 and 4 set; clear bit 4 for NMI/IRQ)
+; Uses: d5, a5
+famiGetP:
+		lea	tblCcrToP(pc),a5
+		move.w	d3,d5
+		andi.w	#$0F,d5
+		move.b	(a5,d5.w),d5
+		tst.w	cpuModeIntDis(a4)
+		beq.s	.no_i
+		ori.b	#$04,d5
+.no_i:
+		tst.w	cpuModeDec(a4)
+		beq.s	.no_d
+		ori.b	#$08,d5
+.no_d:
+		rts
+
+; Load flags from P in d5
+; Uses: d5, a5
+famiSetP:
+		lea	tblPToCcr(pc),a5
+		andi.w	#$FF,d5
+		andi.b	#$E0,d3
+		or.b	(a5,d5.w),d3
+		clr.w	cpuModeIntDis(a4)
+		btst	#2,d5
+		beq.s	.no_i
+		move.w	#1,cpuModeIntDis(a4)
+.no_i:
+		clr.w	cpuModeDec(a4)
+		btst	#3,d5
+		beq.s	.no_d
+		move.w	#1,cpuModeDec(a4)
+.no_d:
+		rts
+
+; CCR (N Z V C) -> P (N V 1 B . . Z C)
+tblCcrToP:
+.ccr := 0
+		rept 16
+		dc.b $30|((.ccr&8)<<4)|((.ccr&4)>>1)|((.ccr&2)<<5)|(.ccr&1)
+.ccr := .ccr+1
+		endm
+
+; P -> CCR (X N Z V C, X = C)
+tblPToCcr:
+.p := 0
+		rept 256
+		dc.b ((.p&$80)>>4)|((.p&$40)>>5)|((.p&2)<<1)|((.p&1)*$11)
+.p := .p+1
+		endm
+		align 2
 ; ----------------------------------------------------------------
 
 loc_1A88:
@@ -2363,10 +2447,10 @@ loc_1A88:
 
 loc_1AA6:
 		swap	d3
-		add.w	#1,d3
+		addq.b	#1,d3
 		move.b	(a2,d3.w),d5
 		swap	d3
-		move.b	d5,d3
+		bsr	famiSetP
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
@@ -2534,7 +2618,7 @@ loc_1BF6:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		swap	d3
-		move.b	d5,d3
+		bsr	famiSetP
 		and.l	#$7FFF,d6
 		movea.l a1,a0
 		add.l 	d6,a0
@@ -2555,7 +2639,7 @@ loc_1BF6:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		swap	d3
-		move.b	d5,d3
+		bsr	famiSetP
 		and.l	#$7FFF,d6
 		movea.l a1,a0
 		add.l 	d6,a0
@@ -3016,16 +3100,29 @@ rdPPU_Status:
 		move.w	ppuStatus(a4),d7
 		move.w	#0,ppuStatus(a4)
 
-	; sprite 0 beam hit
+	; sprite 0 hit: set from sprite 0's first line until the end of
+	; the display. A sprite at Y starts on NES line Y+1, and NES line L
+	; is shown on MD line L-8. Sprites below the MD's 224 lines hit on
+	; the last line so games waiting for the hit don't hang.
+	; Hidden sprites (Y >= $EF) never hit.
 		move.w	#$2700,sr
 		move.w	ppuSp0Ypos(a4),d4
-		cmp.w	#$E0,d4
-		bge.s	.setspron
-		move.w	8(a6),d5
+		cmpi.w	#$EF,d4
+		bcc.s	return_2418
+		subq.w	#7,d4
+		bpl.s	.sp0_top
+		moveq	#0,d4
+.sp0_top:
+		cmpi.w	#$DF,d4
+		bls.s	.sp0_bottom
+		move.w	#$DF,d4
+.sp0_bottom:
+		move.w	8(a6),d5		; MD V counter
 		lsr.w	#8,d5
-		cmp.b	d5,d4
-		bne.s	return_2418
-.setspron:
+		cmpi.w	#$E0,d5
+		bcc.s	return_2418		; vblank
+		cmp.w	d4,d5
+		bcs.s	return_2418		; above sprite 0
 		ori.w	#$40,d7
 return_2418:
 
@@ -3049,6 +3146,7 @@ return_241A:				; DATA XREF: ROM:000023E4o
 rdPPU_Data:
 		move.w	ppuDataLast(a4),d7
 		move.w	ppuAddrBase(a4),d4
+		andi.w	#$3FFF,d4
 		move.b	(a3,d4.w),ppuDataLast+1(a4)
 		move.w	ppuAddrIncr(a4),d4
 		add.w	d4,ppuAddrBase(a4)
@@ -3237,7 +3335,7 @@ APU_OAMDMA:
 		eori.w	#1,d6
 		move.b	ppuOamAddr(a4,d6.w),d7
 		lea	(a2,d7.w),a5
-		move.b	d7,ppuSp0Ypos+1(a4)		; sprite 0 ypos
+		move.b	(a5),ppuSp0Ypos+1(a4)		; sprite 0 ypos
 
 		lea 	vdpSprData(a4),a3
 		moveq	#$3F,d5
