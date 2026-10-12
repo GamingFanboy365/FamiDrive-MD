@@ -31,6 +31,17 @@ The build uses the [AS macro assembler](http://john.ccac.rwth-aachen.de:8000/as/
 
 Anything else shows an error screen saying what isn't supported.
 
+## Source layout
+
+| File | Contents |
+|---|---|
+| `md.asm` | ROM header, Mega Drive init and interrupts, NES ROM loading, emulator main loop |
+| `emu/cpu.asm` | 6502 CPU: opcode table and handlers |
+| `emu/memory.asm` | CPU memory map: RAM, PRG-ROM and mappers, APU/controller registers, PPU register reads |
+| `emu/ppu.asm` | PPU register writes, nametable and palette drawing, CHR conversion |
+| `system/md/error.asm` | Error screen |
+| `system/` | Assembler macros and Mega Drive hardware definitions |
+
 ## Known issues
 
 - **Slow.** Emulating a 6502 plus the PPU on a 68000 is a stretch.

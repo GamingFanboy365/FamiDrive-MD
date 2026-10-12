@@ -39,6 +39,6 @@ Known issues and cleanup, roughly in priority order.
 
 ## Readability
 
-- [ ] **Disassembler labels.** Replace `loc_XXXX`/`off_XXXX` labels and
+- [x] **Disassembler labels.** Replace `loc_XXXX`/`off_XXXX` labels and
   `DATA XREF` comments with named opcode handlers (`op_PHP`, `op_SBC_imm`, ...).
-- [ ] **Split `md.asm`** into CPU, PPU, APU/input and mapper files.
+- [x] **Split `md.asm`** into CPU, PPU, APU/input and mapper files.
