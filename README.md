@@ -27,9 +27,9 @@ The build uses the [AS macro assembler](http://john.ccac.rwth-aachen.de:8000/as/
 - iNES format (`.nes`)
 - Mapper 0 (NROM) or mapper 3 (CNROM)
 - 16 KB or 32 KB of PRG-ROM
-- CHR-ROM (games that use CHR-RAM are not supported yet)
+- CHR-ROM or CHR-RAM
 
-Other mappers are not rejected. They run as if they were NROM and usually fail.
+Anything else shows an error screen saying what isn't supported.
 
 ## Known issues
 

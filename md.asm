@@ -74,6 +74,7 @@ ppuStatus	ds.w 1;equ -2
 vdpHintSp0	ds.w 1
 FamiMdVint	ds.w 1
 FamiPPUVint	ds.w 1
+ppuChrRam	ds.w 1			; 1 - pattern tables are CHR-RAM
 vdpScrlX	ds.l 1
 vdpScrlY	ds.l 1
 vdpPalette	ds.w 64
@@ -172,7 +173,8 @@ vdpSprData	ds.w 8*64
 ; ----------------------------------------------------------------
 
 MD_Error:
-		bra.s	MD_Error
+		lea	(errStrException).l,a0
+		jmp	(MD_ShowError).l
 
 ; ====================================================================
 ; ----------------------------------------------------------------
@@ -399,9 +401,43 @@ MD_Hint:
 ; ----------------------------------------------------------------
 
 Fami_LoadRom:
-		move.l	(a0),d0		; Read and Load	Fami ROM
-		cmpi.l	#$4E45531A,d0
-		bne.s	*
+		cmpi.l	#$4E45531A,(a0)		; "NES",$1A
+		beq.s	.header_ok
+		lea	(errStrBadHeader).l,a0
+		jmp	(MD_ShowError).l
+.header_ok:
+
+	; Mapper number. Old dumps can have junk (e.g. "DiskDude!") in
+	; bytes 7-15, so ignore byte 7 then unless it's an NES 2.0 header.
+		move.b	7(a0),d6
+		move.b	d6,d7
+		andi.b	#%00001100,d7
+		cmpi.b	#%00001000,d7
+		beq.s	.mapper_hi
+		tst.l	12(a0)
+		beq.s	.mapper_hi
+		moveq	#0,d6
+.mapper_hi:
+		andi.w	#%11110000,d6
+		moveq	#0,d1
+		move.b	6(a0),d1
+		lsr.b	#4,d1
+		or.b	d6,d1
+		move.w	d1,d5			; keep for cpuMapper
+		beq.s	.mapper_ok
+		cmpi.b	#3,d1
+		beq.s	.mapper_ok
+		lea	(errStrMapper).l,a0
+		jmp	(MD_ShowError).l
+.mapper_ok:
+		move.b	4(a0),d1		; PRG-ROM size in 16 KB units
+		cmpi.b	#1,d1
+		beq.s	.prg_ok
+		cmpi.b	#2,d1
+		beq.s	.prg_ok
+		lea	(errStrPrgSize).l,a0
+		jmp	(MD_ShowError).l
+.prg_ok:
 
 		lea	(RAM_Fami_RAM).l,a5
 		moveq	#0,d0
@@ -422,13 +458,8 @@ Fami_LoadRom:
 		moveq	#0,d7			; PRG-ROM copy
 		move.b	4(a0),d7
 		bsr	romGrabPrg
-		move.b	6(a0),d7		; PPU mirroring
-		move.b	7(a0),d6
-		and.w	#%11110000,d7
-		and.w	#%11110000,d6
-		lsr.w	#4,d7
-		or.w	d6,d7
-		move.w	d7,cpuMapper(a3)
+		lea	(RAM_Fami_Emu).l,a3	; romGrabPrg uses a3
+		move.w	d5,cpuMapper(a3)
 	
 	; Mirror check
 		move.w	#0,d7			; 0 - horizontal
@@ -438,13 +469,19 @@ Fami_LoadRom:
 loc_9F4:
 		move.w	d7,ppuMirror(a3)
 		
-	; COPY CHR-ROM TO RAM
-		lea	(RAM_Fami_PPU).l,a5
+	; COPY CHR-ROM TO RAM, or use the (cleared) buffer as CHR-RAM
 		move.l	a4,emuChrRom(a3)
+		tst.b	5(a0)
+		bne.s	.chr_rom
+		move.w	#1,ppuChrRam(a3)
+		bra.s	.chr_done
+.chr_rom:
+		lea	(RAM_Fami_PPU).l,a5
 		move.l	#$7FF,d7
-loc_A10:
+.copy_chr:
 		move.l	(a4)+,(a5)+
-		dbf	d7,loc_A10
+		dbf	d7,.copy_chr
+.chr_done:
 		adda	#$10,a0
 		move.l	a0,emuPrgRom(a3)
 		rts
@@ -482,6 +519,7 @@ emuStart:
 		adda	d0,a0
 		move.w	#$8004,vdpReg00(a4)
 		move.w	#$8174,vdpReg01(a4)
+		move.w	#1,ppuAddrIncr(a4)		; $2000 is 0 at power on: +1
 		move.w	#$4EF9,(RAM_EmuLoop).l		; JMP opcode
 		move.l	#emuLoop,(RAM_EmuLoop+2).l	; default emulation loop
 		moveq	#0,d0
@@ -3541,6 +3579,8 @@ wrPPU_Data:
 		move.w	ppuAddrIncr(a4),d6
 		add.w	d6,ppuAddrBase(a4)
 		andi.w	#$3FFF,d4
+		cmpi.w	#$2000,d4
+		bcs.w	ppuChrRamWrite
 		move.b	d7,(a3,d4.w)
 		cmpi.w	#$3F00,d4
 		bcc.s	ppuSetColor
@@ -3885,6 +3925,104 @@ loc_29E2:
 
 ; =============== S U B	R O U T	I N E =======================================
 
+; ----------------------------------------------------------------
+; $2007 write to the pattern tables ($0000-$1FFF)
+;
+; Ignored for CHR-ROM. For CHR-RAM, store the byte and re-convert
+; that row of the tile in each MD tile set showing this table:
+; MD tiles $000-$0FF hold the BG table, $100-$1FF the sprite table
+; with colors +8 (see Nemul_LoadChr).
+;
+; d4 - NES pattern address
+; ----------------------------------------------------------------
+
+ppuChrRamWrite:
+		tst.w	ppuChrRam(a4)
+		beq.w	.done
+		move.b	d7,(a3,d4.w)
+		movem.l	d0-d3,-(sp)
+
+	; 2bpp row -> 4bpp, colors 0-3
+		move.w	d4,d3
+		andi.w	#$1FF7,d3
+		move.b	(a3,d3.w),d1		; plane 0
+		move.b	8(a3,d3.w),d2		; plane 1
+		moveq	#0,d0
+		moveq	#7,d5
+.pixel:
+		lsl.l	#4,d0
+		moveq	#0,d6
+		add.b	d2,d2
+		addx.b	d6,d6
+		add.b	d1,d1
+		addx.b	d6,d6
+		or.b	d6,d0
+		dbf	d5,.pixel
+
+	; VRAM address of the row in the first set: tile*32 + row*4
+		move.w	d4,d3
+		andi.w	#$0FF0,d3
+		add.w	d3,d3
+		move.w	d4,d5
+		andi.w	#7,d5
+		add.w	d5,d5
+		add.w	d5,d5
+		add.w	d5,d3
+
+	; which table was written, as 0/-1 to compare with ppuChrBank bits
+		moveq	#0,d1
+		btst	#12,d4
+		beq.s	.table0
+		moveq	#-1,d1
+.table0:
+		move.w	ppuChrBank(a4),d2
+		move.w	#$2700,sr
+
+	; BG set: ppuChrBank bit 7 selects its table
+		moveq	#0,d5
+		btst	#7,d2
+		beq.s	.bg0
+		moveq	#-1,d5
+.bg0:
+		cmp.b	d1,d5
+		bne.s	.no_bg
+		moveq	#0,d5
+		move.w	d3,d5
+		swap	d5
+		ori.l	#$40000000,d5
+		move.l	d5,4(a6)
+		move.l	d0,(a6)
+.no_bg:
+
+	; sprite set: bit 6 selects its table, nonzero pixels +8
+		moveq	#0,d5
+		btst	#6,d2
+		beq.s	.spr0
+		moveq	#-1,d5
+.spr0:
+		cmp.b	d1,d5
+		bne.s	.no_spr
+		move.l	d0,d6
+		lsr.l	#1,d6
+		or.l	d0,d6
+		andi.l	#$11111111,d6
+		lsl.l	#3,d6
+		or.l	d6,d0
+		moveq	#0,d5
+		move.w	d3,d5
+		addi.w	#$2000,d5
+		swap	d5
+		ori.l	#$40000000,d5
+		move.l	d5,4(a6)
+		move.l	d0,(a6)
+.no_spr:
+		move.w	#$2000,sr
+		movem.l	(sp)+,d0-d3
+.done:
+		jmp	(RAM_EmuLoop).l
+
+; =============== S U B	R O U T	I N E =======================================
+
 ; a6 - $C00000
 ; a4 - RAM_Fami_Emu
 
@@ -3943,6 +4081,10 @@ loc_8DEE:
 		movem.l	(sp)+,d0-d2/d3-d7
 return_8E08:
 		rts
+
+; ====================================================================
+
+		include	"system/md/error.asm"	; Error screen
 
 ; ====================================================================
 
