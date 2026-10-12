@@ -1,12 +1,16 @@
 #!/bin/bash
+# usage: ./build.sh [nes_rom]    (default: roms/nestest.nes)
 set -e
+ROM=${1:+$(realpath -m "$1")}
 cd "$(dirname "$0")"
+ROM=${ROM:-roms/nestest.nes}
 
-if [ ! -f roms/nestest.nes ]; then
-	echo "build: roms/nestest.nes not found (see README)" >&2
+if [ ! -f "$ROM" ]; then
+	echo "build: $ROM not found (see README)" >&2
 	exit 1
 fi
 mkdir -p out
+cp "$ROM" out/nes_rom.bin
 
 # MD ROM
 echo "** MEGA DRIVE **"

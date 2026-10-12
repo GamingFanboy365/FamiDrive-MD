@@ -22,7 +22,7 @@ Known issues and cleanup, roughly in priority order.
 - [x] **CHR-RAM games (0 CHR banks).** `Fami_LoadRom` always copies 8 KB of CHR
   from after the PRG data; with CHR-RAM it should clear the pattern tables and
   let `$2007` writes fill them.
-- [ ] **ROM path.** The ROM is hard-coded to `roms/nestest.nes` (gitignored).
+- [x] **ROM path.** The ROM is hard-coded to `roms/nestest.nes` (gitignored).
   Document where to put a ROM in the README and/or make the path a `build.sh`
   argument.
 
@@ -39,6 +39,6 @@ Known issues and cleanup, roughly in priority order.
 
 ## Readability
 
-- [ ] **Disassembler labels.** Replace `loc_XXXX`/`off_XXXX` labels and
+- [x] **Disassembler labels.** Replace `loc_XXXX`/`off_XXXX` labels and
   `DATA XREF` comments with named opcode handlers (`op_PHP`, `op_SBC_imm`, ...).
-- [ ] **Split `md.asm`** into CPU, PPU, APU/input and mapper files.
+- [x] **Split `md.asm`** into CPU, PPU, APU/input and mapper files.

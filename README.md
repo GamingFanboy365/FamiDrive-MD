@@ -16,10 +16,9 @@ Nemul, originally made by Mairtrus. Credit to Mairtrus for the original work.
 The build uses the [AS macro assembler](http://john.ccac.rwth-aachen.de:8000/as/), which is bundled in
 `tools/AS/`, and Python 3 for `tools/p2bin.py`.
 
-1. Put the NES ROM you want to embed at `roms/nestest.nes`. To use a different file name, change the
-   `binclude` line at the bottom of `md.asm`.
-2. Run `./build.sh` on Linux, or `build.bat` on Windows.
-3. The Mega Drive ROM is written to `out/rom_md.bin`, with an assembly listing in `out/rom_md.lst`.
+1. Pass the NES ROM you want to embed to the build script: `./build.sh path/to/game.nes` on Linux,
+   or `build.bat path\to\game.nes` on Windows. With no argument it uses `roms/nestest.nes`.
+2. The Mega Drive ROM is written to `out/rom_md.bin`, with an assembly listing in `out/rom_md.lst`.
    Build output is not tracked in git.
 
 ### Supported NES ROMs
@@ -30,6 +29,17 @@ The build uses the [AS macro assembler](http://john.ccac.rwth-aachen.de:8000/as/
 - CHR-ROM or CHR-RAM
 
 Anything else shows an error screen saying what isn't supported.
+
+## Source layout
+
+| File | Contents |
+|---|---|
+| `md.asm` | ROM header, Mega Drive init and interrupts, NES ROM loading, emulator main loop |
+| `emu/cpu.asm` | 6502 CPU: opcode table and handlers |
+| `emu/memory.asm` | CPU memory map: RAM, PRG-ROM and mappers, APU/controller registers, PPU register reads |
+| `emu/ppu.asm` | PPU register writes, nametable and palette drawing, CHR conversion |
+| `system/md/error.asm` | Error screen |
+| `system/` | Assembler macros and Mega Drive hardware definitions |
 
 ## Known issues
 
