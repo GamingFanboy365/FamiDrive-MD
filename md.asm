@@ -365,6 +365,7 @@ MD_Vint:
 .wait2:		btst	#0,(z80_bus).l
 		bne.s	.wait2
 		move.w	(sp)+,4(a6)
+		bsr	apuUpdate			; needs the Z80 bus
 		move.w	#0,(z80_bus).l			; Release Z80
 
 		clr.w	vdpHintSp0(a4)
@@ -528,6 +529,7 @@ emuStart:
 		bsr	Fami_LoadRom
 		
 		lea	($C00000).l,a6
+		bsr	apuInit
 		lea 	(RAM_Fami_Emu),a4
 		lea	(RAM_Fami_PPU).w,a3
 		lea	(RAM_Fami_RAM).w,a2
@@ -643,6 +645,7 @@ emuVint:
 		include	"emu/cpu.asm"		; 6502 CPU, must follow emuVint
 		include	"emu/memory.asm"	; CPU memory map
 		include	"emu/ppu.asm"		; PPU
+		include	"emu/apu.asm"		; APU (sound)
 
 ; ====================================================================
 

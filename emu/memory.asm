@@ -235,43 +235,44 @@ wrTo_PRG:
 wrTo_APU:
 		cmpi.b	#$1F,d4
 		bhi.s	APU_Null
+		move.w	d4,d5			; register, for apuStore
 		add.w	d4,d4
 		move.w	wrAPU_Table(pc,d4.w),d4
 		jmp	wrAPU_Table(pc,d4.w)
 
 ; ----------------------------------------------------------------
-wrAPU_Table:	dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_OAMDMA-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Input-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
-		dc.w APU_Null-wrAPU_Table
+wrAPU_Table:	dc.w apuStore-wrAPU_Table	; $4000
+		dc.w apuStore-wrAPU_Table	; $4001
+		dc.w apuStore-wrAPU_Table	; $4002
+		dc.w apuStore-wrAPU_Table	; $4003
+		dc.w apuStore-wrAPU_Table	; $4004
+		dc.w apuStore-wrAPU_Table	; $4005
+		dc.w apuStore-wrAPU_Table	; $4006
+		dc.w apuStore-wrAPU_Table	; $4007
+		dc.w apuStore-wrAPU_Table	; $4008
+		dc.w apuStore-wrAPU_Table	; $4009
+		dc.w apuStore-wrAPU_Table	; $400A
+		dc.w apuStore-wrAPU_Table	; $400B
+		dc.w apuStore-wrAPU_Table	; $400C
+		dc.w apuStore-wrAPU_Table	; $400D
+		dc.w apuStore-wrAPU_Table	; $400E
+		dc.w apuStore-wrAPU_Table	; $400F
+		dc.w apuStore-wrAPU_Table	; $4010
+		dc.w apuStore-wrAPU_Table	; $4011
+		dc.w apuStore-wrAPU_Table	; $4012
+		dc.w apuStore-wrAPU_Table	; $4013
+		dc.w APU_OAMDMA-wrAPU_Table	; $4014
+		dc.w apuStore-wrAPU_Table	; $4015
+		dc.w APU_Input-wrAPU_Table	; $4016
+		dc.w apuStore-wrAPU_Table	; $4017
+		dc.w APU_Null-wrAPU_Table	; $4018
+		dc.w APU_Null-wrAPU_Table	; $4019
+		dc.w APU_Null-wrAPU_Table	; $401A
+		dc.w APU_Null-wrAPU_Table	; $401B
+		dc.w APU_Null-wrAPU_Table	; $401C
+		dc.w APU_Null-wrAPU_Table	; $401D
+		dc.w APU_Null-wrAPU_Table	; $401E
+		dc.w APU_Null-wrAPU_Table	; $401F
 
 APU_Null:
 		jmp	(RAM_EmuLoop).l

@@ -1,0 +1,585 @@
+; ====================================================================
+; ----------------------------------------------------------------
+; APU (sound)
+;
+; 6502 writes to $4000-$4017 are only stored (apuStore), so the
+; emulation loop stays fast. Once per frame, from MD_Vint, apuUpdate
+; applies the writes, runs the APU frame sequencer (envelopes,
+; length counters, sweep, triangle linear counter) and sets the
+; MD sound chips:
+;
+; Pulse 1 - PSG tone 0
+; Pulse 2 - PSG tone 1
+; Triangle - YM2612 channel 1, a single sine operator
+; Noise - PSG noise, clocked by PSG tone 2 (kept silent)
+;
+; The PSG only plays 50% squares, so pulse duty is approximated
+; by volume. DMC is not emulated.
+; ----------------------------------------------------------------
+
+RAM_Fami_Apu	equ RAM_Fami_Emu+$C00	; cleared by emuStart
+
+; APU state, offsets from RAM_Fami_Apu
+apuRegs		equ $00			; $18 bytes: last value written to $4000-$4017
+apuWrote	equ $18			; $18 bytes: nonzero if written since last frame
+apuCh1		equ $30			; pulse 1 channel state (apuCh_*)
+apuCh2		equ $38			; pulse 2
+apuChN		equ $40			; noise
+apuTriLength	equ $48
+apuTriLinear	equ $49
+apuTriReload	equ $4A			; linear counter reload flag
+apuFmKey	equ $4B			; triangle key is on
+apuFmFreq	equ $4C			; word: last block/fnum written
+apuNoiseCtl	equ $4E			; last PSG noise control byte
+apuReady	equ $4F			; set by apuInit
+
+; channel state, offsets from apuCh1/apuCh2/apuChN
+apuCh_EnvStart	equ 0
+apuCh_EnvDiv	equ 1
+apuCh_EnvDecay	equ 2
+apuCh_Length	equ 3
+apuCh_SweepDiv	equ 4
+apuCh_SweepLoad	equ 5			; sweep reload flag
+apuCh_Period	equ 6			; word: timer period
+
+psg_port	equ $11			; from vdp_data
+ym_addr1	equ $A04000		; YM2612 part I (Z80 bus needed)
+ym_data1	equ $A04001
+apuTriLevel	equ $0B			; triangle operator TL (volume), matched to the NES mix
+
+; ----------------------------------------------------------------
+; $4000-$4013, $4015, $4017 write
+;
+; d5 - register ($00-$17)
+; d7 - value
+; ----------------------------------------------------------------
+
+apuStore:
+		lea	(RAM_Fami_Apu).l,a5
+		move.b	d7,apuRegs(a5,d5.w)
+		st	apuWrote(a5,d5.w)
+		jmp	(RAM_EmuLoop).l
+
+; ----------------------------------------------------------------
+; Set up the YM2612 triangle voice and silence the PSG
+;
+; a6 - vdp_data
+; ----------------------------------------------------------------
+
+apuInit:
+		lea	(RAM_Fami_Apu).l,a5
+		move.b	#$9F,psg_port(a6)	; PSG: all channels off
+		move.b	#$BF,psg_port(a6)
+		move.b	#$DF,psg_port(a6)
+		move.b	#$FF,psg_port(a6)
+		move.w	#$100,(z80_bus).l
+.wait_bus:
+		btst	#0,(z80_bus).l
+		bne.s	.wait_bus
+		lea	apuFmSetup(pc),a1
+.setup:
+		move.b	(a1)+,d0
+		cmpi.b	#$FF,d0
+		beq.s	.done
+		move.b	(a1)+,d1
+		bsr	apuYmWrite
+		bra.s	.setup
+.done:
+		move.w	#0,(z80_bus).l
+		st	apuReady(a5)
+		rts
+
+; YM2612 register/value pairs, $FF ends
+apuFmSetup:
+		dc.b $22,$00			; LFO off
+		dc.b $27,$00			; channel 3 normal mode
+		dc.b $2B,$00			; DAC off
+		dc.b $28,$00,$28,$01,$28,$02	; all keys off
+		dc.b $28,$04,$28,$05,$28,$06
+		dc.b $B0,$07			; channel 1: algorithm 7 (all carriers), no feedback
+		dc.b $B4,$C0			; left + right
+		dc.b $30,$01,$34,$01,$38,$01,$3C,$01	; MUL 1
+		dc.b $40,$7F,$44,$7F,$48,$7F		; operators 1-3 silent
+		dc.b $4C,apuTriLevel			; operator 4 plays
+		dc.b $50,$1F,$54,$1F,$58,$1F,$5C,$1F	; fastest attack
+		dc.b $60,$00,$64,$00,$68,$00,$6C,$00	; no decay
+		dc.b $70,$00,$74,$00,$78,$00,$7C,$00
+		dc.b $80,$0F,$84,$0F,$88,$0F,$8C,$0F	; sustain full, fast release
+		dc.b $90,$00,$94,$00,$98,$00,$9C,$00	; no SSG-EG
+		dc.b $FF
+		align 2
+
+; ----------------------------------------------------------------
+; YM2612 part I write
+;
+; d0 - register, d1 - value
+; Z80 bus must be held
+; ----------------------------------------------------------------
+
+apuYmWrite:
+		btst	#7,(ym_addr1).l
+		bne.s	apuYmWrite
+		move.b	d0,(ym_addr1).l
+.wait:
+		btst	#7,(ym_addr1).l
+		bne.s	.wait
+		move.b	d1,(ym_data1).l
+		rts
+
+; ----------------------------------------------------------------
+; Once per frame, from MD_Vint
+;
+; a6 - vdp_data
+; Z80 bus must be held
+; ----------------------------------------------------------------
+
+apuUpdate:
+		lea	(RAM_Fami_Apu).l,a5
+		tst.b	apuReady(a5)
+		bne.s	.ready
+		rts
+.ready:
+
+	; $4015: disabling a channel clears its length counter
+		tst.b	apuWrote+$15(a5)
+		beq.s	.no_status
+		sf	apuWrote+$15(a5)
+		move.b	apuRegs+$15(a5),d0
+		btst	#0,d0
+		bne.s	.on1
+		sf	apuCh1+apuCh_Length(a5)
+.on1:
+		btst	#1,d0
+		bne.s	.on2
+		sf	apuCh2+apuCh_Length(a5)
+.on2:
+		btst	#2,d0
+		bne.s	.on3
+		sf	apuTriLength(a5)
+.on3:
+		btst	#3,d0
+		bne.s	.no_status
+		sf	apuChN+apuCh_Length(a5)
+.no_status:
+
+	; register writes
+		lea	apuCh1(a5),a0
+		lea	apuRegs+$00(a5),a1
+		lea	apuWrote+$00(a5),a2
+		moveq	#0,d6
+		bsr	apuPulseWrites
+		lea	apuCh2(a5),a0
+		lea	apuRegs+$04(a5),a1
+		lea	apuWrote+$04(a5),a2
+		moveq	#1,d6
+		bsr	apuPulseWrites
+
+		tst.b	apuWrote+$0B(a5)	; triangle length / linear reload
+		beq.s	.no_tri
+		sf	apuWrote+$0B(a5)
+		st	apuTriReload(a5)
+		btst	#2,apuRegs+$15(a5)
+		beq.s	.no_tri
+		move.b	apuRegs+$0B(a5),d0
+		lsr.b	#3,d0
+		andi.w	#$1F,d0
+		lea	apuLengthTbl(pc),a1
+		move.b	(a1,d0.w),apuTriLength(a5)
+.no_tri:
+		tst.b	apuWrote+$0F(a5)	; noise length / envelope restart
+		beq.s	.no_noise
+		sf	apuWrote+$0F(a5)
+		st	apuChN+apuCh_EnvStart(a5)
+		btst	#3,apuRegs+$15(a5)
+		beq.s	.no_noise
+		move.b	apuRegs+$0F(a5),d0
+		lsr.b	#3,d0
+		andi.w	#$1F,d0
+		lea	apuLengthTbl(pc),a1
+		move.b	(a1,d0.w),apuChN+apuCh_Length(a5)
+.no_noise:
+
+	; frame sequencer, 4-step mode: quarter frames at 240 Hz,
+	; half frames at 120 Hz. One MD frame = Q, Q+H, Q, Q+H.
+		moveq	#1,d7
+.sequence:
+		bsr	apuQuarter
+		bsr	apuQuarter
+		bsr	apuHalf
+		dbf	d7,.sequence
+
+	; outputs
+		lea	apuCh1(a5),a0
+		move.b	apuRegs+$00(a5),d0
+		move.b	apuRegs+$01(a5),d5
+		moveq	#1,d2
+		moveq	#$00,d6			; PSG tone 0
+		bsr	apuPulseOut
+		lea	apuCh2(a5),a0
+		move.b	apuRegs+$04(a5),d0
+		move.b	apuRegs+$05(a5),d5
+		moveq	#0,d2
+		moveq	#$20,d6			; PSG tone 1
+		bsr	apuPulseOut
+		bsr	apuNoiseOut
+		bra	apuTriOut
+
+; ----------------------------------------------------------------
+; Pulse register writes
+;
+; a0 - channel state, a1 - its registers, a2 - its written flags
+; d6 - its bit in $4015
+; ----------------------------------------------------------------
+
+apuPulseWrites:
+		sf	(a2)			; $4000: read directly
+		tst.b	1(a2)			; $4001: reload the sweep
+		beq.s	.no_sweep
+		sf	1(a2)
+		st	apuCh_SweepLoad(a0)
+.no_sweep:
+		tst.b	2(a2)			; $4002: period low
+		beq.s	.no_low
+		sf	2(a2)
+		move.b	2(a1),apuCh_Period+1(a0)
+.no_low:
+		tst.b	3(a2)			; $4003: period high, length, restart
+		beq.s	.done
+		sf	3(a2)
+		move.b	3(a1),d0
+		move.b	d0,d1
+		andi.b	#7,d1
+		move.b	d1,apuCh_Period(a0)
+		st	apuCh_EnvStart(a0)
+		btst	d6,apuRegs+$15(a5)
+		beq.s	.done
+		lsr.b	#3,d0
+		andi.w	#$1F,d0
+		lea	apuLengthTbl(pc),a1
+		move.b	(a1,d0.w),apuCh_Length(a0)
+.done:
+		rts
+
+; ----------------------------------------------------------------
+; Quarter frame: envelopes, triangle linear counter
+; ----------------------------------------------------------------
+
+apuQuarter:
+		lea	apuCh1(a5),a0
+		move.b	apuRegs+$00(a5),d0
+		bsr.s	apuEnvelope
+		lea	apuCh2(a5),a0
+		move.b	apuRegs+$04(a5),d0
+		bsr.s	apuEnvelope
+		lea	apuChN(a5),a0
+		move.b	apuRegs+$0C(a5),d0
+		bsr.s	apuEnvelope
+
+		tst.b	apuTriReload(a5)
+		beq.s	.count
+		move.b	apuRegs+$08(a5),d0
+		andi.b	#$7F,d0
+		move.b	d0,apuTriLinear(a5)
+		bra.s	.control
+.count:
+		tst.b	apuTriLinear(a5)
+		beq.s	.control
+		subq.b	#1,apuTriLinear(a5)
+.control:
+		tst.b	apuRegs+$08(a5)		; control flag keeps reloading
+		bmi.s	.keep
+		sf	apuTriReload(a5)
+.keep:
+		rts
+
+; a0 - channel state, d0 - its volume register (--LC VVVV)
+apuEnvelope:
+		move.b	d0,d1
+		andi.b	#$0F,d1
+		tst.b	apuCh_EnvStart(a0)
+		beq.s	.clock
+		sf	apuCh_EnvStart(a0)
+		move.b	#15,apuCh_EnvDecay(a0)
+		move.b	d1,apuCh_EnvDiv(a0)
+		rts
+.clock:
+		tst.b	apuCh_EnvDiv(a0)
+		beq.s	.reload
+		subq.b	#1,apuCh_EnvDiv(a0)
+		rts
+.reload:
+		move.b	d1,apuCh_EnvDiv(a0)
+		tst.b	apuCh_EnvDecay(a0)
+		beq.s	.zero
+		subq.b	#1,apuCh_EnvDecay(a0)
+		rts
+.zero:
+		btst	#5,d0			; loop
+		beq.s	.done
+		move.b	#15,apuCh_EnvDecay(a0)
+.done:
+		rts
+
+; ----------------------------------------------------------------
+; Half frame: length counters, sweep
+; ----------------------------------------------------------------
+
+apuHalf:
+		lea	apuCh1(a5),a0
+		move.b	apuRegs+$00(a5),d0
+		bsr.s	apuLength
+		lea	apuCh2(a5),a0
+		move.b	apuRegs+$04(a5),d0
+		bsr.s	apuLength
+		lea	apuChN(a5),a0
+		move.b	apuRegs+$0C(a5),d0
+		bsr.s	apuLength
+
+		tst.b	apuRegs+$08(a5)		; triangle halt is bit 7
+		bmi.s	.tri_halt
+		tst.b	apuTriLength(a5)
+		beq.s	.tri_halt
+		subq.b	#1,apuTriLength(a5)
+.tri_halt:
+
+		lea	apuCh1(a5),a0
+		move.b	apuRegs+$01(a5),d0
+		moveq	#1,d2
+		bsr.s	apuSweep
+		lea	apuCh2(a5),a0
+		move.b	apuRegs+$05(a5),d0
+		moveq	#0,d2
+		bra.s	apuSweep
+
+; a0 - channel state, d0 - its volume register (bit 5 halts)
+apuLength:
+		btst	#5,d0
+		bne.s	.done
+		tst.b	apuCh_Length(a0)
+		beq.s	.done
+		subq.b	#1,apuCh_Length(a0)
+.done:
+		rts
+
+; a0 - channel state, d0 - its sweep register (EPPP NSSS)
+; d2 - 1 for pulse 1 (it negates with one's complement)
+apuSweep:
+		bsr.s	apuSweepTarget
+		tst.b	apuCh_SweepDiv(a0)
+		bne.s	.divider
+		tst.b	d0			; enabled?
+		bpl.s	.divider
+		move.b	d0,d1
+		andi.b	#7,d1			; shift 0 never changes the period
+		beq.s	.divider
+		cmpi.w	#8,d4
+		bcs.s	.divider
+		cmpi.w	#$7FF,d3
+		bhi.s	.divider
+		move.w	d3,apuCh_Period(a0)
+.divider:
+		tst.b	apuCh_SweepLoad(a0)
+		bne.s	.reload
+		tst.b	apuCh_SweepDiv(a0)
+		beq.s	.reload
+		subq.b	#1,apuCh_SweepDiv(a0)
+		rts
+.reload:
+		sf	apuCh_SweepLoad(a0)
+		move.b	d0,d1
+		lsr.b	#4,d1
+		andi.b	#7,d1
+		move.b	d1,apuCh_SweepDiv(a0)
+		rts
+
+; In: a0 - channel state, d0 - sweep register, d2 - pulse 1 flag
+; Out: d4 - period, d3 - sweep target period
+apuSweepTarget:
+		move.w	apuCh_Period(a0),d4
+		move.b	d0,d1
+		andi.w	#7,d1
+		move.w	d4,d3
+		lsr.w	d1,d3
+		btst	#3,d0
+		beq.s	.add
+		neg.w	d3
+		sub.w	d2,d3
+.add:
+		add.w	d4,d3
+		rts
+
+; ----------------------------------------------------------------
+; Pulse -> PSG tone channel
+;
+; a0 - channel state, d0 - volume register, d5 - sweep register
+; d2 - pulse 1 flag, d6 - PSG channel << 5
+; ----------------------------------------------------------------
+
+apuPulseOut:
+		tst.b	apuCh_Length(a0)
+		beq.s	.mute
+		exg	d0,d5
+		bsr.s	apuSweepTarget
+		exg	d0,d5
+		cmpi.w	#8,d4			; too high to hear
+		bcs.s	.mute
+		btst	#3,d5
+		bne.s	.audible
+		cmpi.w	#$7FF,d3		; sweep would overflow
+		bhi.s	.mute
+.audible:
+	; PSG period = NES period + 1. Notes a little below the PSG's
+	; range are clamped, lower ones fold up an octave.
+		addq.w	#1,d4
+		cmpi.w	#1075,d4
+		bcc.s	.fold
+		cmpi.w	#$3FF,d4
+		bls.s	.in_range
+		move.w	#$3FF,d4
+		bra.s	.in_range
+.fold:
+		lsr.w	#1,d4
+		cmpi.w	#$3FF,d4
+		bhi.s	.fold
+.in_range:
+		move.b	d4,d3
+		andi.b	#$0F,d3
+		or.b	d6,d3
+		ori.b	#$80,d3
+		move.b	d3,psg_port(a6)
+		lsr.w	#4,d4
+		move.b	d4,psg_port(a6)
+
+		moveq	#0,d1			; volume: constant or envelope
+		btst	#4,d0
+		beq.s	.envelope
+		move.b	d0,d1
+		andi.b	#$0F,d1
+		bra.s	.volume
+.envelope:
+		move.b	apuCh_EnvDecay(a0),d1
+.volume:
+		lea	apuAttTbl(pc),a1
+		move.b	(a1,d1.w),d3
+		rol.b	#2,d0			; duty -> bits 1-0
+		andi.w	#3,d0
+		lea	apuDutyAttTbl(pc),a1
+		add.b	(a1,d0.w),d3
+		cmpi.b	#15,d3
+		bls.s	.set_volume
+.mute:
+		moveq	#15,d3
+.set_volume:
+		or.b	d6,d3
+		ori.b	#$90,d3
+		move.b	d3,psg_port(a6)
+		rts
+
+; ----------------------------------------------------------------
+; Noise -> PSG noise, rate from PSG tone 2
+; ----------------------------------------------------------------
+
+apuNoiseOut:
+		move.b	apuRegs+$0E(a5),d0	; M--- PPPP
+		moveq	#0,d1
+		move.b	d0,d1
+		andi.b	#$0F,d1
+		tst.b	d0
+		bpl.s	.white
+		addi.b	#16,d1
+.white:
+		add.w	d1,d1
+		lea	apuNoiseTbl(pc),a1
+		move.w	(a1,d1.w),d4
+		move.b	d4,d3			; PSG tone 2 period
+		andi.b	#$0F,d3
+		ori.b	#$C0,d3
+		move.b	d3,psg_port(a6)
+		lsr.w	#4,d4
+		move.b	d4,psg_port(a6)
+
+		move.b	#$E3,d3			; noise control: rate = tone 2
+		tst.b	d0
+		bmi.s	.periodic
+		ori.b	#$04,d3			; white noise
+.periodic:
+		cmp.b	apuNoiseCtl(a5),d3	; writing it resets the noise,
+		beq.s	.same			; so only on a change
+		move.b	d3,apuNoiseCtl(a5)
+		move.b	d3,psg_port(a6)
+.same:
+		moveq	#15,d3
+		tst.b	apuChN+apuCh_Length(a5)
+		beq.s	.set_volume
+		move.b	apuRegs+$0C(a5),d0
+		moveq	#0,d1
+		btst	#4,d0
+		beq.s	.envelope
+		move.b	d0,d1
+		andi.b	#$0F,d1
+		bra.s	.volume
+.envelope:
+		move.b	apuChN+apuCh_EnvDecay(a5),d1
+.volume:
+		lea	apuAttTbl(pc),a1
+		move.b	(a1,d1.w),d3
+		tst.b	apuRegs+$0E(a5)		; white noise is louder on the PSG
+		bmi.s	.set_volume		; than periodic noise: balance them
+		cmpi.b	#15,d3
+		beq.s	.set_volume
+		addq.b	#1,d3
+.set_volume:
+		ori.b	#$F0,d3
+		move.b	d3,psg_port(a6)
+		rts
+
+; ----------------------------------------------------------------
+; Triangle -> YM2612 channel 1
+; ----------------------------------------------------------------
+
+apuTriOut:
+		tst.b	apuTriLength(a5)
+		beq.s	.off
+		tst.b	apuTriLinear(a5)
+		beq.s	.off
+		moveq	#0,d4
+		move.b	apuRegs+$0B(a5),d4
+		andi.b	#7,d4
+		lsl.w	#8,d4
+		move.b	apuRegs+$0A(a5),d4
+		cmpi.w	#2,d4			; ultrasonic, NES games use it as silence
+		bcs.s	.off
+		add.w	d4,d4
+		lea	apuFmTbl(pc),a1
+		move.w	(a1,d4.w),d4
+		cmp.w	apuFmFreq(a5),d4
+		beq.s	.same_freq
+		move.w	d4,apuFmFreq(a5)
+		move.w	d4,d1
+		lsr.w	#8,d1
+		move.w	#$A4,d0
+		bsr	apuYmWrite
+		move.b	d4,d1
+		move.w	#$A0,d0
+		bsr	apuYmWrite
+.same_freq:
+		tst.b	apuFmKey(a5)
+		bne.s	.done
+		st	apuFmKey(a5)
+		moveq	#$28,d0
+		move.b	#$F0,d1
+		bra	apuYmWrite
+.off:
+		tst.b	apuFmKey(a5)
+		beq.s	.done
+		sf	apuFmKey(a5)
+		moveq	#$28,d0
+		moveq	#$00,d1
+		bra	apuYmWrite
+.done:
+		rts
+
+; ----------------------------------------------------------------
+
+		include	"emu/apu_tables.asm"
+		align 2
