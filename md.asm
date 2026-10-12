@@ -184,10 +184,10 @@ MD_Error:
 MD_Entry:
 		move	#$2700,sr
 		tst.l	($A10008).l
-		bne.s	loc_210
+		bne.s	.reset_check
 		tst.w	($A1000C).l
-loc_210:
-		bne.w	loc_270
+.reset_check:
+		bne.w	MD_HotStart
 		lea	(list_InitRegs).l,a5
 		movem.w	(a5)+,d5-d7
 		movem.l	(a5)+,a0-a4
@@ -208,7 +208,7 @@ clrstack:
 		movem.l	(a6),d0-a6
 		move.b	#$40,($A10009).l
 		move.b	#$40,($A1000B).l
-loc_270:
+MD_HotStart:
 		bra.w	MD_Init
 ; ----------------------------------------------------------------
 list_InitRegs:	dc.w $8000		; d5
@@ -229,7 +229,6 @@ list_InitRegs:	dc.w $8000		; d5
 		dc.b $FF
 ; ----------------------------------------------------------------
 
-; =============== S U B	R O U T	I N E =======================================
 
 Fami_InitVideo:
 		move.w	#$8F02,4(a6)
@@ -250,61 +249,51 @@ Fami_InitVideo:
 		moveq	#$3F,d7
 		move.l	#$C0000000,4(a6)
 
-loc_51E:
+.clrpal:
 		move.w	#0,(a6)
-		dbf	d7,loc_51E
+		dbf	d7,.clrpal
 		rts
-
-; =============== S U B	R O U T	I N E =======================================
 
 
 Sound_LoadZ80:
 		move.w	d7,(a1)
 		move.w	d7,(a2)
 
-loc_8DA:
+.wait_bus:
 		btst	d0,(a1)
-		bne.s	loc_8DA
+		bne.s	.wait_bus
 		moveq	#$25,d2
-loc_8E0:
+.copy:
 		move.b	(a5)+,(a0)+
-		dbf	d2,loc_8E0
+		dbf	d2,.copy
 		move.w	d0,(a2)
 		move.w	d0,(a1)
 		move.w	d7,(a2)
 		rts
-; End of function Sound_LoadZ80
-
-
-; =============== S U B	R O U T	I N E =======================================
 
 
 Sound_PsgInit:
 		moveq	#3,d1
 
-loc_8F0:
+.psg:
 		move.b	(a5)+,$11(a3)
-		dbf	d1,loc_8F0
+		dbf	d1,.psg
 		move.w	d0,(a2)
 		rts
-; End of function Sound_PsgInit
-
-
-; =============== S U B	R O U T	I N E =======================================
 
 
 Video_Init:
 		moveq	#$17,d0
-		lea	(byte_910).l,a0
-loc_904:
+		lea	(Video_RegList).l,a0
+.regs:
 		move.b	(a0)+,d5
 		move.w	d5,(a4)
 		add.w	d7,d5
-		dbf	d0,loc_904
+		dbf	d0,.regs
 		rts
 
 ; ----------------------------------------------------------------
-byte_910:
+Video_RegList:
 		dc.b $04			; HBlank int on, HV Counter on
 		dc.b $64			; Display ON, VBlank int on
 		dc.b (($C000)>>10)		; ForeGrd at VRAM $C000 (%00xxx000)
@@ -464,9 +453,9 @@ Fami_LoadRom:
 	; Mirror check
 		move.w	#0,d7			; 0 - horizontal
 		btst	#0,6(a0)		; PPU mirroring
-		beq.s	loc_9F4
+		beq.s	.mirror_set
 		move.w	#1,d7			; 1 - vertical
-loc_9F4:
+.mirror_set:
 		move.w	d7,ppuMirror(a3)
 		
 	; COPY CHR-ROM TO RAM, or use the (cleared) buffer as CHR-RAM
@@ -615,261 +604,261 @@ emuVint:
 		
 ; ----------------------------------------------------------------
 mosCpu:		dc.w mos_BRK-mosCpu	; $00
-		dc.w loc_1A12-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1970-mosCpu
-		dc.w loc_1042-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1A78-mosCpu	; $08 - PHP
-		dc.w loc_195C-mosCpu	; $09 - ORA #$xx
-		dc.w loc_1030-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_19A6-mosCpu
-		dc.w loc_1080-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1166-mosCpu	; $10
-		dc.w loc_1A3C-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_198A-mosCpu
-		dc.w loc_1060-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_11AA-mosCpu	; $18
-		dc.w loc_19EC-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_19C6-mosCpu
-		dc.w loc_10A2-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_167C-mosCpu	; $20
-		dc.w loc_FD8-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_10F0-mosCpu
-		dc.w loc_F36-mosCpu
-		dc.w loc_1ACA-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1AA6-mosCpu	; $28 - PLP
-		dc.w loc_F22-mosCpu
-		dc.w loc_1AB6-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_111A-mosCpu
-		dc.w loc_F6C-mosCpu
-		dc.w loc_1B0C-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_114A-mosCpu	; $30
-		dc.w loc_1002-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_F50-mosCpu
-		dc.w loc_1AEA-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1D80-mosCpu	; $38
-		dc.w loc_FB2-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_F8C-mosCpu
-		dc.w loc_1B30-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1BF6-mosCpu	; $40 - RTI
-		dc.w loc_1566-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_14C4-mosCpu
-		dc.w loc_18D2-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1A6A-mosCpu	; $48
-		dc.w loc_14B0-mosCpu
-		dc.w loc_18C0-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_164E-mosCpu	; $4C - JMP $xxxx
-		dc.w loc_14FA-mosCpu
-		dc.w loc_1910-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_118E-mosCpu	; $50
-		dc.w loc_1590-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_14DE-mosCpu
-		dc.w loc_18F0-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_11BC-mosCpu	; $58
-		dc.w loc_1540-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_151A-mosCpu
-		dc.w loc_1932-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1C32-mosCpu	; $60 - RTS
-		dc.w loc_ED2-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_E44-mosCpu
-		dc.w loc_1B6A-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1A88-mosCpu	; $68
-		dc.w loc_E34-mosCpu
-		dc.w loc_1B56-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1660-mosCpu	; $6C - JMP ($xxxx)
-		dc.w loc_E72-mosCpu
-		dc.w loc_1BAC-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_119C-mosCpu	; $70
-		dc.w loc_EF8-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_E5A-mosCpu
-		dc.w loc_1B8A-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1D92-mosCpu	; $78
-		dc.w loc_EB0-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_E8E-mosCpu
-		dc.w loc_1BD0-mosCpu
-		dc.w mos_Null-mosCpu
+		dc.w mos_ORA_indx-mosCpu	; $01
+		dc.w mos_Null-mosCpu	; $02
+		dc.w mos_Null-mosCpu	; $03
+		dc.w mos_Null-mosCpu	; $04
+		dc.w mos_ORA_zp-mosCpu	; $05
+		dc.w mos_ASL_zp-mosCpu	; $06
+		dc.w mos_Null-mosCpu	; $07
+		dc.w mos_PHP-mosCpu	; $08
+		dc.w mos_ORA_imm-mosCpu	; $09
+		dc.w mos_ASL_acc-mosCpu	; $0A
+		dc.w mos_Null-mosCpu	; $0B
+		dc.w mos_Null-mosCpu	; $0C
+		dc.w mos_ORA_abs-mosCpu	; $0D
+		dc.w mos_ASL_abs-mosCpu	; $0E
+		dc.w mos_Null-mosCpu	; $0F
+		dc.w mos_BPL-mosCpu	; $10
+		dc.w mos_ORA_indy-mosCpu	; $11
+		dc.w mos_Null-mosCpu	; $12
+		dc.w mos_Null-mosCpu	; $13
+		dc.w mos_Null-mosCpu	; $14
+		dc.w mos_ORA_zpx-mosCpu	; $15
+		dc.w mos_ASL_zpx-mosCpu	; $16
+		dc.w mos_Null-mosCpu	; $17
+		dc.w mos_CLC-mosCpu	; $18
+		dc.w mos_ORA_absy-mosCpu	; $19
+		dc.w mos_Null-mosCpu	; $1A
+		dc.w mos_Null-mosCpu	; $1B
+		dc.w mos_Null-mosCpu	; $1C
+		dc.w mos_ORA_absx-mosCpu	; $1D
+		dc.w mos_ASL_absx-mosCpu	; $1E
+		dc.w mos_Null-mosCpu	; $1F
+		dc.w mos_JSR-mosCpu	; $20
+		dc.w mos_AND_indx-mosCpu	; $21
+		dc.w mos_Null-mosCpu	; $22
+		dc.w mos_Null-mosCpu	; $23
+		dc.w mos_BIT_zp-mosCpu	; $24
+		dc.w mos_AND_zp-mosCpu	; $25
+		dc.w mos_ROL_zp-mosCpu	; $26
+		dc.w mos_Null-mosCpu	; $27
+		dc.w mos_PLP-mosCpu	; $28
+		dc.w mos_AND_imm-mosCpu	; $29
+		dc.w mos_ROL_acc-mosCpu	; $2A
+		dc.w mos_Null-mosCpu	; $2B
+		dc.w mos_BIT_abs-mosCpu	; $2C
+		dc.w mos_AND_abs-mosCpu	; $2D
+		dc.w mos_ROL_abs-mosCpu	; $2E
+		dc.w mos_Null-mosCpu	; $2F
+		dc.w mos_BMI-mosCpu	; $30
+		dc.w mos_AND_indy-mosCpu	; $31
+		dc.w mos_Null-mosCpu	; $32
+		dc.w mos_Null-mosCpu	; $33
+		dc.w mos_Null-mosCpu	; $34
+		dc.w mos_AND_zpx-mosCpu	; $35
+		dc.w mos_ROL_zpx-mosCpu	; $36
+		dc.w mos_Null-mosCpu	; $37
+		dc.w mos_SEC-mosCpu	; $38
+		dc.w mos_AND_absy-mosCpu	; $39
+		dc.w mos_Null-mosCpu	; $3A
+		dc.w mos_Null-mosCpu	; $3B
+		dc.w mos_Null-mosCpu	; $3C
+		dc.w mos_AND_absx-mosCpu	; $3D
+		dc.w mos_ROL_absx-mosCpu	; $3E
+		dc.w mos_Null-mosCpu	; $3F
+		dc.w mos_RTI-mosCpu	; $40
+		dc.w mos_EOR_indx-mosCpu	; $41
+		dc.w mos_Null-mosCpu	; $42
+		dc.w mos_Null-mosCpu	; $43
+		dc.w mos_Null-mosCpu	; $44
+		dc.w mos_EOR_zp-mosCpu	; $45
+		dc.w mos_LSR_zp-mosCpu	; $46
+		dc.w mos_Null-mosCpu	; $47
+		dc.w mos_PHA-mosCpu	; $48
+		dc.w mos_EOR_imm-mosCpu	; $49
+		dc.w mos_LSR_acc-mosCpu	; $4A
+		dc.w mos_Null-mosCpu	; $4B
+		dc.w mos_JMP_abs-mosCpu	; $4C
+		dc.w mos_EOR_abs-mosCpu	; $4D
+		dc.w mos_LSR_abs-mosCpu	; $4E
+		dc.w mos_Null-mosCpu	; $4F
+		dc.w mos_BVC-mosCpu	; $50
+		dc.w mos_EOR_indy-mosCpu	; $51
+		dc.w mos_Null-mosCpu	; $52
+		dc.w mos_Null-mosCpu	; $53
+		dc.w mos_Null-mosCpu	; $54
+		dc.w mos_EOR_zpx-mosCpu	; $55
+		dc.w mos_LSR_zpx-mosCpu	; $56
+		dc.w mos_Null-mosCpu	; $57
+		dc.w mos_CLI-mosCpu	; $58
+		dc.w mos_EOR_absy-mosCpu	; $59
+		dc.w mos_Null-mosCpu	; $5A
+		dc.w mos_Null-mosCpu	; $5B
+		dc.w mos_Null-mosCpu	; $5C
+		dc.w mos_EOR_absx-mosCpu	; $5D
+		dc.w mos_LSR_absx-mosCpu	; $5E
+		dc.w mos_Null-mosCpu	; $5F
+		dc.w mos_RTS-mosCpu	; $60
+		dc.w mos_ADC_indx-mosCpu	; $61
+		dc.w mos_Null-mosCpu	; $62
+		dc.w mos_Null-mosCpu	; $63
+		dc.w mos_Null-mosCpu	; $64
+		dc.w mos_ADC_zp-mosCpu	; $65
+		dc.w mos_ROR_zp-mosCpu	; $66
+		dc.w mos_Null-mosCpu	; $67
+		dc.w mos_PLA-mosCpu	; $68
+		dc.w mos_ADC_imm-mosCpu	; $69
+		dc.w mos_ROR_acc-mosCpu	; $6A
+		dc.w mos_Null-mosCpu	; $6B
+		dc.w mos_JMP_ind-mosCpu	; $6C
+		dc.w mos_ADC_abs-mosCpu	; $6D
+		dc.w mos_ROR_abs-mosCpu	; $6E
+		dc.w mos_Null-mosCpu	; $6F
+		dc.w mos_BVS-mosCpu	; $70
+		dc.w mos_ADC_indy-mosCpu	; $71
+		dc.w mos_Null-mosCpu	; $72
+		dc.w mos_Null-mosCpu	; $73
+		dc.w mos_Null-mosCpu	; $74
+		dc.w mos_ADC_zpx-mosCpu	; $75
+		dc.w mos_ROR_zpx-mosCpu	; $76
+		dc.w mos_Null-mosCpu	; $77
+		dc.w mos_SEI-mosCpu	; $78
+		dc.w mos_ADC_absy-mosCpu	; $79
+		dc.w mos_Null-mosCpu	; $7A
+		dc.w mos_Null-mosCpu	; $7B
+		dc.w mos_Null-mosCpu	; $7C
+		dc.w mos_ADC_absx-mosCpu	; $7D
+		dc.w mos_ROR_absx-mosCpu	; $7E
+		dc.w mos_Null-mosCpu	; $7F
 		dc.w mos_Null-mosCpu	; $80
-		dc.w loc_1DF6-mosCpu	; $81 - STA (oper,X)
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1E5C-mosCpu
-		dc.w loc_1D9C-mosCpu
-		dc.w loc_1E2E-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_149E-mosCpu	; $88 - DEY
-		dc.w mos_Null-mosCpu
-		dc.w loc_1EC4-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1E76-mosCpu
-		dc.w loc_1DB6-mosCpu
-		dc.w loc_1E48-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_10C6-mosCpu	; $90
-		dc.w loc_1E10-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1E68-mosCpu
-		dc.w loc_1DA8-mosCpu
-		dc.w loc_1E3A-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1EE0-mosCpu	; $98
-		dc.w loc_1DE0-mosCpu
-		dc.w loc_1Ed3-mosCpu	; $9A
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1DCA-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1836-mosCpu	; $A0
-		dc.w loc_1754-mosCpu	; $A1 - LDA (oper,X)
-		dc.w loc_17AC-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1848-mosCpu
-		dc.w loc_16B6-mosCpu
-		dc.w loc_17BE-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1E9C-mosCpu	; $A8
-		dc.w loc_16A4-mosCpu	; $A9 - LDA #$xx
-		dc.w loc_1E8A-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_187A-mosCpu
-		dc.w loc_16E8-mosCpu	; $AD
-		dc.w loc_17F0-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_10D4-mosCpu	; $B0
-		dc.w loc_177E-mosCpu	; $B1 - LDA (oper),Y
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1860-mosCpu
-		dc.w loc_16CE-mosCpu
-		dc.w loc_17d3-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_11C6-mosCpu	; $B8
-		dc.w loc_172E-mosCpu
-		dc.w loc_1EAE-mosCpu	; $BA - TSX
-		dc.w mos_Null-mosCpu
-		dc.w loc_189A-mosCpu
-		dc.w loc_1708-mosCpu
-		dc.w loc_1810-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_13AE-mosCpu	; $C0
-		dc.w loc_12CC-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_13CE-mosCpu
-		dc.w loc_11EE-mosCpu
-		dc.w loc_1420-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_163C-mosCpu	; $C8 - INY
-		dc.w loc_11CE-mosCpu
-		dc.w loc_148C-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_13F4-mosCpu
-		dc.w loc_123C-mosCpu
-		dc.w loc_1452-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1158-mosCpu	; $D0 - BNE rel
-		dc.w loc_1302-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1214-mosCpu
-		dc.w loc_1438-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_11B2-mosCpu	; $D8 - CLD
-		dc.w loc_129A-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1268-mosCpu
-		dc.w loc_146E-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_133C-mosCpu	; $E0
-		dc.w loc_1D20-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_135C-mosCpu
-		dc.w loc_1C6A-mosCpu
-		dc.w loc_15BE-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_162A-mosCpu	; $E8
-		dc.w loc_1C52-mosCpu
-		dc.w loc_1956-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1382-mosCpu
-		dc.w loc_1CA8-mosCpu
-		dc.w loc_15F0-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_10E2-mosCpu	; $F0
-		dc.w loc_1D4E-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1C88-mosCpu
-		dc.w loc_15d3-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1D88-mosCpu	; $F8
-		dc.w loc_1CF6-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w mos_Null-mosCpu
-		dc.w loc_1CCC-mosCpu
-		dc.w loc_160C-mosCpu
-		dc.w mos_Null-mosCpu
+		dc.w mos_STA_indx-mosCpu	; $81
+		dc.w mos_Null-mosCpu	; $82
+		dc.w mos_Null-mosCpu	; $83
+		dc.w mos_STY_zp-mosCpu	; $84
+		dc.w mos_STA_zp-mosCpu	; $85
+		dc.w mos_STX_zp-mosCpu	; $86
+		dc.w mos_Null-mosCpu	; $87
+		dc.w mos_DEY-mosCpu	; $88
+		dc.w mos_Null-mosCpu	; $89
+		dc.w mos_TXA-mosCpu	; $8A
+		dc.w mos_Null-mosCpu	; $8B
+		dc.w mos_STY_abs-mosCpu	; $8C
+		dc.w mos_STA_abs-mosCpu	; $8D
+		dc.w mos_STX_abs-mosCpu	; $8E
+		dc.w mos_Null-mosCpu	; $8F
+		dc.w mos_BCC-mosCpu	; $90
+		dc.w mos_STA_indy-mosCpu	; $91
+		dc.w mos_Null-mosCpu	; $92
+		dc.w mos_Null-mosCpu	; $93
+		dc.w mos_STY_zpx-mosCpu	; $94
+		dc.w mos_STA_zpx-mosCpu	; $95
+		dc.w mos_STX_zpy-mosCpu	; $96
+		dc.w mos_Null-mosCpu	; $97
+		dc.w mos_TYA-mosCpu	; $98
+		dc.w mos_STA_absy-mosCpu	; $99
+		dc.w mos_TXS-mosCpu	; $9A
+		dc.w mos_Null-mosCpu	; $9B
+		dc.w mos_Null-mosCpu	; $9C
+		dc.w mos_STA_absx-mosCpu	; $9D
+		dc.w mos_Null-mosCpu	; $9E
+		dc.w mos_Null-mosCpu	; $9F
+		dc.w mos_LDY_imm-mosCpu	; $A0
+		dc.w mos_LDA_indx-mosCpu	; $A1
+		dc.w mos_LDX_imm-mosCpu	; $A2
+		dc.w mos_Null-mosCpu	; $A3
+		dc.w mos_LDY_zp-mosCpu	; $A4
+		dc.w mos_LDA_zp-mosCpu	; $A5
+		dc.w mos_LDX_zp-mosCpu	; $A6
+		dc.w mos_Null-mosCpu	; $A7
+		dc.w mos_TAY-mosCpu	; $A8
+		dc.w mos_LDA_imm-mosCpu	; $A9
+		dc.w mos_TAX-mosCpu	; $AA
+		dc.w mos_Null-mosCpu	; $AB
+		dc.w mos_LDY_abs-mosCpu	; $AC
+		dc.w mos_LDA_abs-mosCpu	; $AD
+		dc.w mos_LDX_abs-mosCpu	; $AE
+		dc.w mos_Null-mosCpu	; $AF
+		dc.w mos_BCS-mosCpu	; $B0
+		dc.w mos_LDA_indy-mosCpu	; $B1
+		dc.w mos_Null-mosCpu	; $B2
+		dc.w mos_Null-mosCpu	; $B3
+		dc.w mos_LDY_zpx-mosCpu	; $B4
+		dc.w mos_LDA_zpx-mosCpu	; $B5
+		dc.w mos_LDX_zpy-mosCpu	; $B6
+		dc.w mos_Null-mosCpu	; $B7
+		dc.w mos_CLV-mosCpu	; $B8
+		dc.w mos_LDA_absy-mosCpu	; $B9
+		dc.w mos_TSX-mosCpu	; $BA
+		dc.w mos_Null-mosCpu	; $BB
+		dc.w mos_LDY_absx-mosCpu	; $BC
+		dc.w mos_LDA_absx-mosCpu	; $BD
+		dc.w mos_LDX_absy-mosCpu	; $BE
+		dc.w mos_Null-mosCpu	; $BF
+		dc.w mos_CPY_imm-mosCpu	; $C0
+		dc.w mos_CMP_indx-mosCpu	; $C1
+		dc.w mos_Null-mosCpu	; $C2
+		dc.w mos_Null-mosCpu	; $C3
+		dc.w mos_CPY_zp-mosCpu	; $C4
+		dc.w mos_CMP_zp-mosCpu	; $C5
+		dc.w mos_DEC_zp-mosCpu	; $C6
+		dc.w mos_Null-mosCpu	; $C7
+		dc.w mos_INY-mosCpu	; $C8
+		dc.w mos_CMP_imm-mosCpu	; $C9
+		dc.w mos_DEX-mosCpu	; $CA
+		dc.w mos_Null-mosCpu	; $CB
+		dc.w mos_CPY_abs-mosCpu	; $CC
+		dc.w mos_CMP_abs-mosCpu	; $CD
+		dc.w mos_DEC_abs-mosCpu	; $CE
+		dc.w mos_Null-mosCpu	; $CF
+		dc.w mos_BNE-mosCpu	; $D0
+		dc.w mos_CMP_indy-mosCpu	; $D1
+		dc.w mos_Null-mosCpu	; $D2
+		dc.w mos_Null-mosCpu	; $D3
+		dc.w mos_Null-mosCpu	; $D4
+		dc.w mos_CMP_zpx-mosCpu	; $D5
+		dc.w mos_DEC_zpx-mosCpu	; $D6
+		dc.w mos_Null-mosCpu	; $D7
+		dc.w mos_CLD-mosCpu	; $D8
+		dc.w mos_CMP_absy-mosCpu	; $D9
+		dc.w mos_Null-mosCpu	; $DA
+		dc.w mos_Null-mosCpu	; $DB
+		dc.w mos_Null-mosCpu	; $DC
+		dc.w mos_CMP_absx-mosCpu	; $DD
+		dc.w mos_DEC_absx-mosCpu	; $DE
+		dc.w mos_Null-mosCpu	; $DF
+		dc.w mos_CPX_imm-mosCpu	; $E0
+		dc.w mos_SBC_indx-mosCpu	; $E1
+		dc.w mos_Null-mosCpu	; $E2
+		dc.w mos_Null-mosCpu	; $E3
+		dc.w mos_CPX_zp-mosCpu	; $E4
+		dc.w mos_SBC_zp-mosCpu	; $E5
+		dc.w mos_INC_zp-mosCpu	; $E6
+		dc.w mos_Null-mosCpu	; $E7
+		dc.w mos_INX-mosCpu	; $E8
+		dc.w mos_SBC_imm-mosCpu	; $E9
+		dc.w mos_NOP-mosCpu	; $EA
+		dc.w mos_Null-mosCpu	; $EB
+		dc.w mos_CPX_abs-mosCpu	; $EC
+		dc.w mos_SBC_abs-mosCpu	; $ED
+		dc.w mos_INC_abs-mosCpu	; $EE
+		dc.w mos_Null-mosCpu	; $EF
+		dc.w mos_BEQ-mosCpu	; $F0
+		dc.w mos_SBC_indy-mosCpu	; $F1
+		dc.w mos_Null-mosCpu	; $F2
+		dc.w mos_Null-mosCpu	; $F3
+		dc.w mos_Null-mosCpu	; $F4
+		dc.w mos_SBC_zpx-mosCpu	; $F5
+		dc.w mos_INC_zpx-mosCpu	; $F6
+		dc.w mos_Null-mosCpu	; $F7
+		dc.w mos_SED-mosCpu	; $F8
+		dc.w mos_SBC_absy-mosCpu	; $F9
+		dc.w mos_Null-mosCpu	; $FA
+		dc.w mos_Null-mosCpu	; $FB
+		dc.w mos_Null-mosCpu	; $FC
+		dc.w mos_SBC_absx-mosCpu	; $FD
+		dc.w mos_INC_absx-mosCpu	; $FE
+		dc.w mos_Null-mosCpu	; $FF
 
 ; ----------------------------------------------------------------
 
@@ -879,7 +868,7 @@ mos_Null:
 
 ; ----------------------------------------------------------------
 
-loc_E34:
+mos_ADC_imm:
 		move.b	(a0)+,d7
 		ori.b	#4,d3
 		move	d3,sr
@@ -888,7 +877,7 @@ loc_E34:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_E44:
+mos_ADC_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d7
@@ -899,7 +888,7 @@ loc_E44:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_E5A:
+mos_ADC_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -911,7 +900,7 @@ loc_E5A:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_E72:				; DATA XREF: ROM:00000BE6o
+mos_ADC_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -924,7 +913,7 @@ loc_E72:				; DATA XREF: ROM:00000BE6o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_E8E:				; DATA XREF: ROM:00000C26o
+mos_ADC_absx:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -940,7 +929,7 @@ loc_E8E:				; DATA XREF: ROM:00000C26o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_EB0:				; DATA XREF: ROM:00000C16o
+mos_ADC_absy:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -956,7 +945,7 @@ loc_EB0:				; DATA XREF: ROM:00000C16o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_ED2:
+mos_ADC_indx:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -973,7 +962,7 @@ loc_ED2:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_EF8:
+mos_ADC_indy:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -992,7 +981,7 @@ loc_EF8:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_F22:
+mos_AND_imm:
 		move.b	(a0)+,d7
 		and.b	d7,d0
 		move	sr,d5
@@ -1002,7 +991,7 @@ loc_F22:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_F36:
+mos_AND_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d7
@@ -1014,7 +1003,7 @@ loc_F36:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_F50:				; DATA XREF: ROM:00000B06o
+mos_AND_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -1027,7 +1016,7 @@ loc_F50:				; DATA XREF: ROM:00000B06o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_F6C:
+mos_AND_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -1041,7 +1030,7 @@ loc_F6C:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_F8C:
+mos_AND_absx:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -1058,7 +1047,7 @@ loc_F8C:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_FB2:				; DATA XREF: ROM:00000B16o
+mos_AND_absy:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -1075,7 +1064,7 @@ loc_FB2:				; DATA XREF: ROM:00000B16o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_FD8:
+mos_AND_indx:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -1093,7 +1082,7 @@ loc_FD8:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1002:
+mos_AND_indy:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -1113,7 +1102,7 @@ loc_1002:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1030:
+mos_ASL_acc:
 		lsl.b	#1,d0
 		move	sr,d5
 		andi.w	#$1D,d5
@@ -1122,7 +1111,7 @@ loc_1030:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1042:
+mos_ASL_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d7
@@ -1135,7 +1124,7 @@ loc_1042:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1060:
+mos_ASL_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -1149,7 +1138,7 @@ loc_1060:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1080:
+mos_ASL_abs:
 		move.b	(a0)+,d4
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
@@ -1164,7 +1153,7 @@ loc_1080:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_10A2:				; DATA XREF: ROM:00000AAAo
+mos_ASL_absx:
 		move.b	(a0)+,d4
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
@@ -1180,58 +1169,58 @@ loc_10A2:				; DATA XREF: ROM:00000AAAo
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_10C6:
+mos_BCC:
 		move.b	(a0)+,d6
 		move	d3,sr
-		bcs.s	loc_10D0
+		bcs.s	.next
 		ext.w	d6
 		adda.w	d6,a0
-loc_10D0:
+.next:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_10D4:
+mos_BCS:
 		move.b	(a0)+,d6
 		move	d3,sr
-		bcc.s	loc_10DE
+		bcc.s	.next
 		ext.w	d6
 		adda.w	d6,a0
-loc_10DE:
+.next:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_10E2:
+mos_BEQ:
 		move.b	(a0)+,d6
 		move	d3,sr
-		bne.s	loc_10EC
+		bne.s	.next
 		ext.w	d6
 		adda.w	d6,a0
-loc_10EC:
+.next:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_10F0:
+mos_BIT_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d7
 		move.b	d7,d4
 		andi.b	#$F1,d3
 		lsl.b	#1,d7
-		bcc.s	loc_1106
+		bcc.s	.no_n
 		ori.b	#8,d3
-loc_1106:
+.no_n:
 		lsl.b	#1,d7
-		bcc.s	loc_110E
+		bcc.s	.no_v
 		ori.b	#2,d3
-loc_110E:
+.no_v:
 		and.b	d0,d4
-		bne.s	loc_1116
+		bne.s	.next
 		ori.b	#4,d3
-loc_1116:
+.next:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_111A:
+mos_BIT_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -1240,53 +1229,53 @@ loc_111A:
 		move.b	d7,d4
 		andi.b	#$F1,d3
 		lsl.b	#1,d7
-		bcc.s	loc_1136
+		bcc.s	.no_n
 		ori.b	#8,d3
 
-loc_1136:
+.no_n:
 		lsl.b	#1,d7
-		bcc.s	loc_113E
+		bcc.s	.no_v
 		ori.b	#2,d3
 
-loc_113E:
+.no_v:
 		and.b	d0,d4
-		bne.s	loc_1146
+		bne.s	.next
 		ori.b	#4,d3
 
-loc_1146:
+.next:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_114A:				; DATA XREF: ROM:00000AF2o
+mos_BMI:
 		move.b	(a0)+,d6
 		move	d3,sr
-		bpl.s	loc_1154
+		bpl.s	.next
 		ext.w	d6
 		adda.w	d6,a0
 
-loc_1154:				; CODE XREF: ROM:0000114Ej
+.next:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1158:				; DATA XREF: ROM:00000D72o
+mos_BNE:
 		move.b	(a0)+,d6
 		move	d3,sr
-		beq.s	loc_1162
+		beq.s	.next
 		ext.w	d6
 		adda.w	d6,a0
 
-loc_1162:				; CODE XREF: ROM:0000115Cj
+.next:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1166:
+mos_BPL:
 		move.b	(a0)+,d6
 		move	d3,sr
-		bmi.s	loc_1170
+		bmi.s	.next
 		ext.w	d6
 		adda.w	d6,a0
 
-loc_1170:
+.next:
 		jmp	(RAM_EmuLoop).l
 
 ; ----------------------------------------------------------------
@@ -1323,29 +1312,29 @@ mos_BRK:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_118E:
+mos_BVC:
 		move.b	(a0)+,d6
 		move	d3,sr
-		bvs.s	loc_1198
+		bvs.s	.next
 		ext.w	d6
 		adda.w	d6,a0
 
-loc_1198:
+.next:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_119C:
+mos_BVS:
 		move.b	(a0)+,d6
 		move	d3,sr
-		bvc.s	loc_11A6
+		bvc.s	.next
 		ext.w	d6
 		adda.w	d6,a0
 
-loc_11A6:				; CODE XREF: ROM:000011A0j
+.next:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_11AA:				; DATA XREF: ROM:00000A92o
+mos_CLC:
 		andi.b	#$EE,d3
 		jmp	(RAM_EmuLoop).l
 
@@ -1353,7 +1342,7 @@ loc_11AA:				; DATA XREF: ROM:00000A92o
 ; CLD - Clear Decimal mode
 ; ----------------------------------------------------------------
 
-loc_11B2:
+mos_CLD:
 		move.w	#0,cpuModeDec(a4)
 		jmp	(RAM_EmuLoop).l
 
@@ -1361,18 +1350,18 @@ loc_11B2:
 ; CLI - Clear Interrupt disable
 ; ----------------------------------------------------------------
 
-loc_11BC:
+mos_CLI:
 		move.w	#0,cpuModeIntDis(a4)
 		jmp	(RAM_EmuLoop).l
 
 ; ----------------------------------------------------------------
 
-loc_11C6:				; DATA XREF: ROM:00000D12o
+mos_CLV:
 		andi.b	#$FD,d3
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_11CE:				; DATA XREF: ROM:00000D56o
+mos_CMP_imm:
 		move.b	(a0)+,d7
 		cmp.b	d7,d0
 		move	sr,d5
@@ -1386,7 +1375,7 @@ loc_11CE:				; DATA XREF: ROM:00000D56o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_11EE:				; DATA XREF: ROM:00000D46o
+mos_CMP_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d7
@@ -1402,7 +1391,7 @@ loc_11EE:				; DATA XREF: ROM:00000D46o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1214:				; DATA XREF: ROM:00000D86o
+mos_CMP_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -1419,7 +1408,7 @@ loc_1214:				; DATA XREF: ROM:00000D86o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_123C:				; DATA XREF: ROM:00000d36o
+mos_CMP_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -1437,7 +1426,7 @@ loc_123C:				; DATA XREF: ROM:00000d36o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1268:				; DATA XREF: ROM:00000DA6o
+mos_CMP_absx:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -1458,7 +1447,7 @@ loc_1268:				; DATA XREF: ROM:00000DA6o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_129A:				; DATA XREF: ROM:00000D96o
+mos_CMP_absy:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -1479,7 +1468,7 @@ loc_129A:				; DATA XREF: ROM:00000D96o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_12CC:
+mos_CMP_indx:
 		clr.w	d5
 		clr.w	d4
 		clr.w	d6
@@ -1501,7 +1490,7 @@ loc_12CC:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1302:
+mos_CMP_indy:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -1525,7 +1514,7 @@ loc_1302:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_133C:				; DATA XREF: ROM:00000DB2o
+mos_CPX_imm:
 		move.b	(a0)+,d7
 		cmp.b	d7,d1
 		move	sr,d5
@@ -1539,7 +1528,7 @@ loc_133C:				; DATA XREF: ROM:00000DB2o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_135C:				; DATA XREF: ROM:00000DC2o
+mos_CPX_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d7
@@ -1555,7 +1544,7 @@ loc_135C:				; DATA XREF: ROM:00000DC2o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1382:				; DATA XREF: ROM:00000DE2o
+mos_CPX_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -1573,7 +1562,7 @@ loc_1382:				; DATA XREF: ROM:00000DE2o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_13AE:				; DATA XREF: ROM:00000d62o
+mos_CPY_imm:
 		move.b	(a0)+,d7
 		cmp.b	d7,d2
 		move	sr,d5
@@ -1587,7 +1576,7 @@ loc_13AE:				; DATA XREF: ROM:00000d62o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_13CE:				; DATA XREF: ROM:00000D42o
+mos_CPY_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d7
@@ -1603,7 +1592,7 @@ loc_13CE:				; DATA XREF: ROM:00000D42o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_13F4:				; DATA XREF: ROM:00000d32o
+mos_CPY_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -1621,7 +1610,7 @@ loc_13F4:				; DATA XREF: ROM:00000d32o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1420:				; DATA XREF: ROM:00000D4Ao
+mos_DEC_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		subq.b	#1,(a2,d6.w)
@@ -1632,7 +1621,7 @@ loc_1420:				; DATA XREF: ROM:00000D4Ao
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1438:				; DATA XREF: ROM:00000D8Ao
+mos_DEC_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -1644,7 +1633,7 @@ loc_1438:				; DATA XREF: ROM:00000D8Ao
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1452:				; DATA XREF: ROM:00000d3Ao
+mos_DEC_abs:
 		move.b	(a0)+,d4
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
@@ -1657,7 +1646,7 @@ loc_1452:				; DATA XREF: ROM:00000d3Ao
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_146E:				; DATA XREF: ROM:00000DAAo
+mos_DEC_absx:
 		move.b	(a0)+,d4
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
@@ -1671,7 +1660,7 @@ loc_146E:				; DATA XREF: ROM:00000DAAo
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_148C:				; DATA XREF: ROM:00000D5Ao
+mos_DEX:
 		subq.b	#1,d1
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1680,7 +1669,7 @@ loc_148C:				; DATA XREF: ROM:00000D5Ao
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_149E:
+mos_DEY:
 		subq.b	#1,d2
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1689,7 +1678,7 @@ loc_149E:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_14B0:				; DATA XREF: ROM:00000B56o
+mos_EOR_imm:
 		move.b	(a0)+,d7
 		eor.b	d7,d0
 		move	sr,d5
@@ -1699,7 +1688,7 @@ loc_14B0:				; DATA XREF: ROM:00000B56o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_14C4:				; DATA XREF: ROM:00000B46o
+mos_EOR_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d7
@@ -1711,7 +1700,7 @@ loc_14C4:				; DATA XREF: ROM:00000B46o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_14DE:				; DATA XREF: ROM:00000B86o
+mos_EOR_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -1724,7 +1713,7 @@ loc_14DE:				; DATA XREF: ROM:00000B86o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_14FA:				; DATA XREF: ROM:00000B66o
+mos_EOR_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -1738,7 +1727,7 @@ loc_14FA:				; DATA XREF: ROM:00000B66o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_151A:				; DATA XREF: ROM:00000BA6o
+mos_EOR_absx:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -1755,7 +1744,7 @@ loc_151A:				; DATA XREF: ROM:00000BA6o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1540:				; DATA XREF: ROM:00000B96o
+mos_EOR_absy:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -1772,7 +1761,7 @@ loc_1540:				; DATA XREF: ROM:00000B96o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1566:
+mos_EOR_indx:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -1790,7 +1779,7 @@ loc_1566:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1590:
+mos_EOR_indy:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -1810,7 +1799,7 @@ loc_1590:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_15BE:
+mos_INC_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		addq.b	#1,(a2,d6.w)
@@ -1821,7 +1810,7 @@ loc_15BE:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_15d3:
+mos_INC_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -1833,7 +1822,7 @@ loc_15d3:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_15F0:
+mos_INC_abs:
 		move.b	(a0)+,d4
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
@@ -1846,7 +1835,7 @@ loc_15F0:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_160C:
+mos_INC_absx:
 		move.b	(a0)+,d4
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
@@ -1860,7 +1849,7 @@ loc_160C:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_162A:
+mos_INX:
 		addq.b	#1,d1
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1869,7 +1858,7 @@ loc_162A:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_163C:
+mos_INY:
 		addq.b	#1,d2
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1880,7 +1869,7 @@ loc_163C:
 ; $4C - JMP $xxxx
 ; ----------------------------------------------------------------
 
-loc_164E:
+mos_JMP_abs:
 		moveq	#0,d6
 		move.b	1(a0),d6
 		lsl.w	#8,d6
@@ -1894,7 +1883,7 @@ loc_164E:
 ; $6C - JMP ($xxxx)
 ; ----------------------------------------------------------------
 
-loc_1660:
+mos_JMP_ind:
 		moveq	#0,d4
 		move.b	1(a0),d6
 		lsl.w	#8,d6
@@ -1918,17 +1907,16 @@ loc_1660:
 		jmp	(RAM_EmuLoop).l
 
 ; ----------------------------------------------------------------
-; $6C - JSR $xxxx
+; $20 - JSR $xxxx
 ; ----------------------------------------------------------------
 
-loc_167C:
+mos_JSR:
 		moveq	#0,d6
 		move.b	(a0)+,d4
 		move.b	(a0),d6
 		lsl.w	#8,d6
 		move.b	d4,d6
 
-loc_1686:
 		swap	d3
 		move.w	a0,d4
 		move.b	d4,d5
@@ -1948,7 +1936,7 @@ loc_1686:
 ; $A9 - LDA #$xx
 ; ----------------------------------------------------------------
 
-loc_16A4:
+mos_LDA_imm:
 		move.b	(a0)+,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1957,7 +1945,7 @@ loc_16A4:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_16B6:
+mos_LDA_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d0
@@ -1968,7 +1956,7 @@ loc_16B6:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_16CE:				; DATA XREF: ROM:00000D06o
+mos_LDA_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -1980,7 +1968,7 @@ loc_16CE:				; DATA XREF: ROM:00000D06o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_16E8:
+mos_LDA_abs:
 		clr.w	d4
 		clr.w	d6
 		move.b	(a0)+,d4
@@ -1994,7 +1982,7 @@ loc_16E8:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1708:				; DATA XREF: ROM:00000D26o
+mos_LDA_absx:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2011,7 +1999,7 @@ loc_1708:				; DATA XREF: ROM:00000D26o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_172E:				; DATA XREF: ROM:00000D16o
+mos_LDA_absy:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2029,7 +2017,7 @@ loc_172E:				; DATA XREF: ROM:00000D16o
 ; ----------------------------------------------------------------
 ; LDA (oper,X)
 
-loc_1754:
+mos_LDA_indx:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -2047,7 +2035,7 @@ loc_1754:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_177E:
+mos_LDA_indy:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -2067,7 +2055,7 @@ loc_177E:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_17AC:				; DATA XREF: ROM:00000CBAo
+mos_LDX_imm:
 		move.b	(a0)+,d1
 		move	sr,d5
 		andi.w	#$C,d5
@@ -2076,7 +2064,7 @@ loc_17AC:				; DATA XREF: ROM:00000CBAo
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_17BE:				; DATA XREF: ROM:00000CCAo
+mos_LDX_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d1
@@ -2087,7 +2075,7 @@ loc_17BE:				; DATA XREF: ROM:00000CCAo
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_17d3:				; DATA XREF: ROM:00000D0Ao
+mos_LDX_zpy:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d2,d6
@@ -2099,7 +2087,7 @@ loc_17d3:				; DATA XREF: ROM:00000D0Ao
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_17F0:				; DATA XREF: ROM:00000CEAo
+mos_LDX_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2113,7 +2101,7 @@ loc_17F0:				; DATA XREF: ROM:00000CEAo
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1810:				; DATA XREF: ROM:00000D2Ao
+mos_LDX_absy:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2130,7 +2118,7 @@ loc_1810:				; DATA XREF: ROM:00000D2Ao
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1836:				; DATA XREF: ROM:00000CB2o
+mos_LDY_imm:
 		move.b	(a0)+,d2
 		move	sr,d5
 		andi.w	#$C,d5
@@ -2139,7 +2127,7 @@ loc_1836:				; DATA XREF: ROM:00000CB2o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1848:				; DATA XREF: ROM:00000CC2o
+mos_LDY_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d2
@@ -2150,7 +2138,7 @@ loc_1848:				; DATA XREF: ROM:00000CC2o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1860:				; DATA XREF: ROM:00000D02o
+mos_LDY_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -2162,7 +2150,7 @@ loc_1860:				; DATA XREF: ROM:00000D02o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_187A:				; DATA XREF: ROM:00000CE2o
+mos_LDY_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2176,7 +2164,7 @@ loc_187A:				; DATA XREF: ROM:00000CE2o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_189A:				; DATA XREF: ROM:00000D22o
+mos_LDY_absx:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2193,7 +2181,7 @@ loc_189A:				; DATA XREF: ROM:00000D22o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_18C0:				; DATA XREF: ROM:00000B5Ao
+mos_LSR_acc:
 		lsr.b	#1,d0
 		move	sr,d5
 		andi.w	#$1D,d5
@@ -2202,7 +2190,7 @@ loc_18C0:				; DATA XREF: ROM:00000B5Ao
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_18D2:				; DATA XREF: ROM:00000B4Ao
+mos_LSR_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d7
@@ -2215,7 +2203,7 @@ loc_18D2:				; DATA XREF: ROM:00000B4Ao
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_18F0:				; DATA XREF: ROM:00000B8Ao
+mos_LSR_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -2229,7 +2217,7 @@ loc_18F0:				; DATA XREF: ROM:00000B8Ao
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1910:				; DATA XREF: ROM:00000B6Ao
+mos_LSR_abs:
 		move.b	(a0)+,d4
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
@@ -2244,7 +2232,7 @@ loc_1910:				; DATA XREF: ROM:00000B6Ao
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1932:				; DATA XREF: ROM:00000BAAo
+mos_LSR_absx:
 		move.b	(a0)+,d4
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
@@ -2261,12 +2249,12 @@ loc_1932:				; DATA XREF: ROM:00000BAAo
 ; ----------------------------------------------------------------
 ; $EA - nop
 
-loc_1956:
+mos_NOP:
 		nop
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_195C:				; DATA XREF: ROM:00000A56o
+mos_ORA_imm:
 		move.b	(a0)+,d7
 		or.b	d7,d0
 		move	sr,d5
@@ -2276,7 +2264,7 @@ loc_195C:				; DATA XREF: ROM:00000A56o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1970:				; DATA XREF: ROM:00000A46o
+mos_ORA_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d7
@@ -2288,7 +2276,7 @@ loc_1970:				; DATA XREF: ROM:00000A46o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_198A:				; DATA XREF: ROM:00000A86o
+mos_ORA_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -2301,7 +2289,7 @@ loc_198A:				; DATA XREF: ROM:00000A86o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_19A6:				; DATA XREF: ROM:00000A66o
+mos_ORA_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2315,7 +2303,7 @@ loc_19A6:				; DATA XREF: ROM:00000A66o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_19C6:				; DATA XREF: ROM:00000AA6o
+mos_ORA_absx:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2332,7 +2320,7 @@ loc_19C6:				; DATA XREF: ROM:00000AA6o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_19EC:				; DATA XREF: ROM:00000A96o
+mos_ORA_absy:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2349,7 +2337,7 @@ loc_19EC:				; DATA XREF: ROM:00000A96o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1A12:
+mos_ORA_indx:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -2367,7 +2355,7 @@ loc_1A12:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1A3C:
+mos_ORA_indy:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -2387,7 +2375,7 @@ loc_1A3C:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1A6A:				; DATA XREF: ROM:00000B52o
+mos_PHA:
 		swap	d3
 		move.b	d0,(a2,d3.w)
 		subq.b	#1,d3
@@ -2398,7 +2386,7 @@ loc_1A6A:				; DATA XREF: ROM:00000B52o
 ; $08 - PHP
 ; ----------------------------------------------------------------
 
-loc_1A78:
+mos_PHP:
 		bsr	famiGetP
 		swap	d3
 		move.b	d5,(a2,d3.w)
@@ -2468,7 +2456,7 @@ tblPToCcr:
 		align 2
 ; ----------------------------------------------------------------
 
-loc_1A88:
+mos_PLA:
 		addi.l	#$10000,d3
 		move.l	d3,d5
 		swap	d5
@@ -2483,7 +2471,7 @@ loc_1A88:
 ; $28 - PLP
 ; ----------------------------------------------------------------
 
-loc_1AA6:
+mos_PLP:
 		swap	d3
 		addq.b	#1,d3
 		move.b	(a2,d3.w),d5
@@ -2492,7 +2480,7 @@ loc_1AA6:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1AB6:
+mos_ROL_acc:
 		move	d3,sr
 		roxl.b	#1,d0
 		move	sr,d5
@@ -2502,7 +2490,7 @@ loc_1AB6:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1ACA:				; DATA XREF: ROM:00000ACAo
+mos_ROL_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d7
@@ -2516,7 +2504,7 @@ loc_1ACA:				; DATA XREF: ROM:00000ACAo
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1AEA:				; DATA XREF: ROM:00000B0Ao
+mos_ROL_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -2531,7 +2519,7 @@ loc_1AEA:				; DATA XREF: ROM:00000B0Ao
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1B0C:				; DATA XREF: ROM:00000AEAo
+mos_ROL_abs:
 		move.b	(a0)+,d4
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
@@ -2547,7 +2535,7 @@ loc_1B0C:				; DATA XREF: ROM:00000AEAo
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1B30:
+mos_ROL_absx:
 		move.b	(a0)+,d4
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
@@ -2564,7 +2552,7 @@ loc_1B30:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1B56:
+mos_ROR_acc:
 		move	d3,sr
 		roxr.b	#1,d0
 		move	sr,d5
@@ -2574,7 +2562,7 @@ loc_1B56:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1B6A:
+mos_ROR_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d7
@@ -2588,7 +2576,7 @@ loc_1B6A:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1B8A:				; DATA XREF: ROM:00000C0Ao
+mos_ROR_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -2603,7 +2591,7 @@ loc_1B8A:				; DATA XREF: ROM:00000C0Ao
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1BAC:				; DATA XREF: ROM:00000BEAo
+mos_ROR_abs:
 		move.b	(a0)+,d4
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
@@ -2619,7 +2607,7 @@ loc_1BAC:				; DATA XREF: ROM:00000BEAo
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1BD0:				; DATA XREF: ROM:00000C2Ao
+mos_ROR_absx:
 		move.b	(a0)+,d4
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
@@ -2641,7 +2629,7 @@ loc_1BD0:				; DATA XREF: ROM:00000C2Ao
 ; NOTE: Interrupt exit
 ; ----------------------------------------------------------------
 
-loc_1BF6:
+mos_RTI:
 		tst.w	cpuFamiVint(a4)
 		beq.s	.nonint
 		
@@ -2687,7 +2675,7 @@ loc_1BF6:
 ; $60 - RTS
 ; ----------------------------------------------------------------
 
-loc_1C32:
+mos_RTS:
 		swap	d3
 		moveq	#0,d6
 		addq.b	#1,d3
@@ -2704,7 +2692,7 @@ loc_1C32:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1C52:
+mos_SBC_imm:
 		move.b	(a0)+,d7
 		eori.b	#$11,d3
 		ori.b	#4,d3
@@ -2715,7 +2703,7 @@ loc_1C52:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1C6A:
+mos_SBC_zp:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	(a2,d6.w),d7
@@ -2728,7 +2716,7 @@ loc_1C6A:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1C88:				; DATA XREF: ROM:00000E06o
+mos_SBC_zpx:
 		clr.w	d6
 		move.b	(a0)+,d6
 		add.b	d1,d6
@@ -2742,7 +2730,7 @@ loc_1C88:				; DATA XREF: ROM:00000E06o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1CA8:				; DATA XREF: ROM:00000DE6o
+mos_SBC_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2757,7 +2745,7 @@ loc_1CA8:				; DATA XREF: ROM:00000DE6o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1CCC:				; DATA XREF: ROM:00000E26o
+mos_SBC_absx:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2775,7 +2763,7 @@ loc_1CCC:				; DATA XREF: ROM:00000E26o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1CF6:
+mos_SBC_absy:
 		clr.w	d4
 		clr.w	d5
 		clr.b	d7
@@ -2793,7 +2781,7 @@ loc_1CF6:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1D20:
+mos_SBC_indx:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -2813,7 +2801,7 @@ loc_1D20:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1D4E:
+mos_SBC_indy:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -2834,7 +2822,7 @@ loc_1D4E:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1D80:
+mos_SEC:
 		ori.b	#$11,d3
 		jmp	(RAM_EmuLoop).l
 
@@ -2842,7 +2830,7 @@ loc_1D80:
 ; SED - Set Decimal mode
 ; ----------------------------------------------------------------
 
-loc_1D88:
+mos_SED:
 		move.w	#1,cpuModeDec(a4)
 		jmp	(RAM_EmuLoop).l
 
@@ -2850,20 +2838,20 @@ loc_1D88:
 ; SEI - Set Interrupt disable
 ; ----------------------------------------------------------------
 
-loc_1D92:
+mos_SEI:
 		move.w	#1,cpuModeIntDis(a4)
 		jmp	(RAM_EmuLoop).l
 
 ; ----------------------------------------------------------------
 
-loc_1D9C:
+mos_STA_zp:
 		clr.w	d4
 		move.b	(a0)+,d4
 		move.b	d0,(a2,d4.w)
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1DA8:
+mos_STA_zpx:
 		clr.w	d4
 		move.b	(a0)+,d4
 		add.b	d1,d4
@@ -2871,7 +2859,7 @@ loc_1DA8:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1DB6:				; DATA XREF: ROM:00000C66o
+mos_STA_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2882,7 +2870,7 @@ loc_1DB6:				; DATA XREF: ROM:00000C66o
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1DCA:
+mos_STA_absx:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2894,7 +2882,7 @@ loc_1DCA:
 		bra	addr_Write
 ; ----------------------------------------------------------------
 
-loc_1DE0:
+mos_STA_absy:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2907,7 +2895,7 @@ loc_1DE0:
 ; ----------------------------------------------------------------
 ; STA (oper,X)
 
-loc_1DF6:
+mos_STA_indx:
 		clr.w	d5
 		clr.w	d4
 		clr.w	d6
@@ -2920,7 +2908,7 @@ loc_1DF6:
 		bra	addr_Write
 ; ----------------------------------------------------------------
 
-loc_1E10:
+mos_STA_indy:
 		clr.w	d4
 		clr.w	d5
 		clr.w	d6
@@ -2935,14 +2923,14 @@ loc_1E10:
 		bra	addr_Write
 ; ----------------------------------------------------------------
 
-loc_1E2E:
+mos_STX_zp:
 		clr.w	d4
 		move.b	(a0)+,d4
 		move.b	d1,(a2,d4.w)
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1E3A:
+mos_STX_zpy:
 		clr.w	d4
 		move.b	(a0)+,d4
 		add.b	d2,d4
@@ -2950,7 +2938,7 @@ loc_1E3A:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1E48:
+mos_STX_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2961,14 +2949,14 @@ loc_1E48:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1E5C:
+mos_STY_zp:
 		clr.w	d4
 		move.b	(a0)+,d4
 		move.b	d2,(a2,d4.w)
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1E68:
+mos_STY_zpx:
 		clr.w	d4
 		move.b	(a0)+,d4
 		add.b	d1,d4
@@ -2976,7 +2964,7 @@ loc_1E68:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1E76:
+mos_STY_abs:
 		clr.w	d4
 		move.b	(a0)+,d4
 		clr.w	d6
@@ -2987,7 +2975,7 @@ loc_1E76:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1E8A:
+mos_TAX:
 		move.b	d0,d1
 		move	sr,d5
 		andi.w	#$C,d5
@@ -2996,7 +2984,7 @@ loc_1E8A:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1E9C:
+mos_TAY:
 		move.b	d0,d2
 		move	sr,d5
 		andi.w	#$C,d5
@@ -3006,7 +2994,7 @@ loc_1E9C:
 ; ----------------------------------------------------------------
 ; TSX
 
-loc_1EAE:
+mos_TSX:
 		swap	d3
 		move.b	d3,d1
 		swap	d3
@@ -3017,7 +3005,7 @@ loc_1EAE:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1EC4:
+mos_TXA:
 		move.b	d1,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -3026,14 +3014,14 @@ loc_1EC4:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1Ed3:
+mos_TXS:
 		swap	d3
 		move.b	d1,d3
 		swap	d3
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_1EE0:
+mos_TYA:
 		move.b	d2,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -3078,7 +3066,7 @@ rdFrom_PRG:
 
 rdFrom_APU:
 		cmpi.b	#$1F,d4
-		bhi.w	loc_23A6
+		bhi.w	rdAPU_OpenBus
 
 		cmp.b	#$16,d4		; $4016
 		beq.s	APU_Input_1
@@ -3092,7 +3080,7 @@ APU_Rd_Null:
 
 ; ----------------------------------------------------------------
 
-loc_23A6:
+rdAPU_OpenBus:
 		move.w	d3,d7
 		rts
 
@@ -3115,20 +3103,20 @@ APU_Input_2:
 rdFrom_PPU:
 		andi.w	#7,d4
 		add.w	d4,d4
-		move.w	off_23D4(pc,d4.w),d4
-		jmp	off_23D4(pc,d4.w)
+		move.w	rdPPU_Table(pc,d4.w),d4
+		jmp	rdPPU_Table(pc,d4.w)
 ; ----------------------------------------------------------------
-off_23D4:	dc.w loc_23F4-off_23D4		; $2000
-		dc.w loc_23F4-off_23D4		; $2001
-		dc.w rdPPU_Status-off_23D4	; $2002
-		dc.w loc_23F4-off_23D4		; $2003
-		dc.w return_241A-off_23D4	; $2004
-		dc.w loc_23F4-off_23D4		; $2005
-		dc.w loc_23F4-off_23D4		; $2006
-		dc.w rdPPU_Data-off_23D4	; $2007
+rdPPU_Table:	dc.w rdPPU_OpenBus-rdPPU_Table		; $2000
+		dc.w rdPPU_OpenBus-rdPPU_Table		; $2001
+		dc.w rdPPU_Status-rdPPU_Table	; $2002
+		dc.w rdPPU_OpenBus-rdPPU_Table		; $2003
+		dc.w rdPPU_OamData-rdPPU_Table	; $2004
+		dc.w rdPPU_OpenBus-rdPPU_Table		; $2005
+		dc.w rdPPU_OpenBus-rdPPU_Table		; $2006
+		dc.w rdPPU_Data-rdPPU_Table	; $2007
 ; ----------------------------------------------------------------
 
-loc_23F4:
+rdPPU_OpenBus:
 		move.b	(a1,d3.w),d7	; byte read: d3 can be odd (word read = address error)
 		rts
 ; ----------------------------------------------------------------
@@ -3146,7 +3134,7 @@ rdPPU_Status:
 		move.w	#$2700,sr
 		move.w	ppuSp0Ypos(a4),d4
 		cmpi.w	#$EF,d4
-		bcc.s	return_2418
+		bcc.s	.no_hit
 		subq.w	#7,d4
 		bpl.s	.sp0_top
 		moveq	#0,d4
@@ -3158,11 +3146,11 @@ rdPPU_Status:
 		move.w	8(a6),d5		; MD V counter
 		lsr.w	#8,d5
 		cmpi.w	#$E0,d5
-		bcc.s	return_2418		; vblank
+		bcc.s	.no_hit		; vblank
 		cmp.w	d4,d5
-		bcs.s	return_2418		; above sprite 0
+		bcs.s	.no_hit		; above sprite 0
 		ori.w	#$40,d7
-return_2418:
+.no_hit:
 
 		tst.w	FamiPPUVint(a4)
 		beq.s	.novflag
@@ -3177,7 +3165,7 @@ return_2418:
 		rts
 ; ----------------------------------------------------------------
 
-return_241A:				; DATA XREF: ROM:000023E4o
+rdPPU_OamData:
 		rts
 ; ----------------------------------------------------------------
 
@@ -3269,56 +3257,52 @@ wrTo_APU:
 		cmpi.b	#$1F,d4
 		bhi.s	APU_Null
 		add.w	d4,d4
-		move.w	off_2866(pc,d4.w),d4
-		jmp	off_2866(pc,d4.w)
+		move.w	wrAPU_Table(pc,d4.w),d4
+		jmp	wrAPU_Table(pc,d4.w)
 
 ; ----------------------------------------------------------------
-off_2866:	dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_OAMDMA-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Input-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
-		dc.w APU_Null-off_2866
+wrAPU_Table:	dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_OAMDMA-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Input-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
+		dc.w APU_Null-wrAPU_Table
 
 APU_Null:
 		jmp	(RAM_EmuLoop).l
 
-; =============== S U B	R O U T	I N E =======================================
 
-
-APU_Input:				; DATA XREF: ROM:000028BEo
+APU_Input:
 		tst.b	d7
 		beq.s	APU_Null
 		bsr	readInput
 		jmp	(RAM_EmuLoop).l
-
-; =============== S U B	R O U T	I N E =======================================
 
 
 readInput:
@@ -3359,9 +3343,6 @@ readInput:
 		or.b	d5,d4
 		move.w	d4,(a5)+
 		rts
-
-
-; =============== S U B	R O U T	I N E =======================================
 
 
 APU_OAMDMA:
@@ -3414,30 +3395,27 @@ APU_OAMDMA:
 		jmp	(RAM_EmuLoop).l
 
 
-; =============== S U B	R O U T	I N E =======================================
-
-
 wrTo_PPU:
 		andi.w	#7,d4
 		add.w	d4,d4
-		move.w	off_29F6(pc,d4.w),d4
-		jmp	off_29F6(pc,d4.w)
+		move.w	wrPPU_Table(pc,d4.w),d4
+		jmp	wrPPU_Table(pc,d4.w)
 
 ; ----------------------------------------------------------------
-off_29F6:	dc.w loc_2A16-off_29F6 ; $2000
-		dc.w loc_2A5E-off_29F6 ; $2001
-		dc.w loc_2ACC-off_29F6 ; $2002
-		dc.w loc_2AD0-off_29F6 ; $2003
-		dc.w loc_2AE2-off_29F6 ; $2004
-		dc.w wrPPU_Scroll-off_29F6 ; $2005
-		dc.w loc_2AE6-off_29F6 ; $2006
-		dc.w wrPPU_Data-off_29F6 ; $2007
+wrPPU_Table:	dc.w wrPPU_Ctrl-wrPPU_Table ; $2000
+		dc.w wrPPU_Mask-wrPPU_Table ; $2001
+		dc.w wrPPU_Status-wrPPU_Table ; $2002
+		dc.w wrPPU_OamAddr-wrPPU_Table ; $2003
+		dc.w wrPPU_OamData-wrPPU_Table ; $2004
+		dc.w wrPPU_Scroll-wrPPU_Table ; $2005
+		dc.w wrPPU_Addr-wrPPU_Table ; $2006
+		dc.w wrPPU_Data-wrPPU_Table ; $2007
 
 ; ----------------------------------------------------------------
-; $2000
+; $2000 - PPU CTRL
 ; ----------------------------------------------------------------
 
-loc_2A16:
+wrPPU_Ctrl:
 
 	; NMI on/off
 		clr.w	d6
@@ -3450,9 +3428,9 @@ loc_2A16:
 	; 8x8 or 8x16 sprites
 		clr.w	d6
 		lsl.b	#2,d7
-		bcc.s	loc_2A2C
+		bcc.s	.spr_size
 		move.w	#$100,d6
-loc_2A2C:
+.spr_size:
 		move.w	d6,ppuSprWide(a4)
 		
 	; PPU VRAM BG bank/Sprites bank
@@ -3478,10 +3456,10 @@ loc_2A2C:
 		jmp	(RAM_EmuLoop).l
 
 ; ----------------------------------------------------------------
-; $2002 - PPU MASK
+; $2001 - PPU MASK
 ; ----------------------------------------------------------------
 
-loc_2A5E:
+wrPPU_Mask:
 		move.w	#$2700,sr
 
 	; Hide sprites and BG
@@ -3523,7 +3501,7 @@ wrPPU_Scroll:
 		andi.w	#$FF,d4
 		move.w	ppuNTblBase(a4),d6
 		eori.w	#1,ppuAddrLatch(a4)
-		beq.s	loc_2AA4
+		beq.s	.vertical
 		and.w	#1,d6
 		lsl.w	#8,d6
 		add.w	d6,d4
@@ -3536,15 +3514,15 @@ wrPPU_Scroll:
 ; Vertical
 ; --------------------------------------------------------
 
-loc_2AA4:
+.vertical:
 		addq.w	#8,d4
 		lsl.b	#1,d6
-		bcs.s	loc_2ABE
+		bcs.s	.vert_swap
 		move.w	d4,vdpScrlY(a4)
 		add.w	#$110,d4
 		move.w	d4,vdpScrlY+2(a4)
 		jmp	(RAM_EmuLoop).l
-loc_2ABE:
+.vert_swap:
 		move.w	d4,vdpScrlY+2(a4)
 		add.w	#$110,d4
 		move.w	d4,vdpScrlY(a4)
@@ -3552,22 +3530,22 @@ loc_2ABE:
 
 ; ----------------------------------------------------------------
 
-loc_2ACC:				; DATA XREF: ROM:000029FEo
+wrPPU_Status:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_2AD0:
+wrPPU_OamAddr:
 		move.w	ppuOamUnk(a4),d4
 		move.b	d7,ppuOamAddr(a4,d4.w)
 		eori.w	#1,ppuOamUnk(a4)
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_2AE2:
+wrPPU_OamData:
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
-loc_2AE6:
+wrPPU_Addr:
 		move.w	ppuAddrLatch(a4),d4
 		move.b	d7,ppuAddrBase(a4,d4.w)
 		eori.w	#1,ppuAddrLatch(a4)
@@ -3892,18 +3870,16 @@ ppuDrwCellPal:
 		move.w	#$2000,sr
 		rts
 
-; =============== S U B	R O U T	I N E =======================================
-
 
 romGrabPrg:
 		lea	$10(a0),a4
 		cmpi.b	#1,d7
-		beq.w	loc_29C0
+		beq.w	.prg_16k
 		cmpi.b	#2,d7
-		beq.w	loc_29D8
+		beq.w	.prg_32k
 		trap	#2
 ; ----------------------------------------------------------------
-loc_29C0:
+.prg_16k:
 		lea	(RAM_Fami_ROM).l,a5
 		lea	(RAM_Fami_ROM+$4000).l,a3
 		move.l	#$FFF,d7
@@ -3915,15 +3891,14 @@ loc_29C0:
 		rts
 ; ----------------------------------------------------------------
 
-loc_29D8:
+.prg_32k:
 		lea	(RAM_Fami_ROM).l,a5
 		move.l	#$1FFF,d7
-loc_29E2:
+.copy:
 		move.l	(a4)+,(a5)+
-		dbf	d7,loc_29E2
+		dbf	d7,.copy
 		rts
 
-; =============== S U B	R O U T	I N E =======================================
 
 ; ----------------------------------------------------------------
 ; $2007 write to the pattern tables ($0000-$1FFF)
@@ -4021,7 +3996,6 @@ ppuChrRamWrite:
 .done:
 		jmp	(RAM_EmuLoop).l
 
-; =============== S U B	R O U T	I N E =======================================
 
 ; a6 - $C00000
 ; a4 - RAM_Fami_Emu
@@ -4043,43 +4017,42 @@ Nemul_LoadChr:
 .make_chr:
 		movea.l	a3,a5
 		lsl.b	#1,d6
-		bcc.s	loc_8DBA
+		bcc.s	.got_table
 		adda.l	#$1000,a5
-loc_8DBA:
+.got_table:
 		movem.l	d0-d2/d3-d7,-(sp)
 		move.l	#$FF,d7
-loc_8DC4:
+.tile:
 		moveq	#7,d3
-loc_8DC6:
+.row:
 		move.b	(a5),d1
 		move.b	8(a5),d2
 		moveq	#0,d0
 		moveq	#7,d6
-loc_8DD0:
+.planes:
 		add.b	d2,d2
 		addx.w	d0,d0
 		add.b	d1,d1
 		addx.w	d0,d0
-		dbf	d6,loc_8DD0
+		dbf	d6,.planes
 		moveq	#0,d4
 		moveq	#7,d6
-loc_8DE0:
+.nibble:
 		move.b	d0,d1
 		lsr.w	#2,d0
 		andi.l	#3,d1
-		beq.s	loc_8DEE
+		beq.s	.zero
 		or.b	d5,d1
-loc_8DEE:
+.zero:
 		or.b	d1,d4
 		ror.l	#4,d4
-		dbf	d6,loc_8DE0
+		dbf	d6,.nibble
 		move.l	d4,(a6)
 		addq.l	#1,a5
-		dbf	d3,loc_8DC6
+		dbf	d3,.row
 		addq.l	#8,a5
-		dbf	d7,loc_8DC4
+		dbf	d7,.tile
 		movem.l	(sp)+,d0-d2/d3-d7
-return_8E08:
 		rts
 
 ; ====================================================================
