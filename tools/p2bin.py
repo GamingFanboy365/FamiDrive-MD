@@ -1,78 +1,59 @@
-#======================================================================
-# .raw.pal to VDP
-# 
-# STABLE
-#======================================================================
+#!/usr/bin/env python3
+# ======================================================================
+# p2bin: convert an AS assembler .p file to a flat binary
+#
+# usage: p2bin.py input.p output.bin
+# ======================================================================
 
+import struct
 import sys
-import os.path
 
-#======================================================================
-# -------------------------------------------------
-# Settings
-# -------------------------------------------------
+P_MAGIC = 0x1489
 
-DO_PADDING = True
 
-#======================================================================
-# -------------------------------------------------
-# Init
-# -------------------------------------------------
+def fail(msg):
+	print("p2bin: " + msg, file=sys.stderr)
+	sys.exit(1)
 
-if os.path.exists(sys.argv[1]) == False:
-	print("P2BIN: File not found")
-	exit()
-	
-input_file = open(sys.argv[1],"rb")
-output_file = open(sys.argv[2],"wb")
 
-a = ord( input_file.read(1) )
-b = ord( input_file.read(1) )
-#print ( hex(a),hex(b) )
-working=True
+def read(f, size, what):
+	data = f.read(size)
+	if len(data) != size:
+		fail("unexpected end of file while reading " + what)
+	return data
 
-#======================================================================
-# -------------------------------------------------
-# Start
-# -------------------------------------------------
 
-while working:
-	a = int( ord(input_file.read(1)) )
-	#print hex(a)
-	if a == 0:
-		working = False
+def convert(in_path, out_path):
+	try:
+		src = open(in_path, "rb")
+	except OSError as e:
+		fail("can't open %s: %s" % (in_path, e.strerror))
 
-	elif a == 0x81:
-		input_file.seek(3,1)
-		#print "ESTOY EN",hex(input_file.tell())
-		startfrom  = int(ord(input_file.read(1)))
-		startfrom |= int(ord(input_file.read(1))) << 8
-		startfrom |= int(ord(input_file.read(1))) << 16
-		startfrom |= int(ord(input_file.read(1))) << 24
-		length = int(ord(input_file.read(1)))
-		length |= int(ord(input_file.read(1))) << 8
-		
-		#print hex(startfrom),hex(length)
-		output_file.seek(startfrom)
-		result = input_file.read(length)
-		output_file.write(result)
-		#working = False
-		#break
-	
-	else:
-		print("PONME ALGO WEY")
-		working = False
+	with src, open(out_path, "wb") as dst:
+		magic, = struct.unpack("<H", read(src, 2, "header"))
+		if magic != P_MAGIC:
+			fail("%s is not an AS .p file" % in_path)
 
-# ----------------------------
-# Padding
-# ----------------------------
+		while True:
+			rec = read(src, 1, "record type")[0]
+			if rec == 0x00:
+				break				# creator string follows; done
+			elif rec == 0x80:
+				read(src, 4, "entry point")	# entry point, unused
+				continue
+			elif rec == 0x81:
+				read(src, 3, "record header")	# CPU, segment, granularity
+			elif rec > 0x81:
+				fail("unknown record type $%02X at offset $%X" % (rec, src.tell() - 1))
+			# $01-$7F: legacy record, the type byte is the CPU
 
-#if DO_PADDING == True:
-	#print
-	
-# ----------------------------
-# End
-# ----------------------------
+			start, length = struct.unpack("<IH", read(src, 6, "record address"))
+			dst.seek(start)
+			dst.write(read(src, length, "record data"))
 
-input_file.close()
-output_file.close()    
+
+if __name__ == "__main__":
+	if len(sys.argv) != 3:
+		print("usage: p2bin.py input.p output.bin", file=sys.stderr)
+		sys.exit(2)
+	convert(sys.argv[1], sys.argv[2])

@@ -1,2 +1,10 @@
+# NES ROMs are not distributed with the source
 roms/
-out/rom_md.bin
+
+# Build output
+out/
+md.p
+md.h
+
+# KDE Dolphin folder settings
+.directory

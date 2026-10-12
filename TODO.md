@@ -28,12 +28,12 @@ Known issues and cleanup, roughly in priority order.
 
 ## Repo and build
 
-- [ ] **Untrack build output.** `out/rom_md.bin` and `out/rom_md.lst` are
+- [x] **Untrack build output.** `out/rom_md.bin` and `out/rom_md.lst` are
   tracked despite `.gitignore` (the `.bin` also embeds `nestest.nes`). KDE
   `.directory` files are tracked in six folders.
-- [ ] **Dead code.** `system/md/{system,video,sound,head}.asm` are never
+- [x] **Dead code.** `system/md/{system,video,sound,head}.asm` are never
   included; `video.asm` references a nonexistent `engine/shared/*.bin`.
-- [ ] **Build scripts.** `build.sh` should use `python3` and stop on failure
+- [x] **Build scripts.** `build.sh` should use `python3` and stop on failure
   (`set -e`); add a Windows script for the bundled `asw.exe`. `p2bin.py` should
   print clear errors and exit non-zero on failure.
 
