@@ -38,6 +38,19 @@ finished in #1 to #6.
 - [ ] **PAL consoles.** `tools/mkapu.py` assumes NTSC PSG/FM clocks and 60 Hz
   frames, so on PAL pitch is about 1% low and envelopes run 17% slow.
 
+## Recompiler
+
+- [ ] **More speed.** Pinball's gameplay runs at about 40% of full speed
+  recompiled. Next steps, roughly by size of win: keep the 6502 carry in the
+  68000's X flag across ASL/ROL/ADC chains instead of storing it in `d3`;
+  hoist loop-invariant `(zp),Y` pointers; a faster `rcDispatch`; keep hot
+  zero-page variables in registers.
+- [ ] **NMI timing.** Recompiled code checks for VBlank only at loop heads and
+  calls, not after every instruction, so NMIs land at slightly different
+  points than on the NES.
+- [ ] **Unofficial opcodes** aren't translated; code using them runs in the
+  interpreter.
+
 ## Hardware
 
 - [ ] **6-button pads.** `readInput` reads the pad with a simple two-step TH
