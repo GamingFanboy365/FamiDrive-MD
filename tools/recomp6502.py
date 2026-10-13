@@ -870,9 +870,8 @@ class Gen:
 				self.e(*setup)
 				if need and not direct and not live & V:
 					# r + ~s + 1 carries like the 6502's compare; V is dead
-					if s.startswith('#'):
-						v = ~int(s[2:], 16) & 0xFF
-						self.e('moveq #%d,d7' % (v - 256 if v >= 0x80 else v))
+					if s.startswith('#'):	# (handlers expect d7's upper bits clear)
+						self.e('move.b #$%02X,d7' % (~int(s[2:], 16) & 0xFF))
 					else:
 						self.e('move.b %s,d7' % s, 'not.b d7')
 					self.e('move.b %s,d6' % r, 'move #$14,ccr', 'addx.b d7,d6', 'move sr,d3')
@@ -1239,16 +1238,16 @@ class Gen:
 	def emit_fill(self, plan):
 		lo, hi = plan['lo'], plan['hi']
 		self.out.append('\t\t\t\t\t\t; $%04X  fill $%04X-$%04X' % (plan['t'], lo, hi))
-		if hi - lo >= 3:
-			self.e('move.b d0,d7', 'lsl.w #8,d7', 'move.b d0,d7', 'move.w d7,d6', 'swap d7', 'move.w d6,d7')
+		if hi - lo >= 3:			# A in all four bytes of d5
+			self.e('move.b d0,d5', 'lsl.w #8,d5', 'move.b d0,d5', 'move.w d5,d6', 'swap d5', 'move.w d6,d5')
 		a = lo
 		while a <= hi:
 			if a & 1 or a == hi:
 				self.e('move.b d0,$%04X(a2)' % a); a += 1
 			elif a + 3 <= hi:
-				self.e('move.l d7,$%04X(a2)' % a); a += 4
+				self.e('move.l d5,$%04X(a2)' % a); a += 4
 			else:
-				self.e('move.w d7,$%04X(a2)' % a); a += 2
+				self.e('move.w d5,$%04X(a2)' % a); a += 2
 		self.e('move.b #$%02X,%s' % (plan['end'], plan['reg']))
 		if plan['b'].live_out & (N | Z):
 			self.e('tst.b %s' % plan['reg'])
