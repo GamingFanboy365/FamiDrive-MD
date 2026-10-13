@@ -11,6 +11,9 @@
 		ifndef RECOMP
 RECOMP		equ 0			; 1: run recompiled code (build.sh --recompile)
 		endif
+		ifndef FPS
+FPS		equ 0			; 1: FPS counter (build.sh --fps, needs RECOMP)
+		endif
 		include	"system/md/const.asm"	; RAM / Variables are here
 		include	"system/md/map.asm"	; Genesis hardware map
 
@@ -85,6 +88,12 @@ vdpScrlX	ds.l 1
 vdpScrlY	ds.l 1
 vdpPalette	ds.w 64
 vdpSprData	ds.w 8*64
+fpsIdle		ds.w 1			; FPS counter (emu/fps.asm)
+fpsTick		ds.w 1
+fpsShow		ds.w 1
+fpsOn		ds.w 1
+fpsWasOn	ds.w 1
+padXyz		ds.w 1
 		finish
 
 ; ====================================================================
@@ -360,6 +369,9 @@ MD_Init:
 
 MD_Vint:
 		movem.l	d0-d7/a0-a6,-(sp)
+		if FPS
+		jsr	fpsUpdate
+		endif
 
 		move.w	#$8F02,4(a6)
 		move.l	#$78000002,4(a6)
@@ -552,6 +564,9 @@ emuStart:
 		lea 	(RAM_Fami_Emu),a4
 		lea	(RAM_Fami_PPU).w,a3
 		lea	(RAM_Fami_RAM).w,a2
+		if FPS
+		jsr	fpsInit
+		endif
 		bsr	Nemul_LoadChr
 		lea 	(RAM_Fami_ROM),a1	; PRG base
 		movea.l	a1,a0
@@ -671,6 +686,9 @@ emuVint:
 		if RECOMP
 		include	"emu/recomp.asm"	; recompiled code support
 		include	"out/recomp.asm"	; from tools/recomp6502.py
+		endif
+		if FPS
+		include	"emu/fps.asm"		; FPS counter
 		endif
 
 ; ====================================================================

@@ -299,6 +299,9 @@ readInput:
 		lea	($A10003).l,a3
 		lea	padState(a4),a5
 		bsr	.this_pad
+		if FPS
+		jsr	readXyz			; pad 1's X Y Z toggle the FPS counter
+		endif
 		addq.w	#2,a3
 
 .this_pad:
