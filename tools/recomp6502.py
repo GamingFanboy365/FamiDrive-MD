@@ -420,7 +420,7 @@ class Gen:
 		"""After i sets the carry, is the next carry reader a ROL/ROR/ADC
 		reached in straight-line code that keeps X? Then the carry
 		needn't be stored in d3."""
-		if self.fast:
+		if self.fast and 'ptr' in self.fast:
 			return False		# keep d3 right for exits into the normal copy
 		pc = i.pc + i.n
 		while True:
@@ -460,18 +460,18 @@ class Gen:
 			if a >= 0x8000 and a + 255 <= 0xFFFF:
 				return ['lea $%04X(a1),a5' % (a & 0x7FFF)], '(a5,%s.w)' % r
 			return ['move.w #$%04X,d6' % a, 'add.w %s,d6' % r, 'jsr rcRead16'], 'd7'
-		if m == 'indy' and self.fast:
+		if m == 'indy' and self.fast and 'ptr' in self.fast:
 			return [], '(a5,d2.w)'	# pointer checked and loaded into a5
 		if m == 'indy':
-			t = '%04X' % i.pc
+			rn, rs, rd = (self.tag(x, i.pc) for x in ('Rn', 'Rs', 'Rd'))
 			r = dst or 'd7'
 			# PRG (the usual case) falls through; RAM and I/O out of line
-			self.stubs += ['Rn_%s:' % t, '\t\tcmpi.w #$800,d6', '\t\tbcc.s Rs_%s' % t,
-				       '\t\tmove.b (a2,d6.w),%s' % r, '\t\tjmp Rd_%s' % t,
-				       'Rs_%s:' % t, '\t\tjsr rcRead16'] + \
-				      (['\t\tmove.b d7,%s' % r] if r != 'd7' else []) + ['\t\tjmp Rd_%s' % t]
-			return self.indy_addr(a) + ['bpl.w Rn_%s' % t, 'move.b (a0,d6.w),%s' % r,
-						    'Rd_%s:' % t], r
+			self.stubs += [rn + ':', '\t\tcmpi.w #$800,d6', '\t\tbcc.s ' + rs,
+				       '\t\tmove.b (a2,d6.w),%s' % r, '\t\tjmp ' + rd,
+				       rs + ':', '\t\tjsr rcRead16'] + \
+				      (['\t\tmove.b d7,%s' % r] if r != 'd7' else []) + ['\t\tjmp ' + rd]
+			return self.indy_addr(a) + ['bpl.w ' + rn, 'move.b (a0,d6.w),%s' % r,
+						    rd + ':'], r
 		if m == 'indx':
 			return self.indx_addr(a) + ['jsr rcRead16'], 'd7'
 		raise ValueError(m)
@@ -483,7 +483,7 @@ class Gen:
 		r = 'd1' if i.mode == 'zpx' else 'd2'
 		rng = self.ranges.get(i.pc)
 		hi = rng[1 if i.mode == 'zpx' else 2][1] if rng else 255
-		if self.fast and i.pc in self.fast['direct']:
+		if self.fast and i.pc in self.fast.get('direct', ()):
 			hi = 0			# the loop's guard checked the range
 		if a == 0 or a + hi <= 0xFF:
 			if a <= 0x7F:
@@ -514,7 +514,7 @@ class Gen:
 		m, a = i.mode, i.arg
 		if m == 'zp':
 			return [], '$%02X(a2)' % a, []
-		if self.fast and i.pc in self.fast['check']:
+		if self.fast and i.pc in self.fast.get('check', ()):
 			return self.alias_check(i, self.dst_plain(i))
 		return self.dst_plain(i)
 
@@ -643,11 +643,11 @@ class Gen:
 		"""Label of a 6502 address; inside a loop's fast copy (see
 		version_plan) the loop's own instructions have their own labels."""
 		if self.fast and a in self.fast['pcs']:
-			return 'F_%04X' % a
+			return '%s_%04X' % (self.fast['prefix'], a)
 		return lab(a)
 
 	def tag(self, tag, pc):
-		return '%s%s_%04X' % ('F' if self.fast else '', tag, pc)
+		return '%s%s_%04X' % (self.fast['prefix'] if self.fast else '', tag, pc)
 
 	def goto(self, i, target, tag='K'):
 		"""Unconditional jump; backward jumps check for an NMI first."""
@@ -869,6 +869,9 @@ class Gen:
 					hi = (p & 0xFF00) | ((p + 1) & 0xFF)	# 6502 page wrap bug
 					self.e('move.b $%04X(a2),d4' % (hi & 0x7FF), 'lsl.w #8,d4',
 					       'move.b $%04X(a2),d4' % (p & 0x7FF), 'jmp rcDispatch')
+		elif m == 'JSR' and i.arg in self.callable:
+			self.e('jsr R%04X_%04X' % (i.arg, i.arg))	# see routine_body
+			self.called.add(i.arg)
 		elif m == 'JSR':
 			ret = i.pc + 2
 			self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
@@ -877,6 +880,8 @@ class Gen:
 				self.e('jmp %s' % lab(i.arg))
 			else:
 				self.e('move.w #$%04X,d4' % i.arg, 'jmp rcDispatch')
+		elif m == 'RTS' and self.fast and self.fast.get('routine'):
+			self.e('rts')
 		elif m == 'RTS':
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d6', 'addq.b #1,d3',
 			       'move.b (a2,d3.w),-(sp)', 'swap d3', 'move.w (sp)+,d4', 'move.b d6,d4',
@@ -934,12 +939,12 @@ class Gen:
 			self.e('move d3,ccr')
 		self.branch(i, cc)
 		# entry from elsewhere: flags are in d3
-		if direct_kind is not None and not self.fast:
-			self.stubs += ['%s:' % lab(i.pc), '\t\tmove d3,ccr']
+		if direct_kind is not None:
+			self.stubs += ['%s:' % self.lab(i.pc), '\t\tmove d3,ccr']
 			save, self.out = self.out, []
 			self.branch(i, CC68[i.m], 'T')
 			self.stubs += self.out
-			self.stubs += ['\t\tjmp %s' % lab(i.pc + 2)] if i.pc + 2 in self.insns else \
+			self.stubs += ['\t\tjmp %s' % self.lab(i.pc + 2)] if i.pc + 2 in self.insns else \
 				      ['\t\tmove.w #$%04X,d4' % (i.pc + 2), '\t\tjmp rcDispatch']
 			self.out = save
 
@@ -1138,7 +1143,7 @@ class Gen:
 		t, b = plan['t'], plan['b']
 		save = self.out, self.stubs, self.xc, self.c_skipped
 		self.out, self.stubs, self.xc, self.c_skipped = [], [], False, 0
-		self.fast = plan
+		self.fast = dict(plan, prefix='F')
 		dk = None
 		try:
 			for i in plan['body']:
@@ -1154,8 +1159,8 @@ class Gen:
 						self.xc = False
 			f = b.pc + 2
 			self.e(*(['jmp %s' % lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
-			fast = self.out
-			bad = [l for l in fast if ',a5' in l or ('jsr' in l and 'rcNmi' not in l)] or self.stubs
+			fast = self.out + self.stubs
+			bad = [l for l in fast if ',a5' in l or ('jsr' in l and 'rcNmi' not in l)]
 		finally:
 			self.fast = None
 			self.out, self.stubs, self.xc, self.c_skipped = save
@@ -1184,6 +1189,80 @@ class Gen:
 		self.out += g + fast
 		return True
 
+	# ---- routines called with the 68000's jsr -------------------------------
+
+	def routine_body(self, f, memo):
+		"""Instructions of a routine that can be called with the 68000's
+		jsr and rts: it only returns with RTS and only calls such
+		routines, doesn't touch the stack itself, never needs an NMI
+		check (no loops but counted ones) and never leaves translated
+		code. The 6502 stack doesn't get the return address; nothing
+		in such a routine can look at it."""
+		if f in memo:
+			return memo[f]
+		memo[f] = None			# recursion: not callable
+		seen, work = set(), [f]
+		while work:
+			pc = work.pop()
+			if pc in seen:
+				continue
+			i = self.insns.get(pc)
+			if i is None or len(seen) >= 300 or \
+			   i.m in ('RTI', 'BRK', 'PHA', 'PLA', 'PHP', 'PLP', 'TSX', 'TXS'):
+				return None
+			seen.add(pc)
+			if i.m == 'RTS':
+				continue
+			if i.m == 'JSR':
+				if self.routine_body(i.arg, memo) is None:
+					return None
+				work.append(pc + 3)
+				continue
+			for s in i.succ:
+				if s is None or s not in self.insns:
+					return None
+				if s <= pc and not (i.mode == 'rel' and i.decided is None and pc in self.counted):
+					return None	# would check for an NMI
+				work.append(s)
+		memo[f] = seen
+		return seen
+
+	def emit_routine(self, f):
+		pcs = sorted(self.callable[f])
+		self.fast = {'pcs': set(pcs), 'prefix': 'R%04X' % f, 'routine': True}
+		self.xc, self.c_skipped = False, 0
+		self.out.append('')
+		dk = None
+		for k, pc in enumerate(pcs):
+			i = self.insns[pc]
+			if pc in self.targets:
+				self.xc = False
+			if not (i.mode == 'rel' and dk is not None):
+				self.out.append('%s:\t\t\t\t; $%04X  %s' % (self.lab(pc), pc, i.text()))
+			if i.mode == 'rel':
+				self.emit_branch(i, dk)
+				dk = None
+			else:
+				self.emit(i, self.insns.get(pc + i.n))
+				dk = self.direct_next
+				if DEFS.get(i.m, 0) & C and i.m not in ('ASL', 'LSR', 'ROL', 'ROR', 'ADC'):
+					self.xc = False
+			self.fall_through(i, pcs, k)
+		self.out += self.stubs
+		self.stubs = []
+		self.fast = None
+
+	def fall_through(self, i, pcs, k):
+		"""Jump to the next instruction if it isn't next in the output."""
+		if i.mode == 'rel':
+			if i.decided == 'taken':
+				return
+		elif i.m in ('JMP', 'RTS', 'RTI', 'BRK') or (i.m == 'JSR' and i.arg not in self.callable):
+			return
+		f = i.pc + i.n
+		if k + 1 >= len(pcs) or pcs[k + 1] != f:
+			self.e(*(['jmp %s' % self.lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
+
 	def run(self, vectors):
 		pcs = sorted(self.insns)
 		self.out.append('rcCode:')
@@ -1196,6 +1275,12 @@ class Gen:
 			if i.m == 'JSR':
 				self.targets.add(i.pc + 3)
 		self.counted = self.counted_loops()
+		memo = {}
+		self.callable = {}
+		for i in self.insns.values():
+			if i.m == 'JSR' and self.routine_body(i.arg, memo):
+				self.callable[i.arg] = memo[i.arg]
+		self.called = set()
 		self.returns = self.return_points()
 		heads = set()
 		for i in self.insns.values():
@@ -1240,20 +1325,19 @@ class Gen:
 				if DEFS.get(i.m, 0) & C and i.m not in ('ASL', 'LSR', 'ROL', 'ROR', 'ADC'):
 					self.xc = False		# carry changed, X didn't
 			# fall through into code that isn't next in address order
-			if i.mode != 'rel' and i.m not in ('JMP', 'JSR', 'RTS', 'RTI', 'BRK'):
-				f = pc + i.n
-				if k + 1 >= len(pcs) or pcs[k + 1] != f:
-					self.e(*(['jmp %s' % lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
-			elif i.mode == 'rel' and i.decided != 'taken':
-				f = pc + 2
-				if k + 1 >= len(pcs) or pcs[k + 1] != f:
-					self.e(*(['jmp %s' % lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
+			self.fall_through(i, pcs, k)
 			# out-of-line entries go at the next point code doesn't fall
 			# through, so branches to them stay short
 			if self.stubs and self.out[-1].strip().split()[0] in ('jmp', 'bra'):
 				self.out += self.stubs
 				self.stubs = []
 		self.out += self.stubs
+		self.stubs = []
+		done = set()
+		while self.called - done:
+			f = min(self.called - done)
+			done.add(f)
+			self.emit_routine(f)
 		# dispatch table: PRG offset -> code
 		self.out += ['', '\t\talign 4', 'rcTable:']
 		size = len(self.prg.data)
