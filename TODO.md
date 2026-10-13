@@ -38,6 +38,23 @@ finished in #1 to #6.
 - [ ] **PAL consoles.** `tools/mkapu.py` assumes NTSC PSG/FM clocks and 60 Hz
   frames, so on PAL pitch is about 1% low and envelopes run 17% slow.
 
+## Recompiler
+
+- [ ] **More speed.** Recompiled Pinball plays as fast as on a NES, but its
+  attract demo runs at about 93%. Next steps: `(zp),Y` reads through RAM
+  pointers outside versioned loops take a slow path (placing NES RAM next to
+  the PRG copy would let one `(a0,d6.w)` read both); versioning loops that
+  call routines; keeping hot zero-page variables in registers.
+- [ ] **Gameplay tests.** NES RAM is compared with Nestopia's only for the
+  attract demo, up to the NES's first lag frame; gameplay checks are by eye.
+  A test that replays input per game frame (not per video frame) could
+  compare whole games.
+- [ ] **NMI timing.** Recompiled code checks for VBlank only at loop heads and
+  calls, not after every instruction, so NMIs land at slightly different
+  points than on the NES.
+- [ ] **Unofficial opcodes** aren't translated; code using them runs in the
+  interpreter.
+
 ## Hardware
 
 - [ ] **6-button pads.** `readInput` reads the pad with a simple two-step TH

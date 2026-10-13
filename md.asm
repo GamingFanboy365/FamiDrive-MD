@@ -7,6 +7,10 @@
 ; +-----------------------------------------------------------------+
 
 		include	"system/macros.asm"	; Assembler macros
+
+		ifndef RECOMP
+RECOMP		equ 0			; 1: run recompiled code (build.sh --recompile)
+		endif
 		include	"system/md/const.asm"	; RAM / Variables are here
 		include	"system/md/map.asm"	; Genesis hardware map
 
@@ -38,6 +42,7 @@ cpuIRQ		equ $7FFE
 
 		struct RAM_Fami_Emu+$FF0
 RAM_EmuLoop	ds.w 3
+RAM_RcStack	ds.l 1			; recompiled code: stack at dispatch (emu/recomp.asm)
 		finish
 
 ; ----------------------------------------------------------------
@@ -553,6 +558,9 @@ emuStart:
 		moveq	#0,d1
 		moveq	#0,d2
 		move.l	#$01002000,d3
+		if RECOMP
+		jmp	rcStart
+		endif
 		bra.s	emuLoop
 
 ; --------------------------------------------------------
@@ -646,6 +654,10 @@ emuVint:
 		include	"emu/memory.asm"	; CPU memory map
 		include	"emu/ppu.asm"		; PPU
 		include	"emu/apu.asm"		; APU (sound)
+		if RECOMP
+		include	"emu/recomp.asm"	; recompiled code support
+		include	"out/recomp.asm"	; from tools/recomp6502.py
+		endif
 
 ; ====================================================================
 
