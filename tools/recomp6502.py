@@ -688,6 +688,33 @@ class Gen:
 		Only a prediction: RTS still checks the address it pulled."""
 		return {pc: r for pc, r in rts_returns(self.insns, self.tables).items() if len(r) <= 4}
 
+	def idle_loops(self):
+		"""Loops that wait for VBlank, for the FPS counter (emu/fps.asm):
+		a few loads, compares and branches with nothing stored, like
+		LDA flag / BEQ back. Leaving one ends a game frame, whether it
+		had to wait or not: returns the closing branches. A JMP to itself
+		(a game that runs in its NMI handler) counts the NMIs taken
+		there instead: returns those too."""
+		exits, jmps = set(), set()
+		for b in self.insns.values():
+			if b.m == 'JMP' and b.mode == 'abs' and b.arg == b.pc:
+				jmps.add(b.pc)
+			if b.mode != 'rel' or b.decided or b.arg > b.pc or b.pc - b.arg > 8:
+				continue
+			pc, ok = b.arg, True
+			while pc < b.pc and ok:
+				i = self.insns.get(pc)
+				ok = i is not None and (i.mode == 'rel' or (
+					i.m in ('LDA', 'LDX', 'LDY', 'BIT', 'CMP', 'CPX', 'CPY', 'AND', 'ORA', 'EOR')
+					and i.mode in ('imm', 'zp', 'abs')))
+				pc += i.n if i else 0
+			if ok and pc == b.pc:
+				exits.add(b.pc)
+		return exits, jmps
+
+	def nmi_call(self, t):
+		return 'jsr rcNmiIdle' if t in self.idle_jmps else 'jsr rcNmi'
+
 	def counted_loops(self):
 		"""Back edges of short counted loops, which don't need an NMI
 		check: an innermost loop closed by a branch on a register that
@@ -752,7 +779,7 @@ class Gen:
 			return
 		if target <= i.pc:
 			self.e('tst.w FamiMdVint(a4)', 'beq.s %s' % self.tag(tag, i.pc),
-			       'move.w #$%04X,d4' % target, 'jsr rcNmi')
+			       'move.w #$%04X,d4' % target, self.nmi_call(target))
 			self.out.append('%s:' % self.tag(tag, i.pc))
 		if target not in self.insns:
 			self.e('move.w #$%04X,d4' % target, 'jmp rcDispatch')
@@ -1050,6 +1077,10 @@ class Gen:
 		elif direct_kind is None:
 			self.e('move d3,ccr')
 		self.branch(i, cc)
+		if i.pc in self.idle_exits:		# a frame done (FPS counter)
+			self.out += ['\t\tif FPS']
+			self.e('addq.w #1,fpsIdle(a4)')
+			self.out += ['\t\tendif']
 		# entry from elsewhere: flags are in d3
 		if direct_kind is not None:
 			self.stubs += ['%s:' % self.lab(i.pc), '\t\tmove d3,ccr']
@@ -1481,6 +1512,7 @@ class Gen:
 			if i.m == 'JSR':
 				self.targets.add(i.pc + 3)
 		self.counted = self.counted_loops()
+		self.idle_exits, self.idle_jmps = self.idle_loops()
 		memo = {}
 		self.callable = {}
 		for i in self.insns.values():
@@ -1513,7 +1545,7 @@ class Gen:
 				if pc in heads:		# loop head: NMI check for the back edges
 					self.prologued.add(pc)
 					self.out += ['C_%04X:' % pc, '\t\ttst.w FamiMdVint(a4)', '\t\tbeq.s %s' % lab(pc),
-						     '\t\tmove.w #$%04X,d4' % pc, '\t\tjsr rcNmi']
+						     '\t\tmove.w #$%04X,d4' % pc, '\t\t' + self.nmi_call(pc)]
 				self.out.append('%s:\t\t\t\t\t; $%04X  %s' % (lab(pc), pc, i.text()))
 			else:
 				self.out.append('\t\t\t\t\t\t; $%04X  %s' % (pc, i.text()))

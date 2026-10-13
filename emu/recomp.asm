@@ -111,8 +111,20 @@ rcInterpStep:
 ;
 ; d4.w - 6502 address the code continues at
 ; Returns if no NMI is taken, else jumps to the NMI handler.
+;
+; rcNmiIdle is the check in a JMP-to-itself loop, where a game that
+; runs in its NMI handler waits: each NMI taken there is a frame
+; (FPS counter, emu/fps.asm).
 ; ----------------------------------------------------------------
 
+rcNmiIdle:
+		if FPS
+		tst.w	cpuFamiVint(a4)
+		bne.s	rcNmi
+		tst.w	ppuNmiFlag(a4)
+		beq.s	rcNmi
+		addq.w	#1,fpsIdle(a4)
+		endif
 rcNmi:
 		clr.w	FamiMdVint(a4)
 		move.w	#$80,ppuStatus(a4)
