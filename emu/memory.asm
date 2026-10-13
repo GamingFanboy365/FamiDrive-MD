@@ -105,10 +105,12 @@ rdPPU_Status:
 		move.w	ppuStatus(a4),d7
 		move.w	#0,ppuStatus(a4)
 
-	; sprite 0 hit: set from sprite 0's first line until the end of
-	; the display. A sprite at Y starts on NES line Y+1, and NES line L
-	; is shown on MD line L-8. Sprites below the MD's 224 lines hit on
-	; the last line so games waiting for the hit don't hang.
+	; sprite 0 hit: set from sprite 0's first line until VBlank ends,
+	; as on the NES (the flag clears at the pre-render line). A sprite
+	; at Y starts on NES line Y+1, and NES line L is shown on MD line
+	; L-8. Sprites below the MD's 224 lines hit on the last line so
+	; games waiting for the hit don't hang. The MD's V counter stays at
+	; $E0 or above through VBlank, so it counts as below sprite 0.
 	; Hidden sprites (Y >= $EF) never hit.
 		move.w	#$2700,sr
 		move.w	ppuSp0Ypos(a4),d4
@@ -124,8 +126,6 @@ rdPPU_Status:
 .sp0_bottom:
 		move.w	8(a6),d5		; MD V counter
 		lsr.w	#8,d5
-		cmpi.w	#$E0,d5
-		bcc.s	.no_hit		; vblank
 		cmp.w	d4,d5
 		bcs.s	.no_hit		; above sprite 0
 		ori.w	#$40,d7
