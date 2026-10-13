@@ -457,6 +457,10 @@ def lab(a):
 	return 'L_%04X' % a
 
 
+class Unroll(Exception):
+	pass
+
+
 class Gen:
 	def __init__(self, prg, insns):
 		self.prg, self.insns = prg, insns
@@ -544,13 +548,13 @@ class Gen:
 			r = 'd1' if m == 'absx' else 'd2'
 			if a + 255 < 0x800:
 				if a < 0x80:
-					return [], '$%02X(a2,%s.w)' % (a, r)
+					return [], self.ix(a, r)
 				return ['lea $%04X(a2),a5' % a], '(a5,%s.w)' % r
 			if a >= 0x8000 and a + 255 <= 0xFFFF:
 				return ['lea $%04X(a1),a5' % (a & 0x7FFF)], '(a5,%s.w)' % r
 			return ['move.w #$%04X,d6' % a, 'add.w %s,d6' % r, 'jsr rcRead16'], 'd7'
 		if m == 'indy' and self.fast and 'ptr' in self.fast:
-			return [], '(a5,d2.w)'	# pointer checked and loaded into a5
+			return [], self.ix(0, 'd2', 'a5')	# pointer checked and loaded into a5
 		if m == 'indy':
 			rn, rs, rd = (self.tag(x, i.pc) for x in ('Rn', 'Rs', 'Rd'))
 			r = dst or 'd7'
@@ -565,6 +569,15 @@ class Gen:
 			return self.indx_addr(a) + ['jsr rcRead16'], 'd7'
 		raise ValueError(m)
 
+	def ix(self, a, r, base='a2'):
+		"""a(base,r.w); in an unrolled loop r is off by a known amount."""
+		if self.fast and 'off' in self.fast:
+			a += self.fast['off'][r]
+			if not -128 <= a <= 127:
+				raise Unroll
+			return '%d(%s,%s.w)' % (a, base, r)
+		return '$%02X(a2,%s.w)' % (a, r) if base == 'a2' else '(%s,%s.w)' % (base, r)
+
 	def zp_indexed(self, i):
 		"""zp,X / zp,Y: the address wraps within the zero page, unless
 		the index register's range shows it can't."""
@@ -576,7 +589,7 @@ class Gen:
 			hi = 0			# the loop's guard checked the range
 		if a == 0 or a + hi <= 0xFF:
 			if a <= 0x7F:
-				return [], '$%02X(a2,%s.w)' % (a, r)
+				return [], self.ix(a, r)
 			return ['lea $%02X(a2),a5' % a], '(a5,%s.w)' % r
 		return ['move.w %s,d6' % r, 'addi.b #$%02X,d6' % a], '(a2,d6.w)'
 
@@ -642,7 +655,7 @@ class Gen:
 			r = 'd1' if m == 'absx' else 'd2'
 			if a + 255 < 0x800:
 				if a < 0x80:
-					return [], '$%02X(a2,%s.w)' % (a, r), []
+					return [], self.ix(a, r), []
 				return ['lea $%04X(a2),a5' % a], '(a5,%s.w)' % r, []
 			return [], None, ['move.w #$%04X,d6' % a, 'add.w %s,d6' % r, 'jsr rcWrite16']
 		if m == 'indy':
@@ -800,6 +813,9 @@ class Gen:
 			nz_done()
 		elif m == 'TXS':
 			self.e('swap d3', 'move.b d1,d3', 'swap d3')
+		elif self.fast and i.pc in self.fast.get('skip', ()):
+			if m in ('INX', 'INY', 'DEX', 'DEY'):	# unrolled: register is off by one more
+				self.fast['off']['d1' if m[2] == 'X' else 'd2'] += 1 if m[0] == 'I' else -1
 		elif m in ('INX', 'INY', 'DEX', 'DEY'):
 			r = 'd1' if m[2] == 'X' else 'd2'
 			self.e('%s.b #1,%s' % ('addq' if m[0] == 'I' else 'subq', r))
@@ -1122,6 +1138,8 @@ class Gen:
 			if i.mode == 'rel' and i is not b and i.arg <= b.pc:
 				cond |= {j.pc for j in body if i.pc < j.pc < i.arg}
 		n = self.trip_count(b, body)
+		ctr = body[-2] if b.pc in self.counted else None
+		alias = ptrs + ([ctr.arg] if ctr and ctr.mode == 'zp' else [])
 		step, spos = {}, {}
 		for r, inc, dec, other in (('X', 'INX', 'DEX', ('LDX', 'TAX', 'TSX')),
 					   ('Y', 'INY', 'DEY', ('LDY', 'TAY'))):
@@ -1149,7 +1167,7 @@ class Gen:
 						hi = lo + step[r] * (n - 1)
 						lo, hi = min(lo, hi), max(lo, hi)
 						if lo < 0 or hi > 255 or (zp and base + hi > 0xFF) or \
-						   (wr and any((base + v) & (0xFF if zp else 0xFFFF) in ptrs
+						   (wr and any((base + v) & (0xFF if zp else 0xFFFF) in alias
 							       for v in range(lo, hi + 1))):
 							good = False
 							break
@@ -1166,8 +1184,29 @@ class Gen:
 				direct |= {i.pc for i, base, zp, wr in acc[r] if zp}
 			else:
 				check |= {i.pc for i, base, zp, wr in acc[r] if wr}
-		return {'t': t, 'b': b, 'body': body, 'pcs': {i.pc for i in body}, 'ptr': ptrs,
+		plan = {'t': t, 'b': b, 'body': body, 'pcs': {i.pc for i in body}, 'ptr': ptrs,
 			'direct': direct, 'check': check, 'guard': guard}
+		# a short loop of known length is unrolled: the index registers
+		# become displacements and the counter is set once at the end
+		if n is None or n > 16 or check or \
+		   any(i.mode == 'rel' and i.arg > b.pc for i in body) or \
+		   any(acc[r] and r not in guard for r in 'XY') or \
+		   any(step[r] is None and any(i.mode == 'indy' for i in body) for r in 'Y'):
+			return plan
+		skip = set()
+		for i in body:
+			if i.m in ('STX', 'STY', 'TXA', 'TYA', 'CPX', 'CPY', 'TXS') or i.mode == 'indx':
+				return plan
+			if i.m in ('INX', 'DEX', 'INY', 'DEY'):
+				if i is not ctr and i.live_out & (N | Z):
+					return plan
+				skip.add(i.pc)
+			if ctr.mode == 'zp' and i is not ctr and i.mode == 'zp' and i.arg == ctr.arg:
+				return plan
+		if ctr.mode == 'zp':
+			skip.add(ctr.pc)
+		plan['unroll'] = {'n': n, 'skip': skip, 'ctr': ctr, 'final': 0 if b.m == 'BNE' else 0xFF}
+		return plan
 
 	def fill_plan(self, b):
 		"""STA base,X / DEX / BPL (or the INX, Y and BNE forms) with a
@@ -1217,35 +1256,69 @@ class Gen:
 		f = plan['b'].pc + 2
 		self.e(*(['jmp %s' % lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
 
+	def copy_of(self, plan, turns):
+		"""Code for a loop's fast copy, or None if it would need a5 or a
+		call. turns: None for a loop, else (turns, off) to unroll."""
+		t, b = plan['t'], plan['b']
+		save = self.out, self.stubs, self.xc, self.c_skipped
+		self.out, self.stubs, self.xc, self.c_skipped = [], [], False, 0
+		try:
+			off = {'d1': 0, 'd2': 0}
+			for k in range(turns['n'] if turns else 1):
+				self.fast = dict(plan, prefix='U%d' % k if k else 'F')
+				if turns:
+					self.fast.update(off=off, skip=turns['skip'])
+				dk = None
+				for i in plan['body']:
+					if turns and i is b:
+						self.out.append('%s:' % self.lab(i.pc))
+						continue
+					if not (i.mode == 'rel' and dk is not None):
+						self.out.append('%s:\t\t\t\t\t; $%04X  %s' % (self.lab(i.pc), i.pc, i.text()))
+					if i.mode == 'rel':
+						self.emit_branch(i, dk)
+						dk = None
+					else:
+						self.emit(i, self.insns.get(i.pc + i.n))
+						dk = self.direct_next
+						if DEFS.get(i.m, 0) & C and i.m not in ('ASL', 'LSR', 'ROL', 'ROR', 'ADC'):
+							self.xc = False
+			if turns:			# registers and counter as after the last turn
+				self.fast = None
+				for r, o in sorted(off.items()):
+					if o:
+						self.e(('%s.b #%d,%s' % ('addq' if o > 0 else 'subq', abs(o), r)) if abs(o) <= 8 else
+						       'addi.b #$%02X,%s' % (o & 0xFF, r))
+				ctr = turns['ctr']
+				loc = '$%02X(a2)' % ctr.arg if ctr.mode == 'zp' else None
+				if loc:
+					self.e('move.b #$%02X,%s' % (turns['final'], loc))
+				if b.live_out & (N | Z):
+					self.e('tst.b %s' % (loc or ('d1' if ctr.m[2] == 'X' else 'd2')))
+					self.save_nz()
+			f = b.pc + 2
+			self.e(*(['jmp %s' % lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
+			fast = self.out + self.stubs
+		except Unroll:
+			fast = None
+		finally:
+			self.fast = None
+			self.out, self.stubs, self.xc, self.c_skipped = save
+		if fast and any(',a5' in l or ('jsr' in l and 'rcNmi' not in l) for l in fast):
+			fast = None
+		return fast
+
 	def emit_versioned(self, plan):
 		"""Guard and fast copy of a loop, placed where code falls into
 		it; the normal copy follows at L_xxxx. Returns False (emitting
 		nothing) if the fast copy would need a5 or a call."""
 		t, b = plan['t'], plan['b']
-		save = self.out, self.stubs, self.xc, self.c_skipped
-		self.out, self.stubs, self.xc, self.c_skipped = [], [], False, 0
-		self.fast = dict(plan, prefix='F')
-		dk = None
-		try:
-			for i in plan['body']:
-				if not (i.mode == 'rel' and dk is not None):
-					self.out.append('F_%04X:\t\t\t\t\t; $%04X  %s' % (i.pc, i.pc, i.text()))
-				if i.mode == 'rel':
-					self.emit_branch(i, dk)
-					dk = None
-				else:
-					self.emit(i, self.insns.get(i.pc + i.n))
-					dk = self.direct_next
-					if DEFS.get(i.m, 0) & C and i.m not in ('ASL', 'LSR', 'ROL', 'ROR', 'ADC'):
-						self.xc = False
-			f = b.pc + 2
-			self.e(*(['jmp %s' % lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
-			fast = self.out + self.stubs
-			bad = [l for l in fast if ',a5' in l or ('jsr' in l and 'rcNmi' not in l)]
-		finally:
-			self.fast = None
-			self.out, self.stubs, self.xc, self.c_skipped = save
-		if bad:
+		fast = None
+		if 'unroll' in plan:
+			fast = self.copy_of(plan, plan['unroll'])
+		if fast is None:
+			fast = self.copy_of(plan, None)
+		if fast is None:
 			return False
 		slow = lab(t)
 		g = ['V_%04X:' % t, '\t\tmove.b $%02X(a2),-(sp)' % plan['ptr'][1], '\t\tmove.w (sp)+,d6',
