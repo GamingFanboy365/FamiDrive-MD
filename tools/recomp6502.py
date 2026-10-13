@@ -1083,6 +1083,54 @@ class Gen:
 		return {'t': t, 'b': b, 'body': body, 'pcs': {i.pc for i in body}, 'ptr': ptrs,
 			'direct': direct, 'check': check, 'guard': guard}
 
+	def fill_plan(self, b):
+		"""STA base,X / DEX / BPL (or the INX, Y and BNE forms) with a
+		known start value fills memory: stores replace the loop where
+		code falls into it."""
+		t = b.arg
+		s, d = self.insns.get(t), self.insns.get(b.pc - 1)
+		if not s or not d or s.pc + s.n != d.pc or s.m != 'STA' or b.pc not in self.counted:
+			return None
+		if d.m not in ('INX', 'DEX', 'INY', 'DEY') or s.mode not in ('zpx', 'zpy', 'absx', 'absy') \
+		   or s.mode[-1] != d.m[2].lower():
+			return None
+		v = self.entry_value(t, d.m[2])
+		if v is None:
+			return None
+		if d.m[0] == 'D' and b.m == 'BPL' and v <= 0x7F:
+			lo, hi, end = 0, v, 0xFF
+		elif d.m[0] == 'D' and b.m == 'BNE' and v:
+			lo, hi, end = 1, v, 0
+		elif d.m[0] == 'I' and b.m == 'BNE' and v:
+			lo, hi, end = v, 0xFF, 0
+		else:
+			return None
+		lo += s.arg
+		hi += s.arg
+		if hi >= (0x100 if s.mode[:2] == 'zp' else 0x800):
+			return None
+		return {'t': t, 'b': b, 'lo': lo, 'hi': hi, 'reg': 'd1' if d.m[2] == 'X' else 'd2', 'end': end}
+
+	def emit_fill(self, plan):
+		lo, hi = plan['lo'], plan['hi']
+		self.out.append('\t\t\t\t\t\t; $%04X  fill $%04X-$%04X' % (plan['t'], lo, hi))
+		if hi - lo >= 3:
+			self.e('move.b d0,d7', 'lsl.w #8,d7', 'move.b d0,d7', 'move.w d7,d6', 'swap d7', 'move.w d6,d7')
+		a = lo
+		while a <= hi:
+			if a & 1 or a == hi:
+				self.e('move.b d0,$%04X(a2)' % a); a += 1
+			elif a + 3 <= hi:
+				self.e('move.l d7,$%04X(a2)' % a); a += 4
+			else:
+				self.e('move.w d7,$%04X(a2)' % a); a += 2
+		self.e('move.b #$%02X,%s' % (plan['end'], plan['reg']))
+		if plan['b'].live_out & (N | Z):
+			self.e('tst.b %s' % plan['reg'])
+			self.save_nz()
+		f = plan['b'].pc + 2
+		self.e(*(['jmp %s' % lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
+
 	def emit_versioned(self, plan):
 		"""Guard and fast copy of a loop, placed where code falls into
 		it; the normal copy follows at L_xxxx. Returns False (emitting
@@ -1157,7 +1205,7 @@ class Gen:
 		plans = {}
 		for i in self.insns.values():
 			if i.mode == 'rel' and i.decided is None and i.arg < i.pc and i.arg not in plans:
-				plan = self.version_plan(i)
+				plan = self.fill_plan(i) or self.version_plan(i)
 				if plan:
 					plans[i.arg] = plan
 		self.versioned = []
@@ -1169,8 +1217,12 @@ class Gen:
 				self.xc = False
 			if pc in plans and k and direct_kind is None:
 				p = self.insns[pcs[k - 1]]
-				if p.pc + p.n == pc and pc in p.succ and self.emit_versioned(plans[pc]):
-					self.versioned.append(pc)
+				if p.pc + p.n == pc and pc in p.succ:
+					if 'lo' in plans[pc]:
+						self.emit_fill(plans[pc])
+						self.versioned.append(pc)
+					elif self.emit_versioned(plans[pc]):
+						self.versioned.append(pc)
 			if not (i.mode == 'rel' and direct_kind is not None):
 				if pc in heads:		# loop head: NMI check for the back edges
 					self.prologued.add(pc)
