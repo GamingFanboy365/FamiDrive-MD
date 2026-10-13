@@ -7,6 +7,10 @@
 ; +-----------------------------------------------------------------+
 
 		include	"system/macros.asm"	; Assembler macros
+
+		ifndef RECOMP
+RECOMP		equ 0			; 1: run recompiled code (build.sh --recompile)
+		endif
 		include	"system/md/const.asm"	; RAM / Variables are here
 		include	"system/md/map.asm"	; Genesis hardware map
 
@@ -75,6 +79,7 @@ vdpHintSp0	ds.w 1
 FamiMdVint	ds.w 1
 FamiPPUVint	ds.w 1
 ppuChrRam	ds.w 1			; 1 - pattern tables are CHR-RAM
+rcLastJump	ds.w 1			; recompiled code: last dispatched 6502 address
 vdpScrlX	ds.l 1
 vdpScrlY	ds.l 1
 vdpPalette	ds.w 64
@@ -553,6 +558,9 @@ emuStart:
 		moveq	#0,d1
 		moveq	#0,d2
 		move.l	#$01002000,d3
+		if RECOMP
+		jmp	rcStart
+		endif
 		bra.s	emuLoop
 
 ; --------------------------------------------------------
@@ -646,6 +654,10 @@ emuVint:
 		include	"emu/memory.asm"	; CPU memory map
 		include	"emu/ppu.asm"		; PPU
 		include	"emu/apu.asm"		; APU (sound)
+		if RECOMP
+		include	"emu/recomp.asm"	; recompiled code support
+		include	"out/recomp.asm"	; from tools/recomp6502.py
+		endif
 
 ; ====================================================================
 
