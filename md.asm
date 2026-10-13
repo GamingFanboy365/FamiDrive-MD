@@ -238,6 +238,16 @@ list_InitRegs:	dc.w $8000		; d5
 
 Fami_InitVideo:
 		move.w	#$8F02,4(a6)
+
+	; Clear all of VRAM: a real console (and some emulators, like
+	; AtGames') starts with garbage there, and the planes below use
+	; tile $200, past the NES CHR tiles, as the blank tile
+		move.l	#$40000000,4(a6)
+		move.w	#($10000/4)-1,d7
+.clrvram:
+		move.l	#0,(a6)
+		dbf	d7,.clrvram
+
 		move.w	#$FFF,d7
 		move.l	#$40000003,4(a6)
 .loopfg:
