@@ -11,6 +11,7 @@
 
 rcStart:
 		move.w	#$4E75,(RAM_EmuLoop).l	; rts
+		lea	(RAM_Fami_ROM+$8000).l,a0	; translated code reads PRG through a0
 		move.w	#rcVecReset,d4		; falls into rcDispatch
 
 ; ----------------------------------------------------------------
@@ -20,7 +21,6 @@ rcStart:
 ; ----------------------------------------------------------------
 
 rcDispatch:
-		move.w	d4,rcLastJump(a4)
 		cmpi.w	#$8000,d4
 		bcs.s	.ram
 		andi.l	#rcPrgMask,d4
@@ -96,6 +96,7 @@ rcInterpStep:
 
 .translated:
 		move.w	#$4E75,(RAM_EmuLoop).l
+		lea	(RAM_Fami_ROM+$8000).l,a0
 		movea.l	d5,a5
 		jmp	(a5)
 
@@ -151,8 +152,7 @@ rcRead16:
 .not_ram:
 		tst.w	d6
 		bpl.s	.io
-		andi.w	#$7FFF,d6
-		move.b	(a1,d6.w),d7
+		move.b	(a0,d6.w),d7		; a0 = PRG copy + $8000
 		rts
 .io:
 		move.w	d6,d4

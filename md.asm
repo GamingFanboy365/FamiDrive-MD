@@ -79,7 +79,6 @@ vdpHintSp0	ds.w 1
 FamiMdVint	ds.w 1
 FamiPPUVint	ds.w 1
 ppuChrRam	ds.w 1			; 1 - pattern tables are CHR-RAM
-rcLastJump	ds.w 1			; recompiled code: last dispatched 6502 address
 vdpScrlX	ds.l 1
 vdpScrlY	ds.l 1
 vdpPalette	ds.w 64

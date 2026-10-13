@@ -14,8 +14,9 @@
 #
 #   d0 A, d1 X, d2 Y (bytes, upper bits kept zero)
 #   d3 6502 stack pointer (high word) | flags as a 68k CCR (low byte)
+#   a0 PRG-ROM copy + $8000 (so (a0,d6.w) reads 6502 address d6 >= $8000)
 #   a1 PRG-ROM copy, a2 NES RAM, a3 PPU buffer, a4 emulator vars
-#   a6 vdp_data;  d4-d7, a0, a5 are scratch
+#   a6 vdp_data;  d4-d7, a5 are scratch
 #
 # Flags are only stored into d3 where a later instruction can read them
 # (liveness analysis). A flag test right after the instruction that set
@@ -251,6 +252,87 @@ def plausible_code(prg, a, count=12):
 	return True
 
 # ----------------------------------------------------------------------
+# Value ranges of A, X and Y (to prove zp,X / zp,Y can't wrap)
+# ----------------------------------------------------------------------
+
+TOP = (0, 255)
+
+
+def join(a, b):
+	if a is None: return b
+	if b is None: return a
+	return (min(a[0], b[0]), max(a[1], b[1]))
+
+
+def meet(a, lo, hi):
+	r = (max(a[0], lo), min(a[1], hi))
+	return r if r[0] <= r[1] else None
+
+
+def ranges(insns, entries):
+	"""Interval of each register at the start of each instruction.
+	Entries (vectors, return points, jump table targets) start unknown."""
+	REG = {'A': 0, 'X': 1, 'Y': 2}
+	state = {pc: None for pc in insns}
+	for e in entries:
+		if e in state: state[e] = (TOP, TOP, TOP)
+	visits = {}
+	work = [e for e in entries if e in state]
+	order = sorted(insns)
+	prev = {order[k]: insns[order[k - 1]] for k in range(1, len(order))}
+	while work:
+		pc = work.pop()
+		i = insns[pc]
+		st = list(state[pc])
+		visits[pc] = visits.get(pc, 0) + 1
+		if visits[pc] > 64:		# slow to converge: give up on it
+			st = [TOP, TOP, TOP]
+		m, a = i.m, i.arg
+		r = None			# register written, and its new range
+		if m in ('LDA', 'LDX', 'LDY'):
+			r = (m[2], (a, a) if i.mode == 'imm' else TOP)
+		elif m in ('TAX', 'TAY'): r = (m[2], st[0])
+		elif m in ('TXA', 'TYA'): r = ('A', st[REG[m[1]]])
+		elif m in ('INX', 'INY', 'DEX', 'DEY'):
+			v = st[REG[m[2]]]; d = 1 if m[0] == 'I' else -1
+			r = (m[2], (v[0] + d, v[1] + d) if 0 <= v[0] + d and v[1] + d <= 255 else TOP)
+		elif m == 'AND' and i.mode == 'imm': r = ('A', (0, min(st[0][1], a)))
+		elif m == 'TSX': r = ('X', TOP)
+		elif m in ('ADC', 'SBC', 'ORA', 'EOR', 'AND', 'PLA') or (m in ('ASL', 'LSR', 'ROL', 'ROR') and i.mode == 'acc'):
+			r = ('A', TOP)
+		if r: st[REG[r[0]]] = r[1]
+		for s in i.succ:
+			if s is None or s not in insns:
+				continue
+			out = list(st)
+			if i.mode == 'rel':		# refine on the branch's condition
+				p = prev.get(pc)
+				taken = (s == i.arg)
+				reg = None
+				if p and p.pc + p.n == pc:
+					if p.m in ('LDA', 'LDX', 'LDY', 'INX', 'INY', 'DEX', 'DEY', 'TAX', 'TAY', 'TXA', 'TYA'):
+						reg = {'LDA': 'A', 'TXA': 'A', 'TYA': 'A'}.get(p.m, p.m[2] if p.m[0] in 'LTID' else None)
+						if p.m in ('TAX', 'TAY'): reg = p.m[2]
+						if p.m in ('INX', 'DEX'): reg = 'X'
+						if p.m in ('INY', 'DEY'): reg = 'Y'
+						cond = {'BPL': (0, 127), 'BMI': (128, 255)}.get(i.m)
+						if cond and reg:
+							k = REG[reg]
+							lo, hi = cond if taken else ((128, 255) if i.m == 'BPL' else (0, 127))
+							out[k] = meet(out[k], lo, hi)
+					elif p.m in ('CPX', 'CPY', 'CMP') and p.mode == 'imm' and i.m in ('BCC', 'BCS'):
+						k = REG[{'CPX': 'X', 'CPY': 'Y', 'CMP': 'A'}[p.m]]
+						lt = (i.m == 'BCC') == taken	# register < operand
+						out[k] = meet(out[k], 0, p.arg - 1) if lt else meet(out[k], p.arg, 255)
+				if None in out:
+					continue	# edge can't be taken
+			new = tuple(join(o, n) for o, n in zip(state[s], out)) if state[s] else tuple(out)
+			if new != state[s]:
+				state[s] = new
+				work.append(s)
+	return state
+
+# ----------------------------------------------------------------------
 # Flag liveness
 # ----------------------------------------------------------------------
 
@@ -297,10 +379,7 @@ class Gen:
 		if m == 'zp':
 			return [], '$%02X(a2)' % a
 		if m in ('zpx', 'zpy'):
-			r = 'd1' if m == 'zpx' else 'd2'
-			if a == 0:
-				return [], '(a2,%s.w)' % r
-			return ['move.w %s,d6' % r, 'addi.b #$%02X,d6' % a], '(a2,d6.w)'
+			return self.zp_indexed(i)
 		if m == 'abs':
 			if a < 0x2000:
 				return [], '$%04X(a2)' % (a & 0x7FF)
@@ -317,10 +396,29 @@ class Gen:
 				return ['lea $%04X(a1),a5' % (a & 0x7FFF)], '(a5,%s.w)' % r
 			return ['move.w #$%04X,d6' % a, 'add.w %s,d6' % r, 'jsr rcRead16'], 'd7'
 		if m == 'indy':
-			return self.indy_addr(a) + ['jsr rcRead16'], 'd7'
+			t = '%04X' % i.pc
+			return self.indy_addr(a) + [
+				'bmi.s Rp_%s' % t,		# $8000-$FFFF: PRG
+				'cmpi.w #$800,d6', 'bcc.s Rs_%s' % t,
+				'move.b (a2,d6.w),d7', 'bra.s Rd_%s' % t,
+				'Rp_%s: move.b (a0,d6.w),d7' % t, 'bra.s Rd_%s' % t,
+				'Rs_%s: jsr rcRead16' % t, 'Rd_%s:' % t], 'd7'
 		if m == 'indx':
 			return self.indx_addr(a) + ['jsr rcRead16'], 'd7'
 		raise ValueError(m)
+
+	def zp_indexed(self, i):
+		"""zp,X / zp,Y: the address wraps within the zero page, unless
+		the index register's range shows it can't."""
+		a = i.arg
+		r = 'd1' if i.mode == 'zpx' else 'd2'
+		rng = self.ranges.get(i.pc)
+		hi = rng[1 if i.mode == 'zpx' else 2][1] if rng else 255
+		if a == 0 or a + hi <= 0xFF:
+			if a <= 0x7F:
+				return [], '$%02X(a2,%s.w)' % (a, r)
+			return ['lea $%02X(a2),a5' % a], '(a5,%s.w)' % r
+		return ['move.w %s,d6' % r, 'addi.b #$%02X,d6' % a], '(a2,d6.w)'
 
 	def io_read(self, a):
 		if a < 0x4000:
@@ -330,7 +428,9 @@ class Gen:
 		return ['move.w #$%04X,d6' % a, 'jsr rcRead16'], 'd7'
 
 	def indy_addr(self, zp):
-		return ['move.b $%02X(a2),d6' % ((zp + 1) & 0xFF), 'lsl.w #8,d6',
+		# high byte through the stack: a byte push fills the upper half
+		# of a word, cheaper than shifting
+		return ['move.b $%02X(a2),-(sp)' % ((zp + 1) & 0xFF), 'move.w (sp)+,d6',
 			'move.b $%02X(a2),d6' % zp, 'add.w d2,d6']
 
 	def indx_addr(self, zp):
@@ -344,10 +444,8 @@ class Gen:
 		if m == 'zp':
 			return [], '$%02X(a2)' % a, []
 		if m in ('zpx', 'zpy'):
-			r = 'd1' if m == 'zpx' else 'd2'
-			if a == 0:
-				return [], '(a2,%s.w)' % r, []
-			return ['move.w %s,d6' % r, 'addi.b #$%02X,d6' % a], '(a2,d6.w)', []
+			setup, ea = self.zp_indexed(i)
+			return setup, ea, []
 		if m == 'abs':
 			if a < 0x2000:
 				return [], '$%04X(a2)' % (a & 0x7FF), []
@@ -383,8 +481,42 @@ class Gen:
 
 	# ---- control flow ---------------------------------------------------
 
+	def counted_loops(self):
+		"""Back edges of short counted loops, which don't need an NMI
+		check: an innermost loop closed by a branch on a register that
+		DEX/DEY/INX/INY just changed, with no other write to it and no
+		calls or jumps inside. It ends within 256 turns, so the NMI is
+		only delayed a little and taken at the next check."""
+		writes = {'X': ('LDX', 'TAX', 'TSX', 'INX', 'DEX'), 'Y': ('LDY', 'TAY', 'INY', 'DEY')}
+		found = set()
+		for b in self.insns.values():
+			if b.mode != 'rel' or b.decided or b.arg > b.pc:
+				continue
+			p = self.insns.get(b.pc - 1)
+			if not p or p.m not in ('INX', 'DEX', 'INY', 'DEY'):
+				continue
+			reg = p.m[2]
+			body, pc, ok = [], b.arg, True
+			while pc < b.pc:
+				i = self.insns.get(pc)
+				if i is None or i.m in ('JSR', 'JMP', 'RTS', 'RTI', 'BRK'):
+					ok = False; break
+				if i.mode == 'rel' and i.arg <= i.pc:
+					ok = False; break		# not innermost
+				body.append(i)
+				pc += i.n
+			if ok and pc == b.pc and sum(1 for i in body if i.m in writes[reg]) == 1:
+				found.add(b.pc)
+		return found
+
 	def goto(self, i, target, tag='K'):
 		"""Unconditional jump; backward jumps check for an NMI first."""
+		if target <= i.pc and i.pc in self.counted and target in self.insns:
+			self.e('jmp %s' % lab(target))
+			return
+		if target <= i.pc and target in self.prologued:
+			self.e('jmp C_%04X' % target)
+			return
 		if target <= i.pc:
 			self.e('tst.w FamiMdVint(a4)', 'beq.s %s_%04X' % (tag, i.pc),
 			       'move.w #$%04X,d4' % target, 'jsr rcNmi')
@@ -398,6 +530,12 @@ class Gen:
 		"""Conditional branch on 68k condition cc (flags already in the CCR).
 		Out-of-line stubs (tag 'T') are far from their targets: jmp there."""
 		t, nxt = i.arg, i.pc + 2
+		if t <= i.pc and i.pc in self.counted and t in self.insns and tag != 'T':
+			self.e('b%s.w %s' % (cc, lab(t)))
+			return
+		if t <= i.pc and t in self.prologued and tag != 'T':
+			self.e('b%s.w C_%04X' % (cc, t))
+			return
 		if t <= i.pc or t not in self.insns or tag == 'T':
 			self.e('b%s.w %s_%04X' % (INVERT[cc], tag, i.pc))
 			self.goto(i, t, 'J' if tag == 'T' else 'K')
@@ -643,11 +781,22 @@ class Gen:
 	def run(self, vectors):
 		pcs = sorted(self.insns)
 		self.out.append('rcCode:')
+		self.prologued = set()
+		self.counted = self.counted_loops()
+		heads = set()
+		for i in self.insns.values():
+			if i.m == 'JMP' and i.mode == 'abs' and i.arg <= i.pc: heads.add(i.arg)
+			if i.mode == 'rel' and i.decided != 'not' and i.arg <= i.pc and i.pc not in self.counted:
+				heads.add(i.arg)
 		direct_kind = None
 		for k, pc in enumerate(pcs):
 			i = self.insns[pc]
 			nxt = self.insns.get(pc + i.n) if i.mode != 'rel' else None
 			if not (i.mode == 'rel' and direct_kind is not None):
+				if pc in heads:		# loop head: NMI check for the back edges
+					self.prologued.add(pc)
+					self.out += ['C_%04X:' % pc, '\t\ttst.w FamiMdVint(a4)', '\t\tbeq.s %s' % lab(pc),
+						     '\t\tmove.w #$%04X,d4' % pc, '\t\tjsr rcNmi']
 				self.out.append('%s:\t\t\t\t\t; $%04X  %s' % (lab(pc), pc, i.text()))
 			else:
 				self.out.append('\t\t\t\t\t\t; $%04X  %s' % (pc, i.text()))
@@ -700,6 +849,8 @@ def main():
 		insns, vectors = discover(prg, extra)
 	liveness(insns)
 	g = Gen(prg, insns)
+	entries = set(vectors) | set(extra) | {i.pc + 3 for i in insns.values() if i.m == 'JSR'}
+	g.ranges = ranges(insns, entries)
 	g.run(vectors)
 	with open(sys.argv[2], 'w') as f:
 		f.write('; generated by tools/recomp6502.py from %s -- do not publish\n' % sys.argv[1].split('/')[-1])
