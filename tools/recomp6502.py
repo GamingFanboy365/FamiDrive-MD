@@ -374,7 +374,61 @@ class Gen:
 		self.out, self.stubs = [], []
 
 	def e(self, *lines):
-		self.out.extend('\t\t' + l for l in lines)
+		for l in lines:
+			self.out.append('\t\t' + l)
+			self.track_x(l)
+
+	# The 68000's X flag often holds the 6502 carry: shifts and ADC set
+	# it, and moves, loads, stores and logic ops leave it alone. While
+	# it does (self.xc), a carry reader can skip reloading it from d3.
+	def track_x(self, l):
+		t = l.split()[0] if l.split() else ''
+		if t.endswith(':'):
+			self.xc = False			# a join: other paths may differ
+		elif t in ('lsl.b', 'lsr.b', 'roxl.b', 'roxr.b') and l.split()[1].startswith('#1,'):
+			self.xc = True
+		elif t == 'addx.b':
+			self.xc = True
+		elif t in ('jsr', 'bsr') or t.startswith(('add', 'sub', 'neg', 'lsl', 'lsr', 'asl', 'asr', 'roxl', 'roxr')):
+			self.xc = False
+		elif t == 'move' and l.rstrip().endswith(('ccr', 'sr')):
+			self.xc = False
+
+	def x_safe(self, i):
+		"""Does this instruction's code leave the X flag alone?"""
+		if i.m not in ('LDA', 'LDX', 'LDY', 'STA', 'STX', 'STY', 'AND', 'ORA', 'EOR', 'BIT',
+			       'TAX', 'TAY', 'TXA', 'TYA', 'NOP'):
+			return False
+		m, a = i.mode, i.arg
+		if m in ('imm', 'zp', None):
+			return True
+		if m == 'abs':
+			return a < 0x2000 or a >= 0x8000
+		if m in ('absx', 'absy'):
+			return a + 255 < 0x800 or (a >= 0x8000 and a + 255 <= 0xFFFF)
+		if m in ('zpx', 'zpy'):
+			return 'addi' not in ' '.join(self.zp_indexed(i)[0])
+		return False
+
+	def check_carry(self):
+		if self.c_skipped and not self.xc:
+			raise RuntimeError('recomp6502: carry lost before $%04X' % self.c_skipped)
+		self.c_skipped = 0
+
+	def carry_in_x(self, i):
+		"""After i sets the carry, is the next carry reader a ROL/ROR/ADC
+		reached in straight-line code that keeps X? Then the carry
+		needn't be stored in d3."""
+		pc = i.pc + i.n
+		while True:
+			n = self.insns.get(pc)
+			if n is None or pc in self.targets:
+				return False
+			if n.m in ('ROL', 'ROR', 'ADC'):
+				return n.mode in ('acc', 'imm', 'zp') or (n.mode == 'abs' and n.arg < 0x2000)
+			if not self.x_safe(n):
+				return False
+			pc += n.n
 
 	# ---- operands -----------------------------------------------------
 
@@ -666,7 +720,13 @@ class Gen:
 			if s != 'd7':
 				self.e('move.b %s,d7' % s)
 			if m == 'ADC':
-				if need:
+				self.check_carry()
+				if self.xc:			# carry already in X
+					if need:
+						self.e('ori #4,ccr', 'addx.b d7,d0', 'move sr,d3')
+					else:
+						self.e('addx.b d7,d0')
+				elif need:
 					self.e('ori.b #4,d3', 'move d3,ccr', 'addx.b d7,d0', 'move sr,d3')
 				else:
 					self.e('move d3,ccr', 'addx.b d7,d0')
@@ -706,14 +766,23 @@ class Gen:
 				       'and.b d0,d4', 'bne.s *+6', 'ori.b #4,d3')
 		elif m in ('ASL', 'LSR', 'ROL', 'ROR'):
 			op = {'ASL': 'lsl', 'LSR': 'lsr', 'ROL': 'roxl', 'ROR': 'roxr'}[m]
-			pre = ['move d3,ccr'] if m in ('ROL', 'ROR') else []
+			if m in ('ROL', 'ROR'):
+				self.check_carry()
+			pre = ['move d3,ccr'] if m in ('ROL', 'ROR') and not self.xc else []
+			skip = bool(need & C) and self.carry_in_x(i)
+			if skip:
+				need &= ~C			# carried in X instead
+				save = self.save_nz
+			else:
+				save = self.save_nzc
 			if i.mode == 'acc':
 				self.e(*pre)
 				self.e('%s.b #1,d0' % op)
 				if direct:
 					self.direct_next = 'shift'
 				elif need:
-					self.save_nzc()
+					save()
+				if skip: self.c_skipped = i.pc
 			else:
 				setup, d, post = self.dst(i)
 				if d is not None:
@@ -721,10 +790,12 @@ class Gen:
 					self.e('move.b %s,d7' % d, *pre)
 					self.e('%s.b #1,d7' % op)
 					if need:
-						self.save_nzc()
+						save()
 					self.e('move.b d7,%s' % d)
+					if skip: self.c_skipped = i.pc
 				else:
-					self.rmw_generic(i, pre + ['%s.b #1,d7' % op], need, 'shift')
+					self.rmw_generic(i, ['move d3,ccr'] * (m in ('ROL', 'ROR')) + ['%s.b #1,d7' % op],
+							 need | (DEFS[m] & i.live_out), 'shift')
 		elif m == 'CLC':
 			if need: self.e('andi.b #$EE,d3')
 		elif m == 'SEC':
@@ -835,6 +906,13 @@ class Gen:
 		pcs = sorted(self.insns)
 		self.out.append('rcCode:')
 		self.prologued = set()
+		self.xc = False
+		self.c_skipped = 0
+		self.targets = set(vectors) | set(self.entries)
+		for i in self.insns.values():
+			self.targets |= {t for t in i.succ if t is not None and t != i.pc + i.n}
+			if i.m == 'JSR':
+				self.targets.add(i.pc + 3)
 		self.counted = self.counted_loops()
 		self.returns = self.return_points()
 		heads = set()
@@ -846,6 +924,8 @@ class Gen:
 		for k, pc in enumerate(pcs):
 			i = self.insns[pc]
 			nxt = self.insns.get(pc + i.n) if i.mode != 'rel' else None
+			if pc in self.targets:
+				self.xc = False
 			if not (i.mode == 'rel' and direct_kind is not None):
 				if pc in heads:		# loop head: NMI check for the back edges
 					self.prologued.add(pc)
@@ -860,6 +940,8 @@ class Gen:
 			else:
 				self.emit(i, nxt)
 				direct_kind = self.direct_next
+				if DEFS.get(i.m, 0) & C and i.m not in ('ASL', 'LSR', 'ROL', 'ROR', 'ADC'):
+					self.xc = False		# carry changed, X didn't
 			# fall through into code that isn't next in address order
 			if i.mode != 'rel' and i.m not in ('JMP', 'JSR', 'RTS', 'RTI', 'BRK'):
 				f = pc + i.n
@@ -909,6 +991,7 @@ def main():
 	g = Gen(prg, insns)
 	entries = set(vectors) | set(extra) | {i.pc + 3 for i in insns.values() if i.m == 'JSR'}
 	g.ranges = ranges(insns, entries)
+	g.entries = entries
 	g.run(vectors)
 	with open(sys.argv[2], 'w') as f:
 		f.write('; generated by tools/recomp6502.py from %s -- do not publish\n' % sys.argv[1].split('/')[-1])
