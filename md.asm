@@ -61,6 +61,7 @@ ppuMirror	ds.w 1;equ -$34
 cpuMapper	ds.w 1;equ -$32
 cpuFamiVint	ds.w 1;equ -$30
 cpuInputData	ds.w 2;equ -$28
+padState	ds.w 2			; pads as NES buttons, read each VBlank
 cpuModeDec	ds.w 1;equ -$22
 cpuFlag2	ds.w 1;equ -$20
 cpuModeIntDis	ds.w 1;equ -$1E
@@ -325,6 +326,8 @@ Video_RegList:
 MD_Init:
 		move.b	#$40,($A10009).l
 		move.b	#$40,($A1000B).l
+		move.b	#$40,($A10003).l		; TH high between reads
+		move.b	#$40,($A10005).l
 		move.w	#$100,(z80_bus).l		; Stop Z80
 		move.w	#$100,(z80_reset).l		; Reset cancel
 .wait:
@@ -372,6 +375,7 @@ MD_Vint:
 		move.w	(sp)+,4(a6)
 		bsr	apuUpdate			; needs the Z80 bus
 		move.w	#0,(z80_bus).l			; Release Z80
+		bsr	readInput
 
 		clr.w	vdpHintSp0(a4)
 		move.w	#1,FamiMdVint(a4)

@@ -73,7 +73,6 @@ Anything else shows an error screen saying what isn't supported.
   approximated by volume, pulse notes below about 109 Hz play an octave up, and timing assumes
   an NTSC console
 - 8x16 sprites show the wrong tiles (NES 8x16 sprites work differently from the MD's)
-- Controller reading is not 6-button pad safe
 - Some games do not work
 - The fixes made in October 2026 were tested in an emulator (Genesis Plus GX), not on real hardware
 

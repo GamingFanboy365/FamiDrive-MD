@@ -57,10 +57,9 @@ finished in #1 to #6.
 
 ## Hardware
 
-- [ ] **6-button pads.** `readInput` reads the pad with a simple two-step TH
-  sequence that isn't safe for 6-button controllers.
-- [ ] **Test on real hardware.** The fixes in #1 to #6 were tested in Genesis
-  Plus GX only.
+- [ ] **Test on real hardware.** Everything so far was tested in emulators
+  (Genesis Plus GX, and BlastEm for the 6-button pad fix), not on a real
+  console or the AtGames units this project targets.
 
 ## Cleanup
 
