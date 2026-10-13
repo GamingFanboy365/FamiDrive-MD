@@ -372,6 +372,7 @@ class Gen:
 	def __init__(self, prg, insns):
 		self.prg, self.insns = prg, insns
 		self.out, self.stubs = [], []
+		self.fast = None
 
 	def e(self, *lines):
 		for l in lines:
@@ -419,6 +420,8 @@ class Gen:
 		"""After i sets the carry, is the next carry reader a ROL/ROR/ADC
 		reached in straight-line code that keeps X? Then the carry
 		needn't be stored in d3."""
+		if self.fast:
+			return False		# keep d3 right for exits into the normal copy
 		pc = i.pc + i.n
 		while True:
 			n = self.insns.get(pc)
@@ -457,6 +460,8 @@ class Gen:
 			if a >= 0x8000 and a + 255 <= 0xFFFF:
 				return ['lea $%04X(a1),a5' % (a & 0x7FFF)], '(a5,%s.w)' % r
 			return ['move.w #$%04X,d6' % a, 'add.w %s,d6' % r, 'jsr rcRead16'], 'd7'
+		if m == 'indy' and self.fast:
+			return [], '(a5,d2.w)'	# pointer checked and loaded into a5
 		if m == 'indy':
 			t = '%04X' % i.pc
 			r = dst or 'd7'
@@ -478,6 +483,8 @@ class Gen:
 		r = 'd1' if i.mode == 'zpx' else 'd2'
 		rng = self.ranges.get(i.pc)
 		hi = rng[1 if i.mode == 'zpx' else 2][1] if rng else 255
+		if self.fast and i.pc in self.fast['direct']:
+			hi = 0			# the loop's guard checked the range
 		if a == 0 or a + hi <= 0xFF:
 			if a <= 0x7F:
 				return [], '$%02X(a2,%s.w)' % (a, r)
@@ -507,6 +514,30 @@ class Gen:
 		m, a = i.mode, i.arg
 		if m == 'zp':
 			return [], '$%02X(a2)' % a, []
+		if self.fast and i.pc in self.fast['check']:
+			return self.alias_check(i, self.dst_plain(i))
+		return self.dst_plain(i)
+
+	def alias_check(self, i, d):
+		"""In a loop's fast copy, a write that may hit the pointer goes
+		back to the normal copy (which reloads the pointer) instead."""
+		setup, ea, post = d
+		ptr = self.fast['ptr']
+		if ea is None or ea.startswith('('):
+			if ea != '(a2,d6.w)':
+				return d		# a5 or a call: version_plan gives up
+		if ea == '(a2,d6.w)':
+			reg, vals = 'd6', ptr
+		else:
+			base, reg = int(ea[1:ea.index('(')], 16), ea[-5:-3]
+			vals = [p - base for p in ptr if 0 <= p - base <= 255]
+		chk = []
+		for v in vals:
+			chk += ['cmpi.b #$%02X,%s' % (v, reg), 'beq.w %s' % lab(i.pc)]
+		return setup + chk, ea, post
+
+	def dst_plain(self, i):
+		m, a = i.mode, i.arg
 		if m in ('zpx', 'zpy'):
 			setup, ea = self.zp_indexed(i)
 			return setup, ea, []
@@ -608,39 +639,49 @@ class Gen:
 				found.add(b.pc)
 		return found
 
+	def lab(self, a):
+		"""Label of a 6502 address; inside a loop's fast copy (see
+		version_plan) the loop's own instructions have their own labels."""
+		if self.fast and a in self.fast['pcs']:
+			return 'F_%04X' % a
+		return lab(a)
+
+	def tag(self, tag, pc):
+		return '%s%s_%04X' % ('F' if self.fast else '', tag, pc)
+
 	def goto(self, i, target, tag='K'):
 		"""Unconditional jump; backward jumps check for an NMI first."""
 		if target <= i.pc and i.pc in self.counted and target in self.insns:
-			self.e('jmp %s' % lab(target))
+			self.e('jmp %s' % self.lab(target))
 			return
-		if target <= i.pc and target in self.prologued:
+		if target <= i.pc and target in self.prologued and not self.fast:
 			self.e('jmp C_%04X' % target)
 			return
 		if target <= i.pc:
-			self.e('tst.w FamiMdVint(a4)', 'beq.s %s_%04X' % (tag, i.pc),
+			self.e('tst.w FamiMdVint(a4)', 'beq.s %s' % self.tag(tag, i.pc),
 			       'move.w #$%04X,d4' % target, 'jsr rcNmi')
-			self.out.append('%s_%04X:' % (tag, i.pc))
+			self.out.append('%s:' % self.tag(tag, i.pc))
 		if target not in self.insns:
 			self.e('move.w #$%04X,d4' % target, 'jmp rcDispatch')
 		else:
-			self.e('jmp %s' % lab(target))
+			self.e('jmp %s' % self.lab(target))
 
 	def branch(self, i, cc, tag='S'):
 		"""Conditional branch on 68k condition cc (flags already in the CCR).
 		Out-of-line stubs (tag 'T') are far from their targets: jmp there."""
 		t, nxt = i.arg, i.pc + 2
 		if t <= i.pc and i.pc in self.counted and t in self.insns and tag != 'T':
-			self.e('b%s.w %s' % (cc, lab(t)))
+			self.e('b%s.w %s' % (cc, self.lab(t)))
 			return
-		if t <= i.pc and t in self.prologued and tag != 'T':
+		if t <= i.pc and t in self.prologued and tag != 'T' and not self.fast:
 			self.e('b%s.w C_%04X' % (cc, t))
 			return
 		if t <= i.pc or t not in self.insns or tag == 'T':
-			self.e('b%s.w %s_%04X' % (INVERT[cc], tag, i.pc))
+			self.e('b%s.w %s' % (INVERT[cc], self.tag(tag, i.pc)))
 			self.goto(i, t, 'J' if tag == 'T' else 'K')
-			self.out.append('%s_%04X:' % (tag, i.pc))
+			self.out.append('%s:' % self.tag(tag, i.pc))
 		else:
-			self.e('b%s.w %s' % (cc, lab(t)))
+			self.e('b%s.w %s' % (cc, self.lab(t)))
 
 	# ---- one instruction ---------------------------------------------------
 
@@ -893,7 +934,7 @@ class Gen:
 			self.e('move d3,ccr')
 		self.branch(i, cc)
 		# entry from elsewhere: flags are in d3
-		if direct_kind is not None:
+		if direct_kind is not None and not self.fast:
 			self.stubs += ['%s:' % lab(i.pc), '\t\tmove d3,ccr']
 			save, self.out = self.out, []
 			self.branch(i, CC68[i.m], 'T')
@@ -901,6 +942,199 @@ class Gen:
 			self.stubs += ['\t\tjmp %s' % lab(i.pc + 2)] if i.pc + 2 in self.insns else \
 				      ['\t\tmove.w #$%04X,d4' % (i.pc + 2), '\t\tjmp rcDispatch']
 			self.out = save
+
+	# ---- loop versioning ----------------------------------------------------
+
+	def entry_value(self, t, what):
+		"""Constant value of a register ('A', 'X', 'Y') or zero page byte
+		when straight-line code falls into t, or None."""
+		seq, pc = [], t
+		while len(seq) < 32:
+			q = next((c for c in (self.insns.get(pc - n) for n in (1, 2, 3))
+				  if c and c.pc + c.n == pc and pc in c.succ), None)
+			if q is None:
+				break
+			seq.append(q)
+			if q.pc in self.targets:
+				break			# everything after it runs on every path
+			pc = q.pc
+		regs, mem = {}, {}
+		for q in reversed(seq):
+			m = q.m
+			if m in ('LDA', 'LDX', 'LDY'):
+				regs[m[2]] = q.arg if q.mode == 'imm' else None
+			elif m in ('TAX', 'TAY', 'TXA', 'TYA'):
+				regs[m[2]] = regs.get(m[1])
+			elif m in ('INX', 'INY', 'DEX', 'DEY'):
+				v = regs.get(m[2])
+				regs[m[2]] = None if v is None else (v + (1 if m[0] == 'I' else -1)) & 0xFF
+			elif m in ('STA', 'STX', 'STY') and q.mode == 'zp':
+				mem[q.arg] = regs.get(m[2])
+			else:
+				if m in ('ADC', 'SBC', 'AND', 'ORA', 'EOR', 'PLA') or q.mode == 'acc':
+					regs['A'] = None
+				if m == 'TSX':
+					regs['X'] = None
+				if m in ('STA', 'STX', 'STY', 'INC', 'DEC', 'ASL', 'LSR', 'ROL', 'ROR'):
+					if q.mode == 'zp':
+						mem[q.arg] = None
+					elif q.mode != 'acc':
+						mem.clear()
+		return regs.get(what) if isinstance(what, str) else mem.get(what)
+
+	def trip_count(self, b, body):
+		"""Most turns a counted loop (see counted_loops) makes when
+		entered by falling into it, or None."""
+		if b.pc not in self.counted or len(body) < 2:
+			return None
+		p = body[-2]
+		ctr = p.arg if p.mode == 'zp' else p.m[2]
+		v = self.entry_value(body[0].pc, ctr)
+		if v is None:
+			return None
+		dec = p.m in ('DEC', 'DEX', 'DEY')
+		if b.m == 'BNE':
+			return (v or 256) if dec else 256 - v
+		if b.m == 'BPL' and dec and v <= 0x7F:
+			return v + 1
+		return None
+
+	def version_plan(self, b):
+		"""An innermost loop reading through one (zp),Y pointer it never
+		writes gets a second, fast copy: a guard at its entry loads the
+		pointer into a5 once and checks the index registers' ranges, so
+		zp,X needs no wrap-around and stores can't hit the pointer.
+		Stores the guard couldn't clear check their address instead."""
+		t = b.arg
+		body, pc = [], t
+		while pc <= b.pc and pc in self.insns:
+			body.append(self.insns[pc])
+			pc += self.insns[pc].n
+		if pc != b.pc + 2 or body[0].mode == 'rel':
+			return None
+		W = ('STA', 'STX', 'STY', 'INC', 'DEC', 'ASL', 'LSR', 'ROL', 'ROR')
+		ptr = None
+		for i in body:
+			if i.m in ('JSR', 'JMP', 'RTS', 'RTI', 'BRK', 'PHA', 'PLA', 'PHP', 'PLP', 'TXS'):
+				return None
+			if i.mode == 'rel' and i is not b and i.arg <= i.pc:
+				return None
+			if i.mode == 'indy':
+				if i.m == 'STA' or ptr not in (None, i.arg):
+					return None
+				ptr = i.arg
+		if ptr is None:
+			return None
+		ptrs = [ptr, (ptr + 1) & 0xFF]
+		for i in body:
+			if i.m in W and (i.mode == 'zp' or (i.mode == 'abs' and i.arg < 0x2000)) \
+			   and i.arg & 0x7FF in ptrs:
+				return None
+		# index registers: step per turn, if one INX/DEX (INY/DEY) always runs
+		cond = set()
+		for i in body:
+			if i.mode == 'rel' and i is not b and i.arg <= b.pc:
+				cond |= {j.pc for j in body if i.pc < j.pc < i.arg}
+		n = self.trip_count(b, body)
+		step, spos = {}, {}
+		for r, inc, dec, other in (('X', 'INX', 'DEX', ('LDX', 'TAX', 'TSX')),
+					   ('Y', 'INY', 'DEY', ('LDY', 'TAY'))):
+			ws = [i for i in body if i.m in (inc, dec) + other]
+			if not ws:
+				step[r], spos[r] = 0, 0x10000
+			elif len(ws) == 1 and ws[0].m in (inc, dec) and ws[0].pc not in cond:
+				step[r], spos[r] = (1 if ws[0].m == inc else -1), ws[0].pc
+			else:
+				step[r] = None
+		acc = {'X': [], 'Y': []}		# (insn, base, is zp, is write)
+		for i in body:
+			if i.mode in ('zpx', 'zpy', 'absx', 'absy'):
+				zp = i.mode in ('zpx', 'zpy')
+				if zp or i.arg + 255 < 0x800:
+					acc['X' if i.mode[-1] == 'x' else 'Y'].append((i, i.arg, zp, i.m in W))
+		direct, check, guard = set(), set(), {}
+		for r in 'XY':
+			ok = []
+			if n is not None and step[r] is not None and acc[r]:
+				for r0 in range(256):
+					good = True
+					for i, base, zp, wr in acc[r]:
+						lo = r0 + (step[r] if spos[r] < i.pc else 0)
+						hi = lo + step[r] * (n - 1)
+						lo, hi = min(lo, hi), max(lo, hi)
+						if lo < 0 or hi > 255 or (zp and base + hi > 0xFF) or \
+						   (wr and any((base + v) & (0xFF if zp else 0xFFFF) in ptrs
+							       for v in range(lo, hi + 1))):
+							good = False
+							break
+					if good:
+						ok.append(r0)
+			runs = []
+			for v in ok:
+				if runs and runs[-1][1] == v - 1:
+					runs[-1][1] = v
+				else:
+					runs.append([v, v])
+			if runs and len(runs) <= 2:
+				guard[r] = runs
+				direct |= {i.pc for i, base, zp, wr in acc[r] if zp}
+			else:
+				check |= {i.pc for i, base, zp, wr in acc[r] if wr}
+		return {'t': t, 'b': b, 'body': body, 'pcs': {i.pc for i in body}, 'ptr': ptrs,
+			'direct': direct, 'check': check, 'guard': guard}
+
+	def emit_versioned(self, plan):
+		"""Guard and fast copy of a loop, placed where code falls into
+		it; the normal copy follows at L_xxxx. Returns False (emitting
+		nothing) if the fast copy would need a5 or a call."""
+		t, b = plan['t'], plan['b']
+		save = self.out, self.stubs, self.xc, self.c_skipped
+		self.out, self.stubs, self.xc, self.c_skipped = [], [], False, 0
+		self.fast = plan
+		dk = None
+		try:
+			for i in plan['body']:
+				if not (i.mode == 'rel' and dk is not None):
+					self.out.append('F_%04X:\t\t\t\t\t; $%04X  %s' % (i.pc, i.pc, i.text()))
+				if i.mode == 'rel':
+					self.emit_branch(i, dk)
+					dk = None
+				else:
+					self.emit(i, self.insns.get(i.pc + i.n))
+					dk = self.direct_next
+					if DEFS.get(i.m, 0) & C and i.m not in ('ASL', 'LSR', 'ROL', 'ROR', 'ADC'):
+						self.xc = False
+			f = b.pc + 2
+			self.e(*(['jmp %s' % lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
+			fast = self.out
+			bad = [l for l in fast if ',a5' in l or ('jsr' in l and 'rcNmi' not in l)] or self.stubs
+		finally:
+			self.fast = None
+			self.out, self.stubs, self.xc, self.c_skipped = save
+		if bad:
+			return False
+		slow = lab(t)
+		g = ['V_%04X:' % t, '\t\tmove.b $%02X(a2),-(sp)' % plan['ptr'][1], '\t\tmove.w (sp)+,d6',
+		     '\t\tmove.b $%02X(a2),d6' % plan['ptr'][0]]
+		for r, runs in plan['guard'].items():
+			reg = 'd1' if r == 'X' else 'd2'
+			def within(lo, hi):
+				return (['\t\tcmpi.b #$%02X,%s' % (lo, reg), '\t\tbcs.w %s' % slow] if lo > 0 else []) + \
+				       (['\t\tcmpi.b #$%02X,%s' % (hi, reg), '\t\tbhi.w %s' % slow] if hi < 255 else [])
+			if len(runs) == 1:
+				g += within(*runs[0])
+			else:
+				hi_lab, ok_lab = 'VH%s_%04X' % (r, t), 'VO%s_%04X' % (r, t)
+				g += ['\t\tcmpi.b #$%02X,%s' % (runs[0][1], reg), '\t\tbhi.s %s' % hi_lab]
+				g += within(runs[0][0], 255) + ['\t\tbra.s %s' % ok_lab, hi_lab + ':']
+				g += within(runs[1][0], runs[1][1]) + [ok_lab + ':']
+		g += ['\t\tcmpi.w #$701,d6', '\t\tbcs.s VR_%04X' % t,	# RAM, +255 stays below $800
+		      '\t\tcmpi.w #$8000,d6', '\t\tbcs.w %s' % slow,
+		      '\t\tcmpi.w #$FF01,d6', '\t\tbcc.w %s' % slow,	# PRG, +255 stays below $10000
+		      '\t\tlea (a0,d6.w),a5', '\t\tbra.s F_%04X' % t,
+		      'VR_%04X:' % t, '\t\tlea (a2,d6.w),a5']
+		self.out += g + fast
+		return True
 
 	def run(self, vectors):
 		pcs = sorted(self.insns)
@@ -920,12 +1154,23 @@ class Gen:
 			if i.m == 'JMP' and i.mode == 'abs' and i.arg <= i.pc: heads.add(i.arg)
 			if i.mode == 'rel' and i.decided != 'not' and i.arg <= i.pc and i.pc not in self.counted:
 				heads.add(i.arg)
+		plans = {}
+		for i in self.insns.values():
+			if i.mode == 'rel' and i.decided is None and i.arg < i.pc and i.arg not in plans:
+				plan = self.version_plan(i)
+				if plan:
+					plans[i.arg] = plan
+		self.versioned = []
 		direct_kind = None
 		for k, pc in enumerate(pcs):
 			i = self.insns[pc]
 			nxt = self.insns.get(pc + i.n) if i.mode != 'rel' else None
 			if pc in self.targets:
 				self.xc = False
+			if pc in plans and k and direct_kind is None:
+				p = self.insns[pcs[k - 1]]
+				if p.pc + p.n == pc and pc in p.succ and self.emit_versioned(plans[pc]):
+					self.versioned.append(pc)
 			if not (i.mode == 'rel' and direct_kind is not None):
 				if pc in heads:		# loop head: NMI check for the back edges
 					self.prologued.add(pc)
@@ -996,7 +1241,8 @@ def main():
 	with open(sys.argv[2], 'w') as f:
 		f.write('; generated by tools/recomp6502.py from %s -- do not publish\n' % sys.argv[1].split('/')[-1])
 		f.write('\n'.join(g.out) + '\n')
-	print('recomp6502: %d instructions, %d bytes of 6502 code' % (len(insns), sum(i.n for i in insns.values())))
+	print('recomp6502: %d instructions, %d bytes of 6502 code, %d loops versioned' %
+	      (len(insns), sum(i.n for i in insns.values()), len(g.versioned)))
 
 
 if __name__ == '__main__':
