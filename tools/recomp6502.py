@@ -119,7 +119,10 @@ class Prg:
 	def __init__(self, rom):
 		if rom[:4] != b'NES\x1a':
 			sys.exit('recomp6502: not an iNES file')
-		mapper = rom[6] >> 4 | (rom[7] & 0xF0)
+		hi = rom[7] & 0xF0
+		if rom[7] & 0x0C != 0x08 and any(rom[12:16]):
+			hi = 0			# junk in old headers ("DiskDude!"), as md.asm does
+		mapper = rom[6] >> 4 | hi
 		if mapper not in (0, 3):
 			sys.exit('recomp6502: mapper %d is not supported' % mapper)
 		self.data = rom[16:16 + rom[4] * 0x4000]
@@ -135,12 +138,46 @@ class Prg:
 # Code discovery
 # ----------------------------------------------------------------------
 
+def inline_table_routine(prg, f):
+	"""Does the routine at f pull its own return address and jump
+	through a pointer (a "jump engine")? Then the bytes after each JSR
+	to it are a table of addresses, not code."""
+	pulls, pc = 0, f
+	for _ in range(24):
+		op = prg.byte(pc) if pc >= 0x8000 else None
+		if op not in OPS:
+			return False
+		m, mode = OPS[op]
+		if m == 'PLA':
+			pulls += 1
+		elif m == 'JMP' and mode == 'ind':
+			return pulls >= 2
+		elif m in ('RTS', 'RTI', 'BRK', 'JSR', 'JMP', 'PHA', 'PHP', 'TSX', 'TXS') or mode == 'rel':
+			return False
+		pc += SIZE[mode]
+	return False
+
+
+def inline_table(prg, at):
+	"""Targets of an address table right after a JSR to a jump engine."""
+	found = []
+	while len(found) < 128 and at + 1 <= 0xFFFF:
+		a = prg.word(at)
+		if a < 0x8000 or not plausible_code(prg, a):
+			break
+		found.append(a)
+		at += 2
+	return found
+
+
 def discover(prg, extra=()):
 	vectors = [prg.word(0xFFFA), prg.word(0xFFFC), prg.word(0xFFFE)]
 	insns = {}
 	forced = set()			# decided branches whose fall-through turned out reachable
+	engines = {}			# jump engine routines (inline_table_routine)
 	while True:
 		insns.clear()
+		tables = set()
 		work = list(vectors) + list(extra)
 		while work:
 			pc = work.pop()
@@ -164,7 +201,12 @@ def discover(prg, extra=()):
 					i.succ = [i.arg] if i.mode == 'abs' else [None]
 				elif m == 'JSR':
 					i.succ = [i.arg] if i.arg >= 0x8000 else [None]
-					work.append(nxt)	# return point
+					if i.arg >= 0x8000 and engines.setdefault(i.arg, inline_table_routine(prg, i.arg)):
+						t = inline_table(prg, nxt)	# no return point: a table
+						tables.update(t)
+						work += t
+					else:
+						work.append(nxt)	# return point
 				elif m in ('RTS', 'RTI', 'BRK'):
 					i.succ = [None]
 					if m == 'BRK':
@@ -191,13 +233,14 @@ def discover(prg, extra=()):
 		targets |= {i.pc + 3 for i in insns.values() if i.m == 'JSR'}
 		bad = {i.pc for i in insns.values() if i.decided and i.pc in targets} - forced
 		if not bad:
-			return insns, vectors
+			return insns, vectors, tables
 		forced |= bad
 
 def jump_tables(prg, insns):
 	"""Addresses found in jump tables:
-	- a table of low bytes and one of high bytes, stored into a RAM
-	  pointer for JMP (ptr), or after a JMP opcode written to RAM
+	- a table of low bytes and one of high bytes (or one table of both,
+	  interleaved), stored into a RAM pointer for JMP (ptr), or after a
+	  JMP opcode written to RAM
 	- tables pushed high/low before an RTS (target - 1)
 	Returns all of them, and those reached by RTS."""
 	order = sorted(insns)
@@ -215,14 +258,37 @@ def jump_tables(prg, insns):
 			slots.add(i.arg)
 		if i.m in ('JSR', 'JMP') and i.mode == 'abs' and i.arg < 0x800:
 			slots.add(i.arg + 1)
+	WRITES = {'A': ('LDA', 'PLA', 'TXA', 'TYA', 'ADC', 'SBC', 'AND', 'ORA', 'EOR'),
+		  'X': ('LDX', 'TAX', 'TSX', 'INX', 'DEX'), 'Y': ('LDY', 'TAY', 'INY', 'DEY')}
+
+	def stored_to(i):
+		"""Where a table load's value is stored: followed a few
+		instructions on, through JMPs, until stored or changed."""
+		r, pc = i.m[2], i.pc + i.n
+		for _ in range(8):
+			j = insns.get(pc)
+			if j is None or j.mode == 'rel' or j.m in ('JSR', 'RTS', 'RTI', 'BRK') or \
+			   (j.m == 'JMP' and j.mode != 'abs'):
+				return None
+			if j.m == 'ST' + r and j.mode in ('zp', 'abs'):
+				return j.arg
+			if j.m in WRITES[r] or (r == 'A' and j.mode == 'acc'):
+				return None
+			pc = j.arg if j.m == 'JMP' else pc + j.n
+		return None
+
 	lo, hi = {}, {}
 	for i in insns.values():
-		if i.m in ('STA', 'STX', 'STY') and i.mode in ('zp', 'abs'):
-			t = table_load(i)
-			if t is not None:
-				if i.arg in slots: lo.setdefault(i.arg, set()).add(t)
-				if i.arg - 1 in slots: hi.setdefault(i.arg - 1, set()).add(t)
-	pairs = [(l, h, 0) for slot in lo for l in lo[slot] for h in hi.get(slot, ())]
+		if i.m in ('LDA', 'LDX', 'LDY') and i.mode in ('absx', 'absy') and i.arg >= 0x8000:
+			s = stored_to(i)
+			if s is not None:
+				if s in slots: lo.setdefault(s, set()).add(i.arg)
+				if s - 1 in slots: hi.setdefault(s - 1, set()).add(i.arg)
+	pairs = []
+	for slot in lo:
+		same = lo[slot] & hi.get(slot, set())	# LDA t,Y / INY / LDA t,Y: interleaved
+		pairs += [(t, t + 1, 0) for t in same]
+		pairs += [(l, h, 0) for l in lo[slot] - same for h in hi.get(slot, set()) - same]
 	# RTS tables: LDA hi,X / PHA / LDA lo,X / PHA ... RTS
 	for k, pc in enumerate(order):
 		i = insns[pc]
@@ -256,6 +322,8 @@ def plausible_code(prg, a, count=12):
 		m, mode = OPS[prg.byte(a)]
 		if m in ('RTS', 'RTI', 'JMP'):
 			return True
+		if m == 'JSR' and inline_table_routine(prg, prg.word(a + 1)):
+			return True		# a table follows
 		a += SIZE[mode]
 	return True
 
@@ -1595,15 +1663,16 @@ def main():
 	sys.argv[1:] = args
 	prg = Prg(open(sys.argv[1], 'rb').read())
 	user = list(extra)
-	insns, vectors = discover(prg, extra)
+	insns, vectors, inline = discover(prg, extra)
 	while True:
 		found, rts = jump_tables(prg, insns)
 		more = found - set(insns)
 		if not more:
 			break
 		extra = list(extra) + sorted(more)
-		insns, vectors = discover(prg, extra)
-	tables = sorted(found)
+		insns, vectors, inline = discover(prg, extra)
+	extra = list(extra) + sorted(inline - set(extra))
+	tables = sorted(found | inline)
 	liveness(insns, {i.pc + 3 for i in insns.values() if i.m == 'JSR'} | set(extra), tables, user + sorted(rts))
 	g = Gen(prg, insns)
 	g.tables = tables
