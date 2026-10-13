@@ -278,23 +278,29 @@ APU_Null:
 		jmp	(RAM_EmuLoop).l
 
 
+; Strobe: latch the buttons read at the last VBlank
 APU_Input:
 		tst.b	d7
 		beq.s	APU_Null
-		bsr	readInput
+		move.l	padState(a4),cpuInputData(a4)
 		jmp	(RAM_EmuLoop).l
 
+; ----------------------------------------------------------------
+; Read both pads into padState, once per frame from MD_Vint
+;
+; A 6-button pad counts TH changes and, after more than one read
+; within about 1.5 ms, answers with its extra buttons (X Y Z Mode)
+; in place of the d-pad. Games may strobe $4016 many times a frame,
+; so the pads are read here, one TH cycle per frame, and the strobe
+; only latches the result.
+; ----------------------------------------------------------------
 
 readInput:
-		move.l	a3,-(sp)
 		lea	($A10003).l,a3
-		lea	cpuInputData(a4),a5
+		lea	padState(a4),a5
 		bsr	.this_pad
 		addq.w	#2,a3
-		bsr	.this_pad		
-		move.l	(sp)+,a3
-		rts
-		
+
 .this_pad:
 		move.b	#0,(a3)
 		nop
