@@ -8,3 +8,6 @@ md.h
 
 # KDE Dolphin folder settings
 .directory
+
+# Python
+__pycache__/
