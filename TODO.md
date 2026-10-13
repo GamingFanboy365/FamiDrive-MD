@@ -40,11 +40,15 @@ finished in #1 to #6.
 
 ## Recompiler
 
-- [ ] **More speed.** Pinball's gameplay runs at about 40% of full speed
-  recompiled. Next steps, roughly by size of win: keep the 6502 carry in the
-  68000's X flag across ASL/ROL/ADC chains instead of storing it in `d3`;
-  hoist loop-invariant `(zp),Y` pointers; a faster `rcDispatch`; keep hot
-  zero-page variables in registers.
+- [ ] **More speed.** Recompiled Pinball plays as fast as on a NES, but its
+  attract demo runs at about 93%. Next steps: `(zp),Y` reads through RAM
+  pointers outside versioned loops take a slow path (placing NES RAM next to
+  the PRG copy would let one `(a0,d6.w)` read both); versioning loops that
+  call routines; keeping hot zero-page variables in registers.
+- [ ] **Gameplay tests.** NES RAM is compared with Nestopia's only for the
+  attract demo, up to the NES's first lag frame; gameplay checks are by eye.
+  A test that replays input per game frame (not per video frame) could
+  compare whole games.
 - [ ] **NMI timing.** Recompiled code checks for VBlank only at loop heads and
   calls, not after every instruction, so NMIs land at slightly different
   points than on the NES.

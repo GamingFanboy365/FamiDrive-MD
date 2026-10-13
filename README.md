@@ -28,8 +28,9 @@ The build uses the [AS macro assembler](http://john.ccac.rwth-aachen.de:8000/as/
 
 `./build.sh --recompile path/to/game.nes` (or `build.bat --recompile ...`) translates the game's
 6502 code into 68000 code at build time with `tools/recomp6502.py`, instead of interpreting it
-while the game runs. Games that use a lot of CPU run several times faster: Pinball's gameplay goes
-from about 3.5 to about 24 game frames per second.
+while the game runs. Games that use a lot of CPU run many times faster: Pinball's gameplay goes
+from about 3.5 to about 55 game frames per second, as fast as on a NES (which also drops frames
+when the game is busy).
 
 The translated code goes to `out/recomp.asm`. It is the game's code in another form, so like the
 built ROM it stays out of git and shouldn't be published. Code the recompiler can't find ahead of
@@ -62,10 +63,10 @@ Anything else shows an error screen saying what isn't supported.
 
 ## Known issues
 
-- **Slow.** Emulating a 6502 plus the PPU on a 68000 is a stretch. Games that use a lot of CPU
-  run far below full speed when interpreted (Pinball's gameplay runs at about 6%), and their
-  music slows down with them. Recompiling helps a lot (Pinball: about 40%) but isn't full speed
-  yet
+- **Slow when interpreted.** Emulating a 6502 plus the PPU on a 68000 is a stretch. Games that
+  use a lot of CPU run far below full speed when interpreted (Pinball's gameplay runs at about
+  6%), and their music slows down with them. Recompile them: Pinball then plays at NES speed,
+  though its attract demo still runs at about 93%
 - Graphics glitches from timing inaccuracy. Sprite 0 hit is approximated from the MD's scanline
   counter, so split-screen effects can be off by a few lines
 - Sound is approximate: no DMC (sample) channel, the PSG only plays 50% squares so pulse duty is

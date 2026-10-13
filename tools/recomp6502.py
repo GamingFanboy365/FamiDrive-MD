@@ -23,6 +23,11 @@
 # it uses the 68000's own condition codes. NMIs are checked on backward
 # jumps; indirect jumps (RTS, RTI, JMP (ind)) go through rcTable.
 #
+# Hot code gets second copies: routines that return normally are called
+# with the 68000's jsr (routine_body), and loops reading through a
+# (zp),Y pointer get a guarded fast copy, unrolled when short
+# (version_plan). Fill loops become straight stores (fill_plan).
+#
 # The output contains the game's code in another form: don't publish
 # it, keep it in out/ like the built ROM.
 # ======================================================================
