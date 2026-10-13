@@ -336,16 +336,23 @@ def ranges(insns, entries):
 # Flag liveness
 # ----------------------------------------------------------------------
 
-def liveness(insns):
+def liveness(insns, returns=()):
+	"""returns: where an RTS can go (JSR return points, RTS jump table
+	targets); an RTS's live flags are the union of theirs."""
 	live_in = {pc: 0 for pc in insns}
+	returns = [r for r in returns if r in insns]
 	changed = True
 	while changed:
 		changed = False
 		for pc in sorted(insns, reverse=True):
 			i = insns[pc]
 			out = 0
-			for s in i.succ:
-				out |= ALL if s is None or s not in insns else live_in[s]
+			if i.m == 'RTS' and returns:
+				for r in returns:
+					out |= live_in[r]
+			else:
+				for s in i.succ:
+					out |= ALL if s is None or s not in insns else live_in[s]
 			i.live_out = out
 			new = USES.get(i.m, 0) | (out & ~DEFS.get(i.m, 0))
 			if new != live_in[pc]:
@@ -371,8 +378,9 @@ class Gen:
 
 	# ---- operands -----------------------------------------------------
 
-	def src(self, i):
-		"""Setup lines and a 68k source EA for the operand value."""
+	def src(self, i, dst=None):
+		"""Setup lines and a 68k source EA for the operand value.
+		dst: register the value is wanted in, if the setup can load it there."""
 		m, a = i.mode, i.arg
 		if m == 'imm':
 			return [], '#$%02X' % a
@@ -397,12 +405,14 @@ class Gen:
 			return ['move.w #$%04X,d6' % a, 'add.w %s,d6' % r, 'jsr rcRead16'], 'd7'
 		if m == 'indy':
 			t = '%04X' % i.pc
-			return self.indy_addr(a) + [
-				'bmi.s Rp_%s' % t,		# $8000-$FFFF: PRG
-				'cmpi.w #$800,d6', 'bcc.s Rs_%s' % t,
-				'move.b (a2,d6.w),d7', 'bra.s Rd_%s' % t,
-				'Rp_%s: move.b (a0,d6.w),d7' % t, 'bra.s Rd_%s' % t,
-				'Rs_%s: jsr rcRead16' % t, 'Rd_%s:' % t], 'd7'
+			r = dst or 'd7'
+			# PRG (the usual case) falls through; RAM and I/O out of line
+			self.stubs += ['Rn_%s:' % t, '\t\tcmpi.w #$800,d6', '\t\tbcc.s Rs_%s' % t,
+				       '\t\tmove.b (a2,d6.w),%s' % r, '\t\tjmp Rd_%s' % t,
+				       'Rs_%s:' % t, '\t\tjsr rcRead16'] + \
+				      (['\t\tmove.b d7,%s' % r] if r != 'd7' else []) + ['\t\tjmp Rd_%s' % t]
+			return self.indy_addr(a) + ['bpl.w Rn_%s' % t, 'move.b (a0,d6.w),%s' % r,
+						    'Rd_%s:' % t], r
 		if m == 'indx':
 			return self.indx_addr(a) + ['jsr rcRead16'], 'd7'
 		raise ValueError(m)
@@ -517,9 +527,15 @@ class Gen:
 			if b.mode != 'rel' or b.decided or b.arg > b.pc:
 				continue
 			p = self.insns.get(b.pc - 1)
-			if not p or p.m not in ('INX', 'DEX', 'INY', 'DEY'):
+			p = p or self.insns.get(b.pc - 2)
+			if p and p.pc + p.n != b.pc:
 				continue
-			reg = p.m[2]
+			if p and p.m in ('INC', 'DEC') and p.mode == 'zp':
+				reg = p.arg		# counter in zero page
+			elif p and p.m in ('INX', 'DEX', 'INY', 'DEY'):
+				reg = p.m[2]
+			else:
+				continue
 			body, pc, ok = [], b.arg, True
 			while pc < b.pc:
 				i = self.insns.get(pc)
@@ -529,7 +545,12 @@ class Gen:
 					ok = False; break		# not innermost
 				body.append(i)
 				pc += i.n
-			if ok and pc == b.pc and sum(1 for i in body if i.m in writes[reg]) == 1:
+			if isinstance(reg, int):
+				n = sum(1 for i in body if i.mode == 'zp' and i.arg == reg and
+					i.m in ('STA', 'STX', 'STY', 'INC', 'DEC', 'ASL', 'LSR', 'ROL', 'ROR'))
+			else:
+				n = sum(1 for i in body if i.m in writes[reg])
+			if ok and pc == b.pc and n == 1:
 				found.add(b.pc)
 		return found
 
@@ -589,9 +610,13 @@ class Gen:
 
 		if m in ('LDA', 'LDX', 'LDY'):
 			r = {'LDA': 'd0', 'LDX': 'd1', 'LDY': 'd2'}[m]
-			setup, s = self.src(i)
+			setup, s = self.src(i, r)
 			self.e(*setup)
-			self.e('move.b %s,%s' % (s, r))
+			if s.startswith('#') and (int(s[2:], 16) < 0x80 or r == 'd0'):
+				v = int(s[2:], 16)	# moveq: X/Y must stay zero-extended
+				self.e('moveq #%d,%s' % (v - 256 if v >= 0x80 else v, r))
+			elif s != r:
+				self.e('move.b %s,%s' % (s, r))
 			nz_done()
 		elif m in ('STA', 'STX', 'STY'):
 			r = {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m]
@@ -880,7 +905,7 @@ def main():
 			break
 		extra = list(extra) + sorted(more)
 		insns, vectors = discover(prg, extra)
-	liveness(insns)
+	liveness(insns, {i.pc + 3 for i in insns.values() if i.m == 'JSR'} | set(extra))
 	g = Gen(prg, insns)
 	entries = set(vectors) | set(extra) | {i.pc + 3 for i in insns.values() if i.m == 'JSR'}
 	g.ranges = ranges(insns, entries)
