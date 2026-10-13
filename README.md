@@ -11,6 +11,8 @@ Nemul, originally made by Mairtrus. Credit to Mairtrus for the original work.
 - Passes nestest's tests for all official 6502 opcodes
 - Mappers 0 (NROM) and 3 (CNROM), with CHR-ROM or CHR-RAM
 - Working vertical scrolling using both scroll layers (the NES map height differs from the MD's)
+- Horizontal scroll changes partway down the screen (such as a still status bar above a scrolling
+  level) use the MD's line scroll
 - Shows an error screen, instead of a black screen, for unsupported ROMs and 68000 crashes
 - Sound: the NES pulse, triangle and noise channels are played on the MD's PSG and YM2612
 
@@ -79,9 +81,10 @@ Anything else shows an error screen saying what isn't supported.
 - **Slow when interpreted.** Emulating a 6502 plus the PPU on a 68000 is a stretch. Games that
   use a lot of CPU run far below full speed when interpreted (Pinball's gameplay runs at about
   6%), and their music slows down with them. Recompile them: Pinball then plays at NES speed,
-  though its attract demo still runs at about 93%
-- Graphics glitches from timing inaccuracy. Sprite 0 hit is approximated from the MD's scanline
-  counter, so split-screen effects can be off by a few lines
+  though its attract demo still runs at about 91%
+- Graphics glitches from timing inaccuracy. Sprite 0 hit and scroll splits are timed by counting
+  MD scanlines from the start of the game's frame, so split-screen effects can be off by a few
+  lines, and only horizontal splits are supported
 - Sound is approximate: no DMC (sample) channel, the PSG only plays 50% squares so pulse duty is
   approximated by volume, pulse notes below about 109 Hz play an octave up, and timing assumes
   an NTSC console

@@ -94,6 +94,19 @@ fpsShow		ds.w 1
 fpsOn		ds.w 1
 fpsWasOn	ds.w 1
 padXyz		ds.w 1
+vNmi		ds.w 1			; ppuClock when the game's frame began (ppuFrameStart)
+hsTopCur	ds.l 1			; this game frame's scroll from the top (planes A, B)
+hsCurN		ds.w 1			; and its splits: line, scroll
+hsCur		ds.l 8
+hsTopDone	ds.l 1			; the previous game frame's
+hsDoneN		ds.w 1
+hsDone		ds.l 8
+hsTable		ds.l 224		; one long per line, DMAed to the HScroll table
+ppuTX		ds.w 1			; the PPU's horizontal scroll (t register): nametable X, coarse X, fine X
+ppuMaskOn	ds.w 1			; $2001 shows the background or sprites
+ppuMaskNew	ds.w 1			; $2001 write for the next VBlank (bit 15: pending)
+hsLines		ds.w 1			; 1 - hsTable has splits (line scroll), 0 - one scroll
+ppuSp0Clear	ds.w 1			; the game read the sprite 0 flag clear this frame
 		finish
 
 ; ====================================================================
@@ -330,7 +343,7 @@ Video_RegList:
 		dc.b $00			; Nothing
 		dc.b $00			; Nothing
 		dc.b $DF			; HInt value
-		dc.b (%000|%00)			; No ExtInt, Scroll: VSCR:full HSCR:full
+		dc.b (%000|%00)			; No ExtInt, Scroll: VSCR:full HSCR:full (per line when split, MD_Vint)
 		dc.b $00			; H40, No shadow mode, Normal resolution
 		dc.b (($B800)>>10)		; HScroll at VRAM $B800 (%00xxxxxx)
 		dc.b $00			; Nothing
@@ -369,13 +382,21 @@ MD_Init:
 
 MD_Vint:
 		movem.l	d0-d7/a0-a6,-(sp)
+		lea	(RAM_Fami_Emu).l,a4		; whatever the interrupted code had there
+		lea	($C00000).l,a6
 		if FPS
 		jsr	fpsUpdate
 		endif
 
+		tst.w	ppuNmiFlag(a4)			; no NMI (and not in the NMI handler,
+		bne.s	.nmi_on				; which turns it off while it runs):
+		tst.w	cpuFamiVint(a4)			; frames start at VBlank
+		bne.s	.nmi_on
+		jsr	ppuFrameStart
+.nmi_on:
+		jsr	ppuMaskApply			; $2001 takes effect here, not mid-screen
+		jsr	hsBuild				; line scroll table, DMAed below
 		move.w	#$8F02,4(a6)
-		move.l	#$78000002,4(a6)
-		move.l	vdpScrlX(a4),(a6)
 		move.l	#$40000010,4(a6)
 		move.l	vdpScrlY(a4),(a6)
 		move.l	#$94019318,4(a6)
@@ -395,6 +416,21 @@ MD_Vint:
 .wait2:		btst	#0,(z80_bus).l
 		bne.s	.wait2
 		move.w	(sp)+,4(a6)
+		tst.w	hsLines(a4)
+		bne.s	.hs_lines
+		move.w	#$8B00,4(a6)			; one scroll for the screen
+		move.l	#$78000002,4(a6)		; HScroll table at $B800
+		move.l	vdpScrlX(a4),(a6)
+		bra.s	.hs_done
+.hs_lines:
+		move.w	#$8B03,4(a6)			; per line
+		move.l	#$940193C0,4(a6)		; 224 lines * 2 words
+		move.l	#$96009500+(((RAM_Fami_Emu+hsTable)<<7)&$FF0000)|(((RAM_Fami_Emu+hsTable)>>1)&$FF),4(a6)
+		move.w	#$9700|(((RAM_Fami_Emu+hsTable)>>17)&$7F),4(a6)
+		move.w	#$7800,4(a6)
+		move.w	#$0002|$80,-(sp)
+		move.w	(sp)+,4(a6)
+.hs_done:
 		bsr	apuUpdate			; needs the Z80 bus
 		move.w	#0,(z80_bus).l			; Release Z80
 		bsr	readInput
@@ -628,10 +664,34 @@ famiVInt:
 		tst.w	ppuNmiFlag(a4)
 		beq.s	emuVint
 
+		jmp	doVint			; NMI: out of line, see after cpu.asm
+
+
 ; ------------------------------------------------
+; Main Loop
+; ------------------------------------------------
+
+emuLoop:
+		tst.w	FamiMdVint(a4)
+		bne.s	famiVInt
+emuVint:
+		clr.w	d4
+		move.b	(a0)+,d4
+		add.w	d4,d4
+		move.w	mosCpu(pc,d4.w),d6
+		jmp	mosCpu(pc,d6.w)	; mosCpu must stay right after this
+
+		
+; ====================================================================
+
+		include	"emu/cpu.asm"		; 6502 CPU, must follow emuVint
+
+; ------------------------------------------------
+; Take the NMI (from famiVInt)
 doVint:
 		move.l	#emuVint,(RAM_EmuLoop+2).l
 		move.w	#1,cpuFamiVint(a4)
+		bsr	ppuFrameStart
 
 		bsr	famiGetP		; Save PC and P (B clear)
 		move.b	d5,d7
@@ -660,26 +720,8 @@ doVint:
 		and.w	#$7FFF,d6
 		movea.l	a1,a0
 		add.w	d6,a0
-		bra	emuVint
+		jmp	emuVint
 
-; ------------------------------------------------
-; Main Loop
-; ------------------------------------------------
-
-emuLoop:
-		tst.w	FamiMdVint(a4)
-		bne.s	famiVInt
-emuVint:
-		clr.w	d4
-		move.b	(a0)+,d4
-		add.w	d4,d4
-		move.w	mosCpu(pc,d4.w),d6
-		jmp	mosCpu(pc,d6.w)	; mosCpu must stay right after this
-
-		
-; ====================================================================
-
-		include	"emu/cpu.asm"		; 6502 CPU, must follow emuVint
 		include	"emu/memory.asm"	; CPU memory map
 		include	"emu/ppu.asm"		; PPU
 		include	"emu/apu.asm"		; APU (sound)

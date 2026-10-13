@@ -134,6 +134,7 @@ rcNmi:
 		beq.s	.none
 		addq.l	#4,sp			; not returning
 		move.w	#1,cpuFamiVint(a4)
+		jsr	ppuFrameStart
 		swap	d3			; push PC
 		move.w	d4,d6
 		lsr.w	#8,d6
