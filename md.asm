@@ -42,6 +42,7 @@ cpuIRQ		equ $7FFE
 
 		struct RAM_Fami_Emu+$FF0
 RAM_EmuLoop	ds.w 3
+RAM_RcStack	ds.l 1			; recompiled code: stack at dispatch (emu/recomp.asm)
 		finish
 
 ; ----------------------------------------------------------------

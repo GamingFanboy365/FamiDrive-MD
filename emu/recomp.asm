@@ -10,6 +10,7 @@
 ; ----------------------------------------------------------------
 
 rcStart:
+		move.l	sp,(RAM_RcStack).l
 		move.w	#$4E75,(RAM_EmuLoop).l	; rts
 		lea	(RAM_Fami_ROM+$8000).l,a0	; translated code reads PRG through a0
 		move.w	#rcVecReset,d4		; falls into rcDispatch
@@ -18,9 +19,14 @@ rcStart:
 ; Jump to the code for a 6502 address
 ;
 ; d4.w - 6502 address
+;
+; Routines called with the 68000's jsr (see routine_body in
+; tools/recomp6502.py) may leave through here, after an NMI or a
+; computed jump; their return addresses are dropped.
 ; ----------------------------------------------------------------
 
 rcDispatch:
+		movea.l	(RAM_RcStack).l,sp
 		cmpi.w	#$8000,d4
 		bcs.s	.ram
 		andi.l	#rcPrgMask,d4

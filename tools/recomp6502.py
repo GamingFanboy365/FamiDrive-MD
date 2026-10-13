@@ -635,7 +635,7 @@ class Gen:
 			vals = [p - base for p in ptr if 0 <= p - base <= 255]
 		chk = []
 		for v in vals:
-			chk += ['cmpi.b #$%02X,%s' % (v, reg), 'beq.w %s' % lab(i.pc)]
+			chk += ['cmpi.b #$%02X,%s' % (v, reg), 'beq.w %s' % self.olab(i.pc)]
 		return setup + chk, ea, post
 
 	def dst_plain(self, i):
@@ -727,7 +727,12 @@ class Gen:
 		version_plan) the loop's own instructions have their own labels."""
 		if self.fast and a in self.fast['pcs']:
 			return '%s_%04X' % (self.fast['prefix'], a)
-		return lab(a)
+		return self.olab(a)
+
+	def olab(self, a):
+		"""Label in the code around a loop's fast copy."""
+		o = self.fast.get('outer') if self.fast else None
+		return '%s_%04X' % (o, a) if o else lab(a)
 
 	def tag(self, tag, pc):
 		return '%s%s_%04X' % (self.fast['prefix'] if self.fast else '', tag, pc)
@@ -966,6 +971,10 @@ class Gen:
 					self.e('move.b $%04X(a2),d4' % (hi & 0x7FF), 'lsl.w #8,d4',
 					       'move.b $%04X(a2),d4' % (p & 0x7FF), 'jmp rcDispatch')
 		elif m == 'JSR' and i.arg in self.callable:
+			if self.callable[i.arg][1]:
+				ret = i.pc + 2
+				self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
+				       'move.b #$%02X,(a2,d3.w)' % (ret & 0xFF), 'subq.b #1,d3', 'swap d3')
 			self.e('jsr R%04X_%04X' % (i.arg, i.arg))	# see routine_body
 			self.called.add(i.arg)
 		elif m == 'JSR':
@@ -977,6 +986,8 @@ class Gen:
 			else:
 				self.e('move.w #$%04X,d4' % i.arg, 'jmp rcDispatch')
 		elif m == 'RTS' and self.fast and self.fast.get('routine'):
+			if self.fast['heavy']:
+				self.e('swap d3', 'addq.b #2,d3', 'swap d3')	# drop the return address
 			self.e('rts')
 		elif m == 'RTS':
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d6', 'addq.b #1,d3',
@@ -1253,18 +1264,22 @@ class Gen:
 			self.e('tst.b %s' % plan['reg'])
 			self.save_nz()
 		f = plan['b'].pc + 2
-		self.e(*(['jmp %s' % lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
+		self.e(*(['jmp %s' % self.lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
 
 	def copy_of(self, plan, turns):
 		"""Code for a loop's fast copy, or None if it would need a5 or a
 		call. turns: None for a loop, else (turns, off) to unroll."""
 		t, b = plan['t'], plan['b']
+		outer = self.fast
+		base = outer['prefix'] if outer else ''
 		save = self.out, self.stubs, self.xc, self.c_skipped
 		self.out, self.stubs, self.xc, self.c_skipped = [], [], False, 0
+		f = b.pc + 2
+		exit = ['jmp %s' % self.lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']
 		try:
 			off = {'d1': 0, 'd2': 0}
 			for k in range(turns['n'] if turns else 1):
-				self.fast = dict(plan, prefix='U%d' % k if k else 'F')
+				self.fast = dict(plan, prefix=base + ('U%d' % k if k else 'F'), outer=outer and base)
 				if turns:
 					self.fast.update(off=off, skip=turns['skip'])
 				dk = None
@@ -1295,13 +1310,12 @@ class Gen:
 				if b.live_out & (N | Z):
 					self.e('tst.b %s' % (loc or ('d1' if ctr.m[2] == 'X' else 'd2')))
 					self.save_nz()
-			f = b.pc + 2
-			self.e(*(['jmp %s' % lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
+			self.e(*exit)
 			fast = self.out + self.stubs
 		except Unroll:
 			fast = None
 		finally:
-			self.fast = None
+			self.fast = outer
 			self.out, self.stubs, self.xc, self.c_skipped = save
 		if fast and any(',a5' in l or ('jsr' in l and 'rcNmi' not in l) for l in fast):
 			fast = None
@@ -1319,8 +1333,9 @@ class Gen:
 			fast = self.copy_of(plan, None)
 		if fast is None:
 			return False
-		slow = lab(t)
-		g = ['V_%04X:' % t, '\t\tmove.b $%02X(a2),-(sp)' % plan['ptr'][1], '\t\tmove.w (sp)+,d6',
+		slow = self.lab(t)
+		v = self.fast['prefix'] if self.fast else ''
+		g = [v + 'V_%04X:' % t, '\t\tmove.b $%02X(a2),-(sp)' % plan['ptr'][1], '\t\tmove.w (sp)+,d6',
 		     '\t\tmove.b $%02X(a2),d6' % plan['ptr'][0]]
 		for r, runs in plan['guard'].items():
 			reg = 'd1' if r == 'X' else 'd2'
@@ -1330,59 +1345,79 @@ class Gen:
 			if len(runs) == 1:
 				g += within(*runs[0])
 			else:
-				hi_lab, ok_lab = 'VH%s_%04X' % (r, t), 'VO%s_%04X' % (r, t)
+				hi_lab, ok_lab = v + 'VH%s_%04X' % (r, t), v + 'VO%s_%04X' % (r, t)
 				g += ['\t\tcmpi.b #$%02X,%s' % (runs[0][1], reg), '\t\tbhi.s %s' % hi_lab]
 				g += within(runs[0][0], 255) + ['\t\tbra.s %s' % ok_lab, hi_lab + ':']
 				g += within(runs[1][0], runs[1][1]) + [ok_lab + ':']
-		g += ['\t\tcmpi.w #$701,d6', '\t\tbcs.s VR_%04X' % t,	# RAM, +255 stays below $800
+		g += ['\t\tcmpi.w #$701,d6', '\t\tbcs.s %sVR_%04X' % (v, t),	# RAM, +255 stays below $800
 		      '\t\tcmpi.w #$8000,d6', '\t\tbcs.w %s' % slow,
 		      '\t\tcmpi.w #$FF01,d6', '\t\tbcc.w %s' % slow,	# PRG, +255 stays below $10000
-		      '\t\tlea (a0,d6.w),a5', '\t\tbra.s F_%04X' % t,
-		      'VR_%04X:' % t, '\t\tlea (a2,d6.w),a5']
+		      '\t\tlea (a0,d6.w),a5', '\t\tbra.s %sF_%04X' % (v, t),
+		      '%sVR_%04X:' % (v, t), '\t\tlea (a2,d6.w),a5']
 		self.out += g + fast
 		return True
 
 	# ---- routines called with the 68000's jsr -------------------------------
 
 	def routine_body(self, f, memo):
-		"""Instructions of a routine that can be called with the 68000's
-		jsr and rts: it only returns with RTS and only calls such
-		routines, doesn't touch the stack itself, never needs an NMI
-		check (no loops but counted ones) and never leaves translated
-		code. The 6502 stack doesn't get the return address; nothing
-		in such a routine can look at it."""
+		"""(instructions, heavy) of a routine that can be called with the
+		68000's jsr, or None. Its copy returns with rts, so every path
+		must reach RTS with the stack as it was, and the routines it
+		calls must be like it.
+		A light routine never touches the 6502 stack, needs no NMI check
+		and stays in translated code: its call doesn't push the return
+		address. A heavy one may do those things: its call pushes the
+		6502 return address like JSR does, and if it leaves its copy
+		through rcDispatch (an NMI, a computed jump), that drops the
+		68000 return addresses and the normal code takes over."""
 		if f in memo:
 			return memo[f]
 		memo[f] = None			# recursion: not callable
-		seen, work = set(), [f]
+		depth, work, heavy = {}, [(f, 0)], False
 		while work:
-			pc = work.pop()
-			if pc in seen:
+			pc, d = work.pop()
+			i = self.insns[pc]
+			if pc in depth:
+				if depth[pc] != d:
+					return None
 				continue
-			i = self.insns.get(pc)
-			if i is None or len(seen) >= 300 or \
-			   i.m in ('RTI', 'BRK', 'PHA', 'PLA', 'PHP', 'PLP', 'TSX', 'TXS'):
+			if len(depth) >= 300 or i.m in ('RTI', 'BRK', 'TSX', 'TXS'):
 				return None
-			seen.add(pc)
+			depth[pc] = d
+			if i.m in ('PHA', 'PHP', 'PLA', 'PLP'):
+				heavy = True
+				d += 1 if i.m[1] == 'H' else -1
+				if d < 0:
+					return None
 			if i.m == 'RTS':
+				if d:
+					return None
 				continue
 			if i.m == 'JSR':
-				if self.routine_body(i.arg, memo) is None:
+				if i.arg in self.insns:
+					sub = self.routine_body(i.arg, memo)
+					if sub is None:
+						return None
+					heavy |= sub[1]
+				elif i.arg < 0x800:
+					heavy = True	# a jump table in RAM, through rcDispatch
+				else:
 					return None
-				work.append(pc + 3)
+				work.append((pc + 3, d))
 				continue
-			for s in i.succ:
-				if s is None or s not in self.insns:
-					return None
-				if s <= pc and not (i.mode == 'rel' and i.decided is None and pc in self.counted):
-					return None	# would check for an NMI
-				work.append(s)
-		memo[f] = seen
-		return seen
+			for t in i.succ:
+				if t is None or t not in self.insns:
+					heavy = True	# through rcDispatch
+				else:
+					if t <= pc and not (i.mode == 'rel' and i.decided is None and pc in self.counted):
+						heavy = True	# NMI check
+					work.append((t, d))
+		memo[f] = (set(depth), heavy)
+		return memo[f]
 
 	def emit_routine(self, f):
-		pcs = sorted(self.callable[f])
-		self.fast = {'pcs': set(pcs), 'prefix': 'R%04X' % f, 'routine': True}
+		pcs = sorted(self.callable[f][0])
+		self.fast = {'pcs': set(pcs), 'prefix': 'R%04X' % f, 'routine': True, 'heavy': self.callable[f][1]}
 		self.xc, self.c_skipped = False, 0
 		self.out.append('')
 		dk = None
@@ -1390,6 +1425,8 @@ class Gen:
 			i = self.insns[pc]
 			if pc in self.targets:
 				self.xc = False
+			if pc in self.plans and k and dk is None:
+				self.loop_entry(pcs[k - 1], self.plans[pc])
 			if not (i.mode == 'rel' and dk is not None):
 				self.out.append('%s:\t\t\t\t; $%04X  %s' % (self.lab(pc), pc, i.text()))
 			if i.mode == 'rel':
@@ -1416,6 +1453,17 @@ class Gen:
 		if k + 1 >= len(pcs) or pcs[k + 1] != f:
 			self.e(*(['jmp %s' % self.lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
 
+	def loop_entry(self, prev, plan):
+		"""Fill or fast copy where the previous instruction falls into a loop."""
+		p = self.insns[prev]
+		pc = plan['t']
+		if p.pc + p.n == pc and pc in p.succ:
+			if 'lo' in plan:
+				self.emit_fill(plan)
+				self.versioned.append(pc)
+			elif self.emit_versioned(plan):
+				self.versioned.append(pc)
+
 	def run(self, vectors):
 		pcs = sorted(self.insns)
 		self.out.append('rcCode:')
@@ -1431,7 +1479,7 @@ class Gen:
 		memo = {}
 		self.callable = {}
 		for i in self.insns.values():
-			if i.m == 'JSR' and self.routine_body(i.arg, memo):
+			if i.m == 'JSR' and i.arg in self.insns and self.routine_body(i.arg, memo):
 				self.callable[i.arg] = memo[i.arg]
 		self.called = set()
 		self.returns = self.return_points()
@@ -1447,6 +1495,7 @@ class Gen:
 				if plan:
 					plans[i.arg] = plan
 		self.versioned = []
+		self.plans = plans
 		direct_kind = None
 		for k, pc in enumerate(pcs):
 			i = self.insns[pc]
@@ -1454,13 +1503,7 @@ class Gen:
 			if pc in self.targets:
 				self.xc = False
 			if pc in plans and k and direct_kind is None:
-				p = self.insns[pcs[k - 1]]
-				if p.pc + p.n == pc and pc in p.succ:
-					if 'lo' in plans[pc]:
-						self.emit_fill(plans[pc])
-						self.versioned.append(pc)
-					elif self.emit_versioned(plans[pc]):
-						self.versioned.append(pc)
+				self.loop_entry(pcs[k - 1], plans[pc])
 			if not (i.mode == 'rel' and direct_kind is not None):
 				if pc in heads:		# loop head: NMI check for the back edges
 					self.prologued.add(pc)
