@@ -481,6 +481,30 @@ class Gen:
 
 	# ---- control flow ---------------------------------------------------
 
+	def return_points(self):
+		"""For each RTS, the return points of the JSRs that can reach it.
+		Only a prediction: RTS still checks the address it pulled."""
+		calls = {}
+		for i in self.insns.values():
+			if i.m == 'JSR' and i.arg in self.insns:
+				calls.setdefault(i.arg, set()).add(i.pc + 3)
+		returns = {}
+		for f, rets in calls.items():
+			seen, work = set(), [f]
+			while work:
+				pc = work.pop()
+				if pc in seen or pc not in self.insns:
+					continue
+				seen.add(pc)
+				i = self.insns[pc]
+				if i.m == 'RTS':
+					returns.setdefault(pc, set()).update(rets)
+				elif i.m == 'JSR':
+					work.append(pc + 3)	# the callee returns here
+				else:
+					work += [s for s in i.succ if s is not None]
+		return {pc: r for pc, r in returns.items() if len(r) <= 4}
+
 	def counted_loops(self):
 		"""Back edges of short counted loops, which don't need an NMI
 		check: an innermost loop closed by a branch on a register that
@@ -718,8 +742,12 @@ class Gen:
 				self.e('move.w #$%04X,d4' % i.arg, 'jmp rcDispatch')
 		elif m == 'RTS':
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d6', 'addq.b #1,d3',
-			       'move.b (a2,d3.w),d4', 'swap d3', 'lsl.w #8,d4', 'move.b d6,d4',
-			       'addq.w #1,d4', 'jmp rcDispatch')
+			       'move.b (a2,d3.w),-(sp)', 'swap d3', 'move.w (sp)+,d4', 'move.b d6,d4',
+			       'addq.w #1,d4')
+			# usually it goes back to one of a few known callers
+			for r in sorted(self.returns.get(i.pc, ()))[:4]:
+				self.e('cmpi.w #$%04X,d4' % r, 'bne.s *+8', 'jmp (%s).l' % lab(r))
+			self.e('jmp rcDispatch')
 		elif m == 'RTI':
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d5', 'addq.b #1,d3',
 			       'move.b (a2,d3.w),d6', 'addq.b #1,d3', 'move.b (a2,d3.w),d4', 'swap d3',
@@ -783,6 +811,7 @@ class Gen:
 		self.out.append('rcCode:')
 		self.prologued = set()
 		self.counted = self.counted_loops()
+		self.returns = self.return_points()
 		heads = set()
 		for i in self.insns.values():
 			if i.m == 'JMP' and i.mode == 'abs' and i.arg <= i.pc: heads.add(i.arg)
@@ -815,7 +844,11 @@ class Gen:
 				f = pc + 2
 				if k + 1 >= len(pcs) or pcs[k + 1] != f:
 					self.e(*(['jmp %s' % lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
-		self.out.append('; ---- out-of-line entries ----')
+			# out-of-line entries go at the next point code doesn't fall
+			# through, so branches to them stay short
+			if self.stubs and self.out[-1].strip().split()[0] in ('jmp', 'bra'):
+				self.out += self.stubs
+				self.stubs = []
 		self.out += self.stubs
 		# dispatch table: PRG offset -> code
 		self.out += ['', '\t\talign 4', 'rcTable:']
