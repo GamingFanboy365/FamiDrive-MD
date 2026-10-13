@@ -193,7 +193,8 @@ def jump_tables(prg, insns):
 	"""Addresses found in jump tables:
 	- a table of low bytes and one of high bytes, stored into a RAM
 	  pointer for JMP (ptr), or after a JMP opcode written to RAM
-	- tables pushed high/low before an RTS (target - 1)"""
+	- tables pushed high/low before an RTS (target - 1)
+	Returns all of them, and those reached by RTS."""
 	order = sorted(insns)
 	prev = {order[k]: insns[order[k - 1]] for k in range(1, len(order))}
 
@@ -225,7 +226,7 @@ def jump_tables(prg, insns):
 				if insns[j].m == 'PHA' and table_load(insns[j]) is not None:
 					pairs.append((table_load(insns[j]), table_load(i), 1))
 					break
-	found = set()
+	found, rts = set(), set()
 	for l, h, add in pairs:
 		step = 1
 		if h == l + 1:			# interleaved: low, high, low, high...
@@ -237,7 +238,9 @@ def jump_tables(prg, insns):
 			if not plausible_code(prg, a):
 				break			# end of the table
 			found.add(a)
-	return found
+			if add:
+				rts.add(a)
+	return found, rts
 
 
 def plausible_code(prg, a, count=12):
@@ -336,25 +339,111 @@ def ranges(insns, entries):
 # Flag liveness
 # ----------------------------------------------------------------------
 
-def liveness(insns, returns=()):
+def rts_returns(insns, tables=(), strict=False):
+	"""For each RTS, the return points of the JSRs that can reach it.
+	A JSR into RAM may call any jump table target. An RTS reached with
+	two more bytes pulled than pushed (a routine dropping its return
+	address) also goes where its caller returns; other depths would
+	return to a garbage address, so those paths are taken as never
+	happening. strict: leave out RTSs of routines that move the stack."""
+	calls = {}
+	for i in insns.values():
+		if i.m == 'JSR':
+			for f in [i.arg] if i.arg in insns else tables if i.arg < 0x800 else ():
+				calls.setdefault(f, set()).add(i.pc)
+	body, ends = {}, {}
+	unsure = set()
+	for f in calls:
+		seen, work, found = set(), [(f, 0)], {}
+		while work:
+			pc, d = work.pop()
+			if pc not in insns or (pc, d) in seen or not -4 <= d <= 4:
+				continue
+			seen.add((pc, d))
+			i = insns[pc]
+			if i.m == 'RTS':
+				found.setdefault(pc, set()).add(d)
+				continue
+			d += {'PHA': 1, 'PHP': 1, 'PLA': -1, 'PLP': -1}.get(i.m, 0)
+			if i.m in ('TSX', 'TXS'):
+				unsure.add(f)
+			if i.m == 'JSR':
+				work.append((pc + 3, d))	# the callee returns here
+			else:
+				work += [(s, d) for s in i.succ if s is not None]
+		body[f], ends[f] = {pc for pc, d in seen}, found
+	returns, bad = {}, set()
+	for f, sites in calls.items():
+		for pc, ds in ends[f].items():
+			rets = returns.setdefault(pc, set())
+			if 0 in ds or not ds - {-2}:
+				rets |= {s + 3 for s in sites}
+			if -2 in ds:			# returns for the routine that called f
+				for g in calls:
+					if sites & body[g]:
+						rets |= {s + 3 for s in calls[g]}
+			if f in unsure or not ds & {0, -2}:
+				bad.add(pc)
+	if strict:
+		return {pc: r for pc, r in returns.items() if pc not in bad}
+	return returns
+
+
+def liveness(insns, returns=(), tables=(), rts_targets=()):
 	"""returns: where an RTS can go (JSR return points, RTS jump table
-	targets); an RTS's live flags are the union of theirs."""
+	targets); an RTS's live flags are the union of those of the JSRs
+	that reach it and rts_targets (RTS jump tables, unknown entries), or
+	of all of them.
+	tables: jump table targets, where JMP (ptr) and JSRs into RAM go.
+	PHP pushes the flags that are live after the PLPs that pull them,
+	unless a PLA may pull them instead."""
 	live_in = {pc: 0 for pc in insns}
 	returns = [r for r in returns if r in insns]
+	tables = [t for t in tables if t in insns]
+	rts = {pc: sorted((r | set(rts_targets)) & set(insns)) for pc, r in rts_returns(insns, tables, True).items()}
+	plp = [i for i in insns.values() if i.m in ('PLP', 'RTI')]
+	whole = set()			# PHPs whose byte may be pulled by PLA
+	for i in insns.values():
+		if i.m == 'PHP':
+			seen, work = set(), [i.pc + 1]
+			while work:		# every path must reach a PLP soon
+				pc = work.pop()
+				j = insns.get(pc)
+				if j is None or len(seen) > 32 or j.m in ('PLA', 'PHP', 'JSR', 'RTS', 'RTI', 'BRK', 'TSX', 'TXS'):
+					whole.add(i.pc)
+					break
+				if pc in seen or j.m == 'PLP':
+					continue
+				seen.add(pc)
+				work += j.succ
 	changed = True
 	while changed:
 		changed = False
+		pulled = 0
+		for i in plp:
+			pulled |= getattr(i, 'live_out', ALL)
+		jumped = 0
+		for t in tables:
+			jumped |= live_in[t]
 		for pc in sorted(insns, reverse=True):
 			i = insns[pc]
 			out = 0
 			if i.m == 'RTS' and returns:
-				for r in returns:
+				for r in rts.get(pc, returns):
 					out |= live_in[r]
 			else:
 				for s in i.succ:
-					out |= ALL if s is None or s not in insns else live_in[s]
+					if s is None and tables and (i.m == 'JSR' or (i.m == 'JMP' and i.mode == 'ind')):
+						out |= jumped
+					else:
+						out |= ALL if s is None or s not in insns else live_in[s]
+			if getattr(i, 'live_out', None) != out:
+				changed = True
 			i.live_out = out
-			new = USES.get(i.m, 0) | (out & ~DEFS.get(i.m, 0))
+			uses = USES.get(i.m, 0)
+			if i.m == 'PHP' and pc not in whole:
+				uses = pulled
+			new = uses | (out & ~DEFS.get(i.m, 0))
 			if new != live_in[pc]:
 				live_in[pc] = new
 				changed = True
@@ -579,26 +668,7 @@ class Gen:
 	def return_points(self):
 		"""For each RTS, the return points of the JSRs that can reach it.
 		Only a prediction: RTS still checks the address it pulled."""
-		calls = {}
-		for i in self.insns.values():
-			if i.m == 'JSR' and i.arg in self.insns:
-				calls.setdefault(i.arg, set()).add(i.pc + 3)
-		returns = {}
-		for f, rets in calls.items():
-			seen, work = set(), [f]
-			while work:
-				pc = work.pop()
-				if pc in seen or pc not in self.insns:
-					continue
-				seen.add(pc)
-				i = self.insns[pc]
-				if i.m == 'RTS':
-					returns.setdefault(pc, set()).update(rets)
-				elif i.m == 'JSR':
-					work.append(pc + 3)	# the callee returns here
-				else:
-					work += [s for s in i.succ if s is not None]
-		return {pc: r for pc, r in returns.items() if len(r) <= 4}
+		return {pc: r for pc, r in rts_returns(self.insns, self.tables).items() if len(r) <= 4}
 
 	def counted_loops(self):
 		"""Back edges of short counted loops, which don't need an NMI
@@ -782,6 +852,17 @@ class Gen:
 				r = {'CMP': 'd0', 'CPX': 'd1', 'CPY': 'd2'}[m]
 				setup, s = self.src(i)
 				self.e(*setup)
+				if need and not direct and not live & V:
+					# r + ~s + 1 carries like the 6502's compare; V is dead
+					if s.startswith('#'):
+						v = ~int(s[2:], 16) & 0xFF
+						self.e('moveq #%d,d7' % (v - 256 if v >= 0x80 else v))
+					else:
+						self.e('move.b %s,d7' % s, 'not.b d7')
+					self.e('move.b %s,d6' % r, 'move #$14,ccr', 'addx.b d7,d6', 'move sr,d3')
+					if nxt_i is not None and nxt_i.mode == 'rel' and nxt_i.decided is None:
+						self.direct_next = 'flags'	# also still in the CCR
+					return
 				self.e(('cmpi.b %s,%s' if s.startswith('#') else 'cmp.b %s,%s') % (s, r))
 				if direct:
 					self.direct_next = 'cmp'
@@ -1361,15 +1442,19 @@ def main():
 		sys.exit('usage: recomp6502.py [--entries FILE] game.nes out.asm')
 	sys.argv[1:] = args
 	prg = Prg(open(sys.argv[1], 'rb').read())
+	user = list(extra)
 	insns, vectors = discover(prg, extra)
 	while True:
-		more = jump_tables(prg, insns) - set(insns)
+		found, rts = jump_tables(prg, insns)
+		more = found - set(insns)
 		if not more:
 			break
 		extra = list(extra) + sorted(more)
 		insns, vectors = discover(prg, extra)
-	liveness(insns, {i.pc + 3 for i in insns.values() if i.m == 'JSR'} | set(extra))
+	tables = sorted(found)
+	liveness(insns, {i.pc + 3 for i in insns.values() if i.m == 'JSR'} | set(extra), tables, user + sorted(rts))
 	g = Gen(prg, insns)
+	g.tables = tables
 	entries = set(vectors) | set(extra) | {i.pc + 3 for i in insns.values() if i.m == 'JSR'}
 	g.ranges = ranges(insns, entries)
 	g.entries = entries
