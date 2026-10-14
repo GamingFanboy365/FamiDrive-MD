@@ -114,6 +114,8 @@ ppuMaskNew	ds.w 1			; $2001 write for the next VBlank (bit 15: pending)
 ppuSp0State	ds.w 1			; what the game saw of sprite 0 hit this frame (rdPPU_Status)
 ppuRdSite	ds.l 1			; where the last $2002 read came from (rdPPU_Status)
 vbLate		ds.w 1			; a VBlank came during the NMI handler: next NMI on its RTI
+ppuNtXor	ds.w 1			; nametable address xor for the mirrored copy ($400 or $800)
+ppuCmdXor	ds.l 1			; and VDP command xor for its cells (ppuDrwCell)
 		finish
 
 ; ====================================================================
@@ -266,27 +268,23 @@ list_InitRegs:	dc.w $8000		; d5
 
 
 Fami_InitVideo:
+		move.w	#$8124,4(a6)		; display off: the VDP takes VRAM writes much
+						; faster (ppuMaskApply turns it on with the
+						; game's rendering)
 		move.w	#$8F02,4(a6)
 
 	; Clear all of VRAM: a real console (and some emulators, like
-	; AtGames') starts with garbage there, and the planes below use
-	; tile $200, past the NES CHR tiles, as the blank tile
+	; AtGames') starts with garbage there
 		move.l	#$40000000,4(a6)
 		move.w	#($10000/4)-1,d7
 .clrvram:
 		move.l	#0,(a6)
 		dbf	d7,.clrvram
 
-		move.w	#$FFF,d7
-		move.l	#$40000003,4(a6)
-.loopfg:
-		move.w	#$200,(a6)
-		dbf	d7,.loopfg
-		move.w	#$FFF,d7
-		move.l	#$60000003,4(a6)
-.loopbg:
-		move.w	#$200,(a6)
-		dbf	d7,.loopbg
+		move.l	#$40000003,4(a6)	; plane A
+		bsr.s	.plane
+		move.l	#$60000003,4(a6)	; plane B
+		bsr.s	.plane
 		move.l	#$68000002,4(a6)
 		move.l	#0,(a6)
 		move.l	#$40000010,4(a6)
@@ -297,6 +295,21 @@ Fami_InitVideo:
 .clrpal:
 		move.w	#0,(a6)
 		dbf	d7,.clrpal
+		rts
+
+; The NES nametables' rows (0-29) as the empty copy of them in RAM
+; (tile 0, attribute 0) draws them, so that writing a byte that
+; doesn't change can skip VRAM (wrPPU_Data); rows 30-31 and the
+; next 4 KB (unused) with tile $200, past the NES tiles: blank
+.plane:
+		move.w	#30*64-1,d7
+.cells:
+		move.w	#$8000,(a6)
+		dbf	d7,.cells
+		move.w	#2*64+$1000/2-1,d7
+.blank:
+		move.w	#$200,(a6)
+		dbf	d7,.blank
 		rts
 
 
@@ -540,6 +553,13 @@ Fami_LoadRom:
 		move.w	#1,d7			; 1 - vertical
 .mirror_set:
 		move.w	d7,ppuMirror(a3)
+		move.w	#$400,ppuNtXor(a3)	; horizontal: 0 = 1, 2 = 3, the other half
+		move.l	#$00400000,ppuCmdXor(a3) ; of the plane
+		tst.w	d7
+		beq.s	.xor_set
+		move.w	#$800,ppuNtXor(a3)	; vertical: 0 = 2, 1 = 3, the other plane
+		move.l	#$20000000,ppuCmdXor(a3)
+.xor_set:
 		
 	; COPY CHR-ROM TO RAM, or use the (cleared) buffer as CHR-RAM
 		move.l	a4,emuChrRom(a3)
@@ -754,6 +774,8 @@ doVint:
 ; ====================================================================
 
 		include	"system/md/error.asm"	; Error screen
+
+		include	"emu/ppu_tables.asm"	; PPU lookup tables (big: last)
 
 ; ====================================================================
 

@@ -51,10 +51,12 @@ wrPPU_Ctrl:
 	; PPU VRAM BG bank/Sprites bank
 		move.b	d7,d6
 		andi.w	#$C0,d6
-		cmp.w	ppuChrBank(a4),d6
+		move.w	ppuChrBank(a4),d5
+		eor.w	d6,d5			; the tables that changed
 		beq.s	.no_reload
 		move.w	d6,ppuChrBank(a4)
-		bsr	Nemul_LoadChr
+		move.w	d5,d6
+		bsr	Nemul_LoadChrSets	; convert those tile sets again
 .no_reload:
 
 	; PPU VRAM increment
@@ -471,22 +473,54 @@ wrPPU_Data:
 		andi.w	#$3FFF,d4
 		cmpi.w	#$2000,d4
 		bcs.w	ppuChrRamWrite
-		move.b	d7,(a3,d4.w)
 		cmpi.w	#$3F00,d4
-		bcc.s	ppuSetColor
-		move.w	d4,d5			; and the mirrored nametable's copy
-		move.w	#$400,d6		; (horizontal mirroring: 0 = 1, 2 = 3,
-		tst.w	ppuMirror(a4)		; vertical: 0 = 2, 1 = 3)
-		beq.s	.mirror
-		add.w	d6,d6
-.mirror:
-		eor.w	d6,d5
+		bcc.s	.palette
+		cmp.b	(a3,d4.w),d7		; unchanged: its cells already show it
+		bne.s	.changed		; (VRAM is kept in step with the copy
+		jmp	(RAM_EmuLoop).l		; from the start, see Fami_InitVideo)
+.palette:
+		move.b	d7,(a3,d4.w)
+		bra.w	ppuSetColor
+.changed:
+		move.b	d7,(a3,d4.w)
+		move.w	ppuNtXor(a4),d5		; and the mirrored nametable's copy
+		eor.w	d4,d5
 		move.b	d7,(a3,d5.w)
-		move.w	d4,d5
-		andi.w	#$3C0,d5
-		cmpi.w	#$3C0,d5
-		bne.w	ppuDrwCell
-		bra.w	ppuDrwCellPal
+
+; ----------------------------------------------------------------
+; Nametable byte -> its MD plane cell, in both copies of a mirrored
+; nametable (see ppuCellTbl in ppu_tables.asm). The palette comes
+; from the attribute byte in the copy of the nametables (a3, kept
+; mirrored by wrPPU_Data): VRAM is only written, never read back.
+;
+; d4 - PPU address ($2000-$3EFF), d7 - tile or attribute byte
+; ----------------------------------------------------------------
+
+ppuDrwCell:
+		move.w	d4,d6
+		andi.w	#$FFF,d6
+		lsl.w	#3,d6
+		lea	(ppuCellTbl).l,a5
+		adda.w	d6,a5
+		move.l	(a5)+,d6		; VDP command for the cell
+		beq.w	ppuDrwCellPal		; none: an attribute byte
+		move.w	(a5)+,d4		; its attribute byte's address
+		move.w	(a5),d5			; and the table for its 2 bits
+		move.b	(a3,d4.w),d5
+		add.w	d5,d5
+		lea	(ppuAttrPal).l,a5
+		move.w	(a5,d5.w),d5		; palette, high priority
+		move.b	d7,d5			; and the tile
+		move.w	#$2700,sr
+		move.l	d6,4(a6)
+		move.w	d5,(a6)
+		move.l	ppuCmdXor(a4),d7	; the mirrored copy
+		eor.l	d7,d6
+		move.l	d6,4(a6)
+		move.w	d5,(a6)
+		move.w	#$2000,sr
+		moveq	#0,d7
+		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
 ppuVdpIndex:
@@ -529,79 +563,6 @@ ppuVdpColors:
 		dc.w $0CA,$0C8,$2E4,$8C4,$CC4,$444,$000,$000	; $28-$2F
 		dc.w $EEE,$ECC,$ECC,$ECE,$ECE,$ECE,$CCE,$ACE	; $30-$37
 		dc.w $8EE,$8EC,$AEC,$CEA,$EEA,$AAA,$000,$000	; $38-$3F
-
-; ----------------------------------------------------------------
-; Nametable byte -> its MD plane cell, in both copies of a mirrored
-; nametable (plane A: nametables 0, 1; plane B: 2, 3; 1 and 3 in the
-; right half). The palette comes from the attribute byte in the copy
-; of the nametables (a3, kept mirrored by wrPPU_Data): VRAM is only
-; written, never read back.
-;
-; d4 - PPU address ($2000-$2FBF, not an attribute byte), d7 - tile
-; ----------------------------------------------------------------
-
-ppuDrwCell:
-	; the attribute byte's 2 bits for this cell
-		move.w	d4,d5
-		lsr.w	#4,d5
-		andi.w	#$38,d5			; row / 4 * 8
-		move.w	d4,d6
-		lsr.w	#2,d6
-		andi.w	#7,d6			; + column / 4
-		or.w	d6,d5
-		move.w	d4,d6
-		andi.w	#$2C00,d6		; + the nametable's attributes
-		or.w	d6,d5
-		ori.w	#$3C0,d5
-		move.b	(a3,d5.w),d5
-		move.w	d4,d6			; row bit 1 * 4 + column bit 1 * 2
-		lsr.w	#4,d6
-		andi.w	#4,d6
-		btst	#1,d4
-		beq.s	.even
-		addq.w	#2,d6
-.even:
-		lsr.b	d6,d5
-		andi.w	#3,d5
-		ror.w	#3,d5			; palette: bits 14-13
-		ori.w	#$8000,d5		; high priority
-		andi.w	#$FF,d7
-		or.w	d7,d5			; the cell
-	; where it goes
-		move.w	d4,d6
-		andi.w	#$3E0,d6
-		lsl.w	#2,d6			; row * 128
-		move.w	d4,d7
-		andi.w	#$1F,d7
-		add.w	d7,d7
-		add.w	d7,d6			; + column * 2
-		btst	#11,d4
-		beq.s	.plane_a
-		addi.w	#$2000,d6
-.plane_a:
-		btst	#10,d4
-		beq.s	.left
-		addi.w	#$40,d6
-.left:
-		move.w	#$2700,sr
-		move.w	d6,d7
-		ori.w	#$4000,d7		; VRAM write at $C000 + d6
-		move.w	d7,4(a6)
-		move.w	#3,4(a6)
-		move.w	d5,(a6)
-		move.w	#$40,d7			; the mirror: the other half
-		tst.w	ppuMirror(a4)
-		beq.s	.other
-		move.w	#$2000,d7		; or the other plane
-.other:
-		eor.w	d7,d6
-		ori.w	#$4000,d6
-		move.w	d6,4(a6)
-		move.w	#3,4(a6)
-		move.w	d5,(a6)
-		move.w	#$2000,sr
-		moveq	#0,d7
-		jmp	(RAM_EmuLoop).l
 
 ; ----------------------------------------------------------------
 ; Attribute byte -> the palettes of its 4x4 cells, in both copies of
@@ -807,20 +768,39 @@ ppuChrRamWrite:
 		jmp	(RAM_EmuLoop).l
 
 
+; ----------------------------------------------------------------
+; Pattern tables (the copy in a3) -> MD tiles, a row at a time
+; through ppuChrSpread
+;
 ; a6 - $C00000
 ; a4 - RAM_Fami_Emu
+; ----------------------------------------------------------------
 
 Nemul_LoadChr:
+		moveq	#-1,d6			; both tile sets
+
+; d6 - bit 7: the BG set (MD tiles $000-$0FF), bit 6: the sprite set
+; ($100-$1FF, colors +8), each from the pattern table ppuChrBank picks
+Nemul_LoadChrSets:
 		move.w	#$2700,sr
 		move.w	#$8F02,4(a6)
-		move.l	#$40000000,4(a6)
+		move.w	d6,-(sp)
+		tst.b	d6
+		bpl.s	.sprites
+		move.l	#$40000000,4(a6)	; VRAM $0000
 		moveq	#0,d5
 		move.w	ppuChrBank(a4),d6
 		bsr.w	.make_chr
+.sprites:
+		move.w	(sp)+,d6
+		btst	#6,d6
+		beq.s	.done
+		move.l	#$60000000,4(a6)	; VRAM $2000
 		moveq	#8,d5
 		move.w	ppuChrBank(a4),d6
 		lsl.b	#1,d6
 		bsr.w	.make_chr
+.done:
 		move.w	#$2000,sr
 		rts
 
@@ -830,37 +810,34 @@ Nemul_LoadChr:
 		bcc.s	.got_table
 		adda.l	#$1000,a5
 .got_table:
-		movem.l	d0-d2/d3-d7,-(sp)
-		move.l	#$FF,d7
+		movem.l	d0-d3/d7/a0,-(sp)
+		lea	(ppuChrSpread).l,a0
+		move.w	#256-1,d7		; tiles
 .tile:
-		moveq	#7,d3
+		moveq	#8-1,d3			; rows
 .row:
-		move.b	(a5),d1
-		move.b	8(a5),d2
-		moveq	#0,d0
-		moveq	#7,d6
-.planes:
-		add.b	d2,d2
-		addx.w	d0,d0
-		add.b	d1,d1
-		addx.w	d0,d0
-		dbf	d6,.planes
-		moveq	#0,d4
-		moveq	#7,d6
-.nibble:
-		move.b	d0,d1
-		lsr.w	#2,d0
-		andi.l	#3,d1
-		beq.s	.zero
-		or.b	d5,d1
-.zero:
-		or.b	d1,d4
-		ror.l	#4,d4
-		dbf	d6,.nibble
-		move.l	d4,(a6)
-		addq.l	#1,a5
+		moveq	#0,d1
+		move.b	(a5)+,d1		; plane 0: bit 0 of each pixel
+		add.w	d1,d1
+		add.w	d1,d1
+		move.l	(a0,d1.w),d0
+		moveq	#0,d1
+		move.b	7(a5),d1		; plane 1 (8 bytes on): bit 1
+		add.w	d1,d1
+		add.w	d1,d1
+		move.l	(a0,d1.w),d2
+		tst.b	d5
+		beq.s	.colors
+		move.l	d0,d1			; sprites: opaque pixels +8
+		or.l	d2,d1
+		lsl.l	#3,d1
+		or.l	d1,d0
+.colors:
+		add.l	d2,d2
+		or.l	d2,d0
+		move.l	d0,(a6)
 		dbf	d3,.row
 		addq.l	#8,a5
 		dbf	d7,.tile
-		movem.l	(sp)+,d0-d2/d3-d7
+		movem.l	(sp)+,d0-d3/d7/a0
 		rts

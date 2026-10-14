@@ -138,6 +138,14 @@ class Prg:
 # Code discovery
 # ----------------------------------------------------------------------
 
+# PPU register handlers ($2000-$2007, emu/memory.asm and emu/ppu.asm),
+# called directly rather than through rdFrom_PPU/wrTo_PPU
+PPU_READ = ('rdPPU_OpenBus', 'rdPPU_OpenBus', 'rdPPU_Status', 'rdPPU_OpenBus',
+	    'rdPPU_OamData', 'rdPPU_OpenBus', 'rdPPU_OpenBus', 'rdPPU_Data')
+PPU_WRITE = ('wrPPU_Ctrl', 'wrPPU_Mask', 'wrPPU_Status', 'wrPPU_OamAddr',
+	     'wrPPU_OamData', 'wrPPU_Scroll', 'wrPPU_Addr', 'wrPPU_Data')
+
+
 def inline_table_routine(prg, f):
 	"""Does the routine at f pull its own return address and jump
 	through a pointer (a "jump engine")? Then the bytes after each JSR
@@ -705,7 +713,7 @@ class Gen:
 		if a in (0x4016, 0x4017):
 			return ['moveq #%d,d4' % (a - 0x4016), 'jsr rcReadPad'], 'd7'
 		if a < 0x4000:
-			return ['moveq #$%02X,d4' % (a & 7), 'jsr rdFrom_PPU'], 'd7'
+			return ['jsr ' + PPU_READ[a & 7]], 'd7'
 		if a < 0x4100:
 			return ['moveq #0,d4', 'move.b #$%02X,d4' % (a & 0xFF), 'jsr rdFrom_APU'], 'd7'
 		return ['move.w #$%04X,d6' % a, 'jsr rcRead16'], 'd7'
@@ -757,7 +765,7 @@ class Gen:
 			if a < 0x2000:
 				return [], '$%04X(a2)' % (a & 0x7FF), []
 			if 0x2000 <= a < 0x4000:
-				return [], None, ['moveq #$%02X,d4' % (a & 7), 'jsr wrTo_PPU']
+				return [], None, ['jsr ' + PPU_WRITE[a & 7]]
 			if 0x4000 <= a < 0x4020:
 				return [], None, ['moveq #$%02X,d4' % (a & 0xFF), 'jsr wrTo_APU']
 			return [], None, ['move.w #$%04X,d6' % a, 'jsr rcWrite16']
@@ -768,7 +776,11 @@ class Gen:
 				return setup, ea, []
 			return [], None, ['move.w #$%04X,d6' % a, 'add.w %s,d6' % r, 'jsr rcWrite16']
 		if m == 'indy':
-			return [], None, self.indy_addr(a) + ['jsr rcWrite16']
+			# RAM (the usual case) inline; mirrors, I/O and PRG out of line
+			wn, wd = self.tag('Wn', i.pc), self.tag('Wd', i.pc)
+			self.stubs += [wn + ':', '\t\tjsr rcWrite16', '\t\tjmp ' + wd]
+			return [], None, self.indy_addr(a) + ['cmpi.w #$800,d6', 'bcc.w ' + wn,
+							      'move.b d7,(a2,d6.w)', wd + ':']
 		if m == 'indx':
 			return [], None, self.indx_addr(a) + ['jsr rcWrite16']
 		raise ValueError(m)
