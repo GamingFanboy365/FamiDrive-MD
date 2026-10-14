@@ -452,7 +452,9 @@ APU_OAMDMA:
 		lea	(a2,d7.w),a5
 		bsr	sp0FirstRow
 
-	; NES OAM (Y, tile, attributes, X) to the MD's sprite table
+	; NES OAM (Y, tile, attributes, X) to the MD's sprite table. Only
+	; sprites that can show are listed (the NES hides Y >= $EF, the MD
+	; shows NES lines up to 231), so the list and its DMA are shorter.
 		lea	vdpSprData(a4),a3
 		lea	(oamAttr).l,a6
 		move.w	ppuSprWide(a4),d6
@@ -463,6 +465,8 @@ APU_OAMDMA:
 		moveq	#64-1,d5
 .lp_sprnormal:
 		move.b	(a5)+,d2		; Y
+		cmpi.b	#$E7,d2
+		bcc.s	.hidden
 		move.w	d2,d7
 		add.w	d0,d7
 		move.w	d7,(a3)+
@@ -480,6 +484,26 @@ APU_OAMDMA:
 		add.w	d1,d7
 		move.w	d7,(a3)+
 		dbf	d5,.lp_sprnormal
+		bra.s	.listed
+.hidden:
+		addq.w	#3,a5
+		dbf	d5,.lp_sprnormal
+.listed:
+		lea	vdpSprData(a4),a6
+		cmpa.l	a6,a3
+		bne.s	.end_list
+		clr.l	(a3)+			; none: one sprite above the screen
+		clr.l	(a3)+
+.end_list:
+		if FPS
+		move.b	#64,-5(a3)		; the last one links to the FPS counter
+		else
+		sf	-5(a3)			; the last one ends the list
+		endif
+		suba.l	a6,a3
+		move.l	a3,d7
+		lsr.w	#1,d7
+		move.w	d7,vdpSprWords(a4)	; for the DMA (MD_Vint)
 		movem.l	(sp)+,d0-d3/d7/a3/a6
 		jmp	(RAM_EmuLoop).l
 

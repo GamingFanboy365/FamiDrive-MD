@@ -312,16 +312,19 @@ ppuFrameStart:
 		rts
 
 ; ----------------------------------------------------------------
-; Build the line scroll table, once per frame from MD_Vint. It shows
-; the current game frame once its scroll from the top is set (its NMI
-; handler returned, or the game saw sprite 0 hit: the screen is being
-; drawn) and it has as many splits as the previous frame; else the
-; previous frame (a slow game frame spans MD frames).
-; hsLines: 0 - one scroll for the screen (hsTable's first line),
-; 1 - per line.
+; Set the MD's horizontal scroll, once per frame from MD_Vint (in
+; VBlank). It shows the current game frame once its scroll from the
+; top is set (its NMI handler returned, or the game saw sprite 0 hit:
+; the screen is being drawn) and it has as many splits as the previous
+; frame; else the previous frame (a slow game frame spans MD frames).
+; Without splits it is one scroll for the screen, else the line scroll
+; table at $B800 is written line by line. Nothing is written while the
+; scroll stays the same (hsShown).
+;
+; a6 - VDP ports, auto-increment 2
 ; ----------------------------------------------------------------
 
-hsBuild:
+hsApply:
 		lea	hsTopCur(a4),a1
 		tst.w	cpuFamiVint(a4)		; NMI handler returned
 		beq.s	.top_set
@@ -334,15 +337,48 @@ hsBuild:
 .done_frame:
 		lea	hsTopDone(a4),a1
 .use:
+	; the same as last time?
+		lea	hsShown(a4),a0
 		move.l	(a1)+,d1		; scroll from the top
 		move.w	(a1)+,d0		; splits
+		cmp.l	(a0)+,d1
+		bne.s	.changed
+		cmp.w	(a0)+,d0
+		bne.s	.changed
+		move.w	d0,d2
+		beq.s	.same
+		subq.w	#1,d2
+		movea.l	a1,a2
+.compare:
+		cmpm.l	(a2)+,(a0)+
+		bne.s	.changed
+		dbf	d2,.compare
+.same:
+		tst.w	hsShownOk(a4)
+		bne.s	.done
+.changed:
+		lea	hsShown(a4),a0		; keep it for next time
+		move.l	d1,(a0)+
+		move.w	d0,(a0)+
+		move.w	d0,d2
+		beq.s	.copied
+		subq.w	#1,d2
+		movea.l	a1,a2
+.copy:
+		move.l	(a2)+,(a0)+
+		dbf	d2,.copy
+.copied:
+		move.w	#1,hsShownOk(a4)
+		tst.w	d0
 		bne.s	.lines
-		move.l	d1,hsTable(a4)
-		clr.w	hsLines(a4)
+		move.w	#$8B00,4(a6)		; one scroll for the screen
+		move.l	#$78000002,4(a6)	; HScroll table at $B800
+		move.l	d1,(a6)
+.done:
 		rts
 .lines:
-		move.w	#1,hsLines(a4)
-		lea	hsTable(a4),a0
+		move.w	#$8B03,4(a6)		; per line
+		move.l	#$78000002,4(a6)
 		moveq	#0,d2			; line
 		bra.s	.next
 .split:
@@ -374,7 +410,7 @@ hsBuild:
 		lea	.fill_end(pc),a2
 		jmp	(a2,d5.w)
 		rept 224
-		move.l	d1,(a0)+
+		move.l	d1,(a6)
 		endm
 .fill_end:
 		rts
@@ -438,6 +474,14 @@ wrPPU_Data:
 		move.b	d7,(a3,d4.w)
 		cmpi.w	#$3F00,d4
 		bcc.s	ppuSetColor
+		move.w	d4,d5			; and the mirrored nametable's copy
+		move.w	#$400,d6		; (horizontal mirroring: 0 = 1, 2 = 3,
+		tst.w	ppuMirror(a4)		; vertical: 0 = 2, 1 = 3)
+		beq.s	.mirror
+		add.w	d6,d6
+.mirror:
+		eor.w	d6,d5
+		move.b	d7,(a3,d5.w)
 		move.w	d4,d5
 		andi.w	#$3C0,d5
 		cmpi.w	#$3C0,d5
@@ -465,6 +509,7 @@ ppuSetColor:
 		andi.b	#$3F,d5
 		add.w	d5,d5
 		move.w	ppuVdpColors(pc,d5.w),vdpPalette(a4,d4.w)
+		st	vdpPalDirty(a4)		; DMAed at the next VBlank
 		and.w	#$F,d6
 		bne.s	.no_bgpal
 		bchg	#4,d4
@@ -486,211 +531,183 @@ ppuVdpColors:
 		dc.w $8EE,$8EC,$AEC,$CEA,$EEA,$AAA,$000,$000	; $38-$3F
 
 ; ----------------------------------------------------------------
-; Set Cell character
+; Nametable byte -> its MD plane cell, in both copies of a mirrored
+; nametable (plane A: nametables 0, 1; plane B: 2, 3; 1 and 3 in the
+; right half). The palette comes from the attribute byte in the copy
+; of the nametables (a3, kept mirrored by wrPPU_Data): VRAM is only
+; written, never read back.
+;
+; d4 - PPU address ($2000-$2FBF, not an attribute byte), d7 - tile
+; ----------------------------------------------------------------
 
 ppuDrwCell:
-	; d4 - ppu address
-	; d5 - X pos
-	; d6 - Y pos
-	; d7 - cell 0-255
-
+	; the attribute byte's 2 bits for this cell
 		move.w	d4,d5
+		lsr.w	#4,d5
+		andi.w	#$38,d5			; row / 4 * 8
 		move.w	d4,d6
-		and.w	#$1F,d5
-		and.w	#$3E0,d6
-		add.w	d5,d5
-		lsl.w	#2,d6
-		add.w	d5,d6
-
-		move.w	d4,d5
-		lsr.w	#8,d5
-		lsr.w	#2,d5
-		btst	#1,d5
-		beq.s	.top_lyr
-		add.w	#$2000,d6
-.top_lyr:
-		btst	#0,d5
-		beq.s	.left_pg
-		add.w	#$40,d6
-.left_pg:
-		and.w	#$FF,d7
-		or.w	#$8000,d7
-		
+		lsr.w	#2,d6
+		andi.w	#7,d6			; + column / 4
+		or.w	d6,d5
+		move.w	d4,d6
+		andi.w	#$2C00,d6		; + the nametable's attributes
+		or.w	d6,d5
+		ori.w	#$3C0,d5
+		move.b	(a3,d5.w),d5
+		move.w	d4,d6			; row bit 1 * 4 + column bit 1 * 2
+		lsr.w	#4,d6
+		andi.w	#4,d6
+		btst	#1,d4
+		beq.s	.even
+		addq.w	#2,d6
+.even:
+		lsr.b	d6,d5
+		andi.w	#3,d5
+		ror.w	#3,d5			; palette: bits 14-13
+		ori.w	#$8000,d5		; high priority
+		andi.w	#$FF,d7
+		or.w	d7,d5			; the cell
+	; where it goes
+		move.w	d4,d6
+		andi.w	#$3E0,d6
+		lsl.w	#2,d6			; row * 128
+		move.w	d4,d7
+		andi.w	#$1F,d7
+		add.w	d7,d7
+		add.w	d7,d6			; + column * 2
+		btst	#11,d4
+		beq.s	.plane_a
+		addi.w	#$2000,d6
+.plane_a:
+		btst	#10,d4
+		beq.s	.left
+		addi.w	#$40,d6
+.left:
 		move.w	#$2700,sr
+		move.w	d6,d7
+		ori.w	#$4000,d7		; VRAM write at $C000 + d6
+		move.w	d7,4(a6)
+		move.w	#3,4(a6)
+		move.w	d5,(a6)
+		move.w	#$40,d7			; the mirror: the other half
+		tst.w	ppuMirror(a4)
+		beq.s	.other
+		move.w	#$2000,d7		; or the other plane
+.other:
+		eor.w	d7,d6
+		ori.w	#$4000,d6
 		move.w	d6,4(a6)
 		move.w	#3,4(a6)
-		move.w	(a6),d4
-		and.w	#$E000,d4
-		or.w	d7,d4
-		or.w	#$4000,d6
-		move.w	d6,4(a6)
-		move.w	#3,4(a6)
-		move.w	d4,(a6)
-		and.w	#$3FFF,d4
-
-		tst.w	ppuMirror(a4)		; check horizontal mirror
-		bne.s	.vermirror
-
-		and.w	#$3FFF,d6
-		bchg	#6,d6
-		move.w	d6,4(a6)
-		move.w	#3,4(a6)
-		move.w	(a6),d4
-		and.w	#$E000,d4
-		or.w	d7,d4
-		or.w	#$4000,d6
-		move.w	d6,4(a6)
-		move.w	#3,4(a6)
-		move.w	d4,(a6)
+		move.w	d5,(a6)
 		move.w	#$2000,sr
-		jmp	(RAM_EmuLoop).l
-.vermirror:
-		and.w	#$3FFF,d6
-		add.w	#$2000,d6
-		move.w	d6,4(a6)
-		move.w	#3,4(a6)
-		move.w	(a6),d4
-		and.w	#$E000,d4
-		or.w	d7,d4
-		or.w	#$4000,d6
-		move.w	d6,4(a6)
-		move.w	#3,4(a6)
-		move.w	d4,(a6)
-
-		move.w	#$2000,sr
+		moveq	#0,d7
 		jmp	(RAM_EmuLoop).l
 
 ; ----------------------------------------------------------------
-; Pick Tile 16x16 color
+; Attribute byte -> the palettes of its 4x4 cells, in both copies of
+; a mirrored nametable. The cells are rebuilt from the tiles in the
+; copy of the nametables (a3), a row of 4 at a time: VRAM is only
+; written. The last attribute row covers NES rows 28-31, but rows
+; 30-31 hold the attribute bytes themselves: only 28-29 are cells.
+;
+; d4 - PPU address of the attribute byte, d7 - the byte
+; ----------------------------------------------------------------
 
 ppuDrwCellPal:
-	; d4 - Page
-	; d5 - X pos
-	; d6 - Y pos
-	; d7 - attr
-		move.w	d4,d5
+		movem.l	d0-d3/a0,-(sp)
+		move.w	d4,-(sp)
+		moveq	#0,d5
+		move.b	d7,d5			; the attribute byte
+	; the first cell: NES address, its tiles, its MD plane offset
 		move.w	d4,d6
-		and.w	#%111,d5
-		lsl.w	#3,d5
-		and.w	#%111000,d6
-		lsl.w	#6,d6
-		swap	d7
+		andi.w	#$38,d6
+		lsl.w	#4,d6			; first row * 32
 		move.w	d4,d7
-		and.w	#$C00,d7
-		lsr.w	#8,d7
-		lsr.w	#2,d7
-		btst	#1,d7
-		beq.s	.top_lyr
-		add.w	#$2000,d6
-.top_lyr:
-		btst	#0,d7
-		beq.s	.left_pg
-		add.w	#$40,d6
-.left_pg:
-		swap	d7
-		move.w	#$0000,d4
-		add.w	d6,d4
-		add.w	d5,d4
-
-	; d4 - VDP address
-	; d5 - Palette bits
-		swap	d7
-		move.w	d4,d7
-		swap	d7
-		bsr.s	.make_attr
-		tst.w	ppuMirror(a4)		; check horizontal mirror
-		bne	.vert_mirr
-		swap	d7
-		move.w	d7,d4
-		swap	d7
-		add.w	#$40,d4
-		bsr.s	.make_attr
-		jmp	(RAM_EmuLoop).l
-.vert_mirr:
-		swap	d7
-		move.w	d7,d4
-		swap	d7
-		add.w	#$2000,d4
-		bsr.s	.make_attr
-		jmp	(RAM_EmuLoop).l
-
-; ----------------------------------------------------------------
-; d4 - VDP plane pos
-; d7 - pal bits
-
-.make_attr:
-		moveq	#0,d5			; TL
-		move.b	d7,d5
-		and.w	#%11,d5
-		lsl.w	#8,d5
-		lsl.w	#5,d5
-		swap	d5
-		move.b	d7,d5
-		and.w	#%11,d5
-		lsl.w	#8,d5
-		lsl.w	#5,d5
-		bsr	.pick_color
-		add.w	#4,d4			; TR
-		moveq	#0,d5
-		move.b	d7,d5
-		and.w	#%1100,d5
-		lsl.w	#8,d5
-		lsl.w	#3,d5
-		swap	d5
-		move.b	d7,d5
-		and.w	#%1100,d5
-		lsl.w	#8,d5
-		lsl.w	#3,d5
-		bsr	.pick_color
-		sub.w	#4,d4			; BL
-		add.w	#$100,d4
-		moveq	#0,d5
-		move.b	d7,d5
-		and.w	#%110000,d5
-		lsl.w	#8,d5
-		lsl.w	#1,d5
-		swap	d5
-		move.b	d7,d5
-		and.w	#%110000,d5
-		lsl.w	#8,d5
-		lsl.w	#1,d5
-		bsr	.pick_color
-		add.w	#4,d4			; BR
-		moveq	#0,d5
-		move.b	d7,d5
-		and.w	#%11000000,d5
-		lsl.w	#7,d5
-		swap	d5
-		move.b	d7,d5
-		and.w	#%11000000,d5
-		lsl.w	#7,d5
-; 		bsr	.pick_color
-
-.pick_color:
+		andi.w	#7,d7
+		lsl.w	#2,d7			; first column
+		andi.w	#$2C00,d4		; the nametable
+		or.w	d7,d4
+		or.w	d6,d4
+		lea	(a3,d4.w),a0		; the first cell's tile
+		lsl.w	#2,d6			; row * 128
+		add.w	d7,d7
+		add.w	d7,d6			; + column * 2
+		btst	#11,d4
+		beq.s	.plane_a
+		addi.w	#$2000,d6
+.plane_a:
+		btst	#10,d4
+		beq.s	.left
+		addi.w	#$40,d6
+.left:
+		move.w	#$40,d4			; the mirror: the other half
+		tst.w	ppuMirror(a4)
+		beq.s	.other
+		move.w	#$2000,d4		; or the other plane
+.other:
 		move.w	#$2700,sr
-		move.w	d4,4(a6)
-		move.w	#3,4(a6)
-		move.l	(a6),d6
-		and.l	#$9FFF9FFF,d6
-		or.l	d5,d6
-		or.w	#$4000,d4
-		move.w	d4,4(a6)
-		move.w	#3,4(a6)
-		move.l	d6,(a6)
-		and.w	#$3FFF,d4
-		add.w	#$80,d4
-		move.w	d4,4(a6)
-		move.w	#3,4(a6)
-		move.l	(a6),d6
-		and.l	#$9FFF9FFF,d6
-		or.l	d5,d6
-		or.w	#$4000,d4
-		move.w	d4,4(a6)
-		move.w	#3,4(a6)
-		move.l	d6,(a6)
-		and.w	#$3FFF,d4
-		sub.w	#$80,d4
+		move.w	d5,d0			; top left, top right
+		bsr.s	.palettes
+		bsr.s	.two_rows
+		move.w	(sp),d7
+		andi.w	#$38,d7
+		cmpi.w	#$38,d7			; the last attribute row
+		beq.s	.done
+		move.w	d5,d0			; bottom left, bottom right
+		lsr.w	#4,d0
+		bsr.s	.palettes
+		bsr.s	.two_rows
+.done:
 		move.w	#$2000,sr
+		addq.w	#2,sp
+		movem.l	(sp)+,d0-d3/a0
+		moveq	#0,d7
+		jmp	(RAM_EmuLoop).l
+
+; d0 - attribute bits: 1-0 left, 3-2 right -> d0, d1: MD cell bits
+.palettes:
+		move.w	d0,d1
+		lsr.w	#2,d1
+		andi.w	#3,d0
+		andi.w	#3,d1
+		ror.w	#3,d0
+		ror.w	#3,d1
+		ori.w	#$8000,d0
+		ori.w	#$8000,d1
+		rts
+
+; two rows of 4 cells, left two with palette d0, right two with d1
+; a0 - tiles, d6 - MD plane offset, d4 - the mirror's offset (eor)
+.two_rows:
+		bsr.w	.one_row		; (the next instruction: .s can't reach it)
+.one_row:
+		moveq	#0,d2
+		move.b	(a0),d2
+		or.w	d0,d2
+		swap	d2
+		move.w	d0,d2
+		or.b	1(a0),d2		; cells 0, 1
+		moveq	#0,d3
+		move.b	2(a0),d3
+		or.w	d1,d3
+		swap	d3
+		move.w	d1,d3
+		or.b	3(a0),d3		; cells 2, 3
+		move.w	d6,d7
+		ori.w	#$4000,d7
+		move.w	d7,4(a6)
+		move.w	#3,4(a6)
+		move.l	d2,(a6)
+		move.l	d3,(a6)
+		move.w	d6,d7
+		eor.w	d4,d7
+		ori.w	#$4000,d7
+		move.w	d7,4(a6)
+		move.w	#3,4(a6)
+		move.l	d2,(a6)
+		move.l	d3,(a6)
+		lea	32(a0),a0
+		addi.w	#128,d6
 		rts
 
 ; ----------------------------------------------------------------

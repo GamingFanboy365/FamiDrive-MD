@@ -209,3 +209,25 @@ rcWrite16:
 		andi.w	#$FF,d4
 		lsr.w	#8,d6
 		bra	addr_Write		; its handlers return through RAM_EmuLoop
+
+; ----------------------------------------------------------------
+; Read from a controller port: $4016/$4017, or $4016,X and the
+; like, which games use to read either pad. Saves the trip through
+; addr_Read to APU_Input_1/2.
+;
+; d4.w - 6502 address - $4016 (0: $4016, 1: $4017)
+; d7 - value read
+; ----------------------------------------------------------------
+
+rcReadPad:
+		cmpi.w	#1,d4
+		bhi.s	.other
+		add.w	d4,d4
+		move.w	cpuInputData(a4,d4.w),d7
+		andi.w	#1,d7
+		lsr	cpuInputData(a4,d4.w)
+		rts
+.other:
+		move.w	d4,d6
+		addi.w	#$4016,d6
+		bra.s	rcRead16

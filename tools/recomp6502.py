@@ -158,6 +158,22 @@ def inline_table_routine(prg, f):
 	return False
 
 
+def engine_pattern(prg, f):
+	"""(zp1, zp2) if the routine at f is the usual jump engine: ASL A,
+	TAY, PLA, STA zp1, PLA, STA zp1+1, INY, LDA (zp1),Y, STA zp2, INY,
+	LDA (zp1),Y, STA zp2+1, JMP (zp2). A JSR to it then becomes a direct
+	jump (Gen.emit_engine_call)."""
+	b = [prg.byte(f + k) for k in range(22)] if f >= 0x8000 and f + 22 <= 0x10000 else []
+	if len(b) < 22 or b[:3] != [0x0A, 0xA8, 0x68]:
+		return None
+	z1 = b[4]
+	want = [0x0A, 0xA8, 0x68, 0x85, z1, 0x68, 0x85, (z1 + 1) & 0xFF, 0xC8, 0xB1, z1, 0x85, b[12],
+		0xC8, 0xB1, z1, 0x85, (b[12] + 1) & 0xFF, 0x6C, b[12], 0x00]
+	if b[:21] != want or z1 == 0xFF or b[12] == 0xFF:
+		return None
+	return z1, b[12]
+
+
 def inline_table(prg, at):
 	"""Targets of an address table right after a JSR to a jump engine."""
 	found = []
@@ -623,6 +639,9 @@ class Gen:
 				return self.ram_indexed(i, r)
 			if a >= 0x8000 and a + self.index_hi(i) <= 0xFFFF:
 				return ['lea $%04X(a1),a5' % (a & 0x7FFF)], '(a5,%s.w)' % r
+			if a in (0x4016, 0x4017):	# a controller port, by the index
+				return ['move.w %s,d4' % r] + (['addq.w #1,d4'] if a & 1 else []) + \
+				       ['jsr rcReadPad'], 'd7'
 			return ['move.w #$%04X,d6' % a, 'add.w %s,d6' % r, 'jsr rcRead16'], 'd7'
 		if m == 'indy' and self.fast and 'ptr' in self.fast:
 			return [], self.ix(0, 'd2', 'a5')	# pointer checked and loaded into a5
@@ -683,6 +702,8 @@ class Gen:
 		return ['move.w %s,d6' % r, 'addi.b #$%02X,d6' % a], '(a2,d6.w)'
 
 	def io_read(self, a):
+		if a in (0x4016, 0x4017):
+			return ['moveq #%d,d4' % (a - 0x4016), 'jsr rcReadPad'], 'd7'
 		if a < 0x4000:
 			return ['moveq #$%02X,d4' % (a & 7), 'jsr rdFrom_PPU'], 'd7'
 		if a < 0x4100:
@@ -832,7 +853,10 @@ class Gen:
 				n = sum(1 for i in body if i.mode == 'zp' and i.arg == reg and
 					i.m in ('STA', 'STX', 'STY', 'INC', 'DEC', 'ASL', 'LSR', 'ROL', 'ROR'))
 			else:
-				n = sum(1 for i in body if i.m in writes[reg])
+				# one write, or a run of the same INX/INY/DEX/DEY just
+				# before the branch (a stride of 2, 4...)
+				ws = [i for i in body if i.m in writes[reg]]
+				n = 1 if ws and all(w.m == p.m for w in ws) and ws == body[-len(ws):] else len(ws)
 			if ok and pc == b.pc and n == 1:
 				found.add(b.pc)
 		return found
@@ -888,8 +912,29 @@ class Gen:
 
 	# ---- one instruction ---------------------------------------------------
 
+	def inc_run(self, i):
+		"""INX/INY/DEX/DEY: the run of the same instruction that i starts
+		(none of the others a jump target), or [] when i continues one."""
+		if i.m not in ('INX', 'INY', 'DEX', 'DEY') or self.fast:
+			return [i]
+		p = self.insns.get(i.pc - 1)
+		if p is not None and p.m == i.m and i.pc not in self.targets:
+			return []
+		run = [i]
+		while len(run) < 8:
+			n = self.insns.get(run[-1].pc + 1)
+			if n is None or n.m != i.m or n.pc in self.targets:
+				break
+			run.append(n)
+		return run
+
 	def emit(self, i, nxt_i):
 		m = i.m
+		run = self.inc_run(i)
+		if not run:
+			return			# counted in by the first of its run
+		if len(run) > 1:		# flags and branch as after the last
+			i, nxt_i = run[-1], self.insns.get(run[-1].pc + 1)
 		live = i.live_out
 		defs = DEFS.get(m, 0)
 		need = defs & live
@@ -938,7 +983,7 @@ class Gen:
 				self.fast['off']['d1' if m[2] == 'X' else 'd2'] += 1 if m[0] == 'I' else -1
 		elif m in ('INX', 'INY', 'DEX', 'DEY'):
 			r = 'd1' if m[2] == 'X' else 'd2'
-			self.e('%s.b #1,%s' % ('addq' if m[0] == 'I' else 'subq', r))
+			self.e('%s.b #%d,%s' % ('addq' if m[0] == 'I' else 'subq', len(run), r))
 			nz_done()
 		elif m in ('INC', 'DEC'):
 			op = 'addq' if m == 'INC' else 'subq'
@@ -1085,6 +1130,8 @@ class Gen:
 					hi = (p & 0xFF00) | ((p + 1) & 0xFF)	# 6502 page wrap bug
 					self.e('move.b $%04X(a2),d4' % (hi & 0x7FF), 'lsl.w #8,d4',
 					       'move.b $%04X(a2),d4' % (p & 0x7FF), 'jmp rcDispatch')
+		elif m == 'JSR' and not self.fast and i.arg in self.engines and self.engine_table(i):
+			self.emit_engine_call(i)
 		elif m == 'JSR' and i.arg in self.callable:
 			if self.callable[i.arg][1]:
 				ret = i.pc + 2
@@ -1127,6 +1174,36 @@ class Gen:
 			pass				# emitted with the previous instruction or below
 		else:
 			raise ValueError(m)
+
+	def engine_table(self, i):
+		"""Targets of the address table after a JSR to a jump engine,
+		if they are all translated."""
+		t = inline_table(self.prg, i.pc + 3)
+		return t if t and all(a in self.insns for a in t) else None
+
+	def emit_engine_call(self, i):
+		"""JSR to a jump engine (engine_pattern) with entry A of the table
+		after it: straight to the entry, leaving what the engine would."""
+		z1, z2 = self.engines[i.arg]
+		t = self.engine_table(i)
+		ret, tbl = i.pc + 2, i.pc + 3
+		g = 'Jg_%04X' % i.pc
+		self.e('cmpi.b #%d,d0' % len(t), 'bcc.w ' + g)	# not in the table: the engine
+		# the return address it pushed, and pulled again
+		self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
+		       'move.b #$%02X,(a2,d3.w)' % (ret & 0xFF), 'addq.b #1,d3', 'swap d3',
+		       'move.b #$%02X,$%02X(a2)' % (ret & 0xFF, z1), 'move.b #$%02X,$%02X(a2)' % (ret >> 8, z1 + 1),
+		       'moveq #0,d6', 'move.b d0,d6', 'add.w d6,d6',	# ASL A, TAY
+		       'move.b d6,d2', 'addq.b #2,d2',			# two INY
+		       'lea $%04X(a1),a5' % (tbl & 0x7FFF),
+		       'move.b (a5,d6.w),$%02X(a2)' % z2, 'move.b 1(a5,d6.w),d0', 'move.b d0,$%02X(a2)' % (z2 + 1),
+		       'andi.b #$E2,d3', 'tst.b d0', 'move sr,d5', 'andi.w #$C,d5', 'or.b d5,d3',	# C from ASL: 0
+		       'add.w d6,d6', 'lea Jt_%04X(pc),a5' % i.pc, 'movea.l (a5,d6.w),a5', 'jmp (a5)')
+		self.xc = False
+		self.stubs += ['Jt_%04X:' % i.pc] + ['\t\tdc.l %s' % self.lab(a) for a in t]
+		self.stubs += [g + ':', '\t\tswap d3', '\t\tmove.b #$%02X,(a2,d3.w)' % (ret >> 8), '\t\tsubq.b #1,d3',
+			       '\t\tmove.b #$%02X,(a2,d3.w)' % (ret & 0xFF), '\t\tsubq.b #1,d3', '\t\tswap d3',
+			       '\t\tjmp %s' % self.lab(i.arg)]
 
 	def rmw_generic(self, i, ops, need, kind):
 		"""Read-modify-write on an I/O or computed address."""
@@ -1690,6 +1767,11 @@ def main():
 	liveness(insns, {i.pc + 3 for i in insns.values() if i.m == 'JSR'} | set(extra), tables, user + sorted(rts))
 	g = Gen(prg, insns)
 	g.tables = tables
+	g.engines = {}
+	for i in insns.values():
+		if i.m == 'JSR' and i.arg not in g.engines:
+			g.engines[i.arg] = engine_pattern(prg, i.arg)
+	g.engines = {a: z for a, z in g.engines.items() if z}
 	entries = set(vectors) | set(extra) | {i.pc + 3 for i in insns.values() if i.m == 'JSR'}
 	g.ranges = ranges(insns, entries)
 	g.entries = entries

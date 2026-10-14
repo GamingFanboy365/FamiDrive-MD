@@ -200,13 +200,10 @@ apuUpdate:
 .no_noise:
 
 	; frame sequencer, 4-step mode: quarter frames at 240 Hz,
-	; half frames at 120 Hz. One MD frame = Q, Q+H, Q, Q+H.
-		moveq	#1,d7
-.sequence:
-		bsr	apuQuarter
-		bsr	apuQuarter
-		bsr	apuHalf
-		dbf	d7,.sequence
+	; half frames at 120 Hz. One MD frame = Q, Q+H, Q, Q+H. The units
+	; don't affect each other, so each is clocked its 4 or 2 times in
+	; one go.
+		bsr	apuSequence
 
 	; outputs
 		lea	apuCh1(a5),a0
@@ -261,135 +258,167 @@ apuPulseWrites:
 		rts
 
 ; ----------------------------------------------------------------
-; Quarter frame: envelopes, triangle linear counter
+; One MD frame of the frame sequencer: four quarter frames (envelopes,
+; triangle linear counter), two half frames (length counters, sweep)
 ; ----------------------------------------------------------------
 
-apuQuarter:
+apuSequence:
 		lea	apuCh1(a5),a0
 		move.b	apuRegs+$00(a5),d0
-		bsr.s	apuEnvelope
+		bsr	apuEnvelope4
 		lea	apuCh2(a5),a0
 		move.b	apuRegs+$04(a5),d0
-		bsr.s	apuEnvelope
+		bsr	apuEnvelope4
 		lea	apuChN(a5),a0
 		move.b	apuRegs+$0C(a5),d0
-		bsr.s	apuEnvelope
+		bsr	apuEnvelope4
 
-		tst.b	apuTriReload(a5)
+		move.b	apuRegs+$08(a5),d0	; triangle linear counter
+		move.b	apuTriLinear(a5),d1
+		move.b	apuTriReload(a5),d2
+		moveq	#4-1,d4
+.linear:
+		tst.b	d2
 		beq.s	.count
-		move.b	apuRegs+$08(a5),d0
-		andi.b	#$7F,d0
-		move.b	d0,apuTriLinear(a5)
+		move.b	d0,d1
+		andi.b	#$7F,d1
 		bra.s	.control
 .count:
-		tst.b	apuTriLinear(a5)
+		tst.b	d1
 		beq.s	.control
-		subq.b	#1,apuTriLinear(a5)
+		subq.b	#1,d1
 .control:
-		tst.b	apuRegs+$08(a5)		; control flag keeps reloading
+		tst.b	d0			; control flag keeps reloading
 		bmi.s	.keep
-		sf	apuTriReload(a5)
+		moveq	#0,d2
 .keep:
-		rts
+		dbf	d4,.linear
+		move.b	d1,apuTriLinear(a5)
+		move.b	d2,apuTriReload(a5)
 
-; a0 - channel state, d0 - its volume register (--LC VVVV)
-apuEnvelope:
-		move.b	d0,d1
-		andi.b	#$0F,d1
-		tst.b	apuCh_EnvStart(a0)
-		beq.s	.clock
-		sf	apuCh_EnvStart(a0)
-		move.b	#15,apuCh_EnvDecay(a0)
-		move.b	d1,apuCh_EnvDiv(a0)
-		rts
-.clock:
-		tst.b	apuCh_EnvDiv(a0)
-		beq.s	.reload
-		subq.b	#1,apuCh_EnvDiv(a0)
-		rts
-.reload:
-		move.b	d1,apuCh_EnvDiv(a0)
-		tst.b	apuCh_EnvDecay(a0)
-		beq.s	.zero
-		subq.b	#1,apuCh_EnvDecay(a0)
-		rts
-.zero:
-		btst	#5,d0			; loop
-		beq.s	.done
-		move.b	#15,apuCh_EnvDecay(a0)
-.done:
-		rts
-
-; ----------------------------------------------------------------
-; Half frame: length counters, sweep
-; ----------------------------------------------------------------
-
-apuHalf:
+	; two half frames: length counters
 		lea	apuCh1(a5),a0
 		move.b	apuRegs+$00(a5),d0
-		bsr.s	apuLength
+		bsr.s	apuLength2
 		lea	apuCh2(a5),a0
 		move.b	apuRegs+$04(a5),d0
-		bsr.s	apuLength
+		bsr.s	apuLength2
 		lea	apuChN(a5),a0
 		move.b	apuRegs+$0C(a5),d0
-		bsr.s	apuLength
-
+		bsr.s	apuLength2
 		tst.b	apuRegs+$08(a5)		; triangle halt is bit 7
 		bmi.s	.tri_halt
-		tst.b	apuTriLength(a5)
-		beq.s	.tri_halt
-		subq.b	#1,apuTriLength(a5)
+		move.b	apuTriLength(a5),d1
+		subq.b	#2,d1
+		bcc.s	.tri_left
+		moveq	#0,d1
+.tri_left:
+		move.b	d1,apuTriLength(a5)
 .tri_halt:
-
+	; and sweep
 		lea	apuCh1(a5),a0
 		move.b	apuRegs+$01(a5),d0
 		moveq	#1,d2
-		bsr.s	apuSweep
+		bsr.s	apuSweep2
 		lea	apuCh2(a5),a0
 		move.b	apuRegs+$05(a5),d0
 		moveq	#0,d2
-		bra.s	apuSweep
+		bra.s	apuSweep2
 
+; two half-frame clocks of a length counter
 ; a0 - channel state, d0 - its volume register (bit 5 halts)
-apuLength:
+apuLength2:
 		btst	#5,d0
-		bne.s	.done
-		tst.b	apuCh_Length(a0)
-		beq.s	.done
-		subq.b	#1,apuCh_Length(a0)
-.done:
+		bne.s	.halted
+		move.b	apuCh_Length(a0),d1
+		subq.b	#2,d1
+		bcc.s	.left
+		moveq	#0,d1
+.left:
+		move.b	d1,apuCh_Length(a0)
+.halted:
 		rts
 
+; two half-frame clocks of a sweep unit
 ; a0 - channel state, d0 - its sweep register (EPPP NSSS)
 ; d2 - 1 for pulse 1 (it negates with one's complement)
-apuSweep:
-		bsr.s	apuSweepTarget
-		tst.b	apuCh_SweepDiv(a0)
-		bne.s	.divider
-		tst.b	d0			; enabled?
-		bpl.s	.divider
+apuSweep2:
+		move.w	apuCh_Period(a0),d4
+		move.b	apuCh_SweepDiv(a0),d5
+		move.b	apuCh_SweepLoad(a0),d6
 		move.b	d0,d1
-		andi.b	#7,d1			; shift 0 never changes the period
+		andi.w	#7,d1			; shift
+		moveq	#2-1,d7
+.clock:
+		move.w	d4,d3			; target period
+		lsr.w	d1,d3
+		btst	#3,d0
+		beq.s	.add
+		neg.w	d3
+		sub.w	d2,d3
+.add:
+		add.w	d4,d3
+		tst.b	d5			; divider at 0, enabled, shift not 0,
+		bne.s	.divider		; period and target in range: update
+		tst.b	d0
+		bpl.s	.divider
+		tst.w	d1
 		beq.s	.divider
 		cmpi.w	#8,d4
 		bcs.s	.divider
 		cmpi.w	#$7FF,d3
 		bhi.s	.divider
-		move.w	d3,apuCh_Period(a0)
+		move.w	d3,d4
 .divider:
-		tst.b	apuCh_SweepLoad(a0)
+		tst.b	d6
 		bne.s	.reload
-		tst.b	apuCh_SweepDiv(a0)
+		tst.b	d5
 		beq.s	.reload
-		subq.b	#1,apuCh_SweepDiv(a0)
-		rts
+		subq.b	#1,d5
+		bra.s	.next
 .reload:
-		sf	apuCh_SweepLoad(a0)
+		moveq	#0,d6
+		move.b	d0,d5
+		lsr.b	#4,d5
+		andi.b	#7,d5
+.next:
+		dbf	d7,.clock
+		move.w	d4,apuCh_Period(a0)
+		move.b	d5,apuCh_SweepDiv(a0)
+		move.b	d6,apuCh_SweepLoad(a0)
+		rts
+
+; four quarter-frame clocks of an envelope
+; a0 - channel state, d0 - its volume register (--LC VVVV)
+apuEnvelope4:
 		move.b	d0,d1
-		lsr.b	#4,d1
-		andi.b	#7,d1
-		move.b	d1,apuCh_SweepDiv(a0)
+		andi.b	#$0F,d1			; period
+		move.b	apuCh_EnvStart(a0),d5
+		move.b	apuCh_EnvDiv(a0),d2
+		move.b	apuCh_EnvDecay(a0),d3
+		moveq	#4-1,d4
+.clock:
+		tst.b	d5
+		beq.s	.run
+		moveq	#0,d5			; restart
+		moveq	#15,d3
+		move.b	d1,d2
+		bra.s	.next
+.run:
+		subq.b	#1,d2			; divider
+		bcc.s	.next
+		move.b	d1,d2
+		subq.b	#1,d3			; decay level
+		bcc.s	.next
+		moveq	#0,d3
+		btst	#5,d0			; loop
+		beq.s	.next
+		moveq	#15,d3
+.next:
+		dbf	d4,.clock
+		move.b	d5,apuCh_EnvStart(a0)
+		move.b	d2,apuCh_EnvDiv(a0)
+		move.b	d3,apuCh_EnvDecay(a0)
 		rts
 
 ; In: a0 - channel state, d0 - sweep register, d2 - pulse 1 flag

@@ -32,7 +32,7 @@ The build uses the [AS macro assembler](http://john.ccac.rwth-aachen.de:8000/as/
 6502 code into 68000 code at build time with `tools/recomp6502.py`, instead of interpreting it
 while the game runs. Games that use a lot of CPU run many times faster: Pinball's gameplay goes
 from about 3.5 to about 55 game frames per second, as fast as on a NES (which also drops frames
-when the game is busy).
+when the game is busy), and Super Mario Bros. runs at full speed (60) while you play.
 
 The translated code goes to `out/recomp.asm`. It is the game's code in another form, so like the
 built ROM it stays out of git and shouldn't be published. Code the recompiler can't find ahead of
@@ -81,10 +81,11 @@ Anything else shows an error screen saying what isn't supported.
 - **Slow when interpreted.** Emulating a 6502 plus the PPU on a 68000 is a stretch. Games that
   use a lot of CPU run far below full speed when interpreted (Pinball's gameplay runs at about
   6%), and their music slows down with them. Recompile them: Pinball then plays at NES speed,
-  though its attract demo still runs at about 91%
-- Graphics glitches from timing inaccuracy. Sprite 0 hit and scroll splits are timed by counting
-  MD scanlines from the start of the game's frame, so split-screen effects can be off by a few
-  lines, and only horizontal splits are supported
+  though its attract demo still runs at about 94%
+- Graphics glitches from timing inaccuracy. The emulator can't tell which line the NES would be
+  drawing, so sprite 0 hit is reported when the game polls for it, and the scroll change that
+  follows is placed on sprite 0's line. Split-screen effects timed any other way can be off by a
+  few lines, and only horizontal splits are supported
 - Sound is approximate: no DMC (sample) channel, the PSG only plays 50% squares so pulse duty is
   approximated by volume, pulse notes below about 109 Hz play an octave up, and timing assumes
   an NTSC console

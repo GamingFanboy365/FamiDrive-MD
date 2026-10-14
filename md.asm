@@ -87,7 +87,10 @@ ppuChrRam	ds.w 1			; 1 - pattern tables are CHR-RAM
 vdpScrlX	ds.l 1
 vdpScrlY	ds.l 1
 vdpPalette	ds.w 64
+vdpPalDirty	ds.b 1			; vdpPalette changed since the last DMA
+		ds.b 1
 vdpSprData	ds.w 8*64
+vdpSprWords	ds.w 1			; words of vdpSprData in use (APU_OAMDMA)
 fpsIdle		ds.w 1			; FPS counter (emu/fps.asm)
 fpsTick		ds.w 1
 fpsShow		ds.w 1
@@ -101,11 +104,13 @@ hsCur		ds.l 8
 hsTopDone	ds.l 1			; the previous game frame's
 hsDoneN		ds.w 1
 hsDone		ds.l 8
-hsTable		ds.l 224		; one long per line, DMAed to the HScroll table
+hsShown		ds.l 1			; the scroll last set (hsApply): as hsTopCur,
+		ds.w 1			; hsCurN
+		ds.l 8			; and hsCur
+hsShownOk	ds.w 1			; hsShown is valid
 ppuTX		ds.w 1			; the PPU's horizontal scroll (t register): nametable X, coarse X, fine X
 ppuMaskOn	ds.w 1			; $2001 shows the background or sprites
 ppuMaskNew	ds.w 1			; $2001 write for the next VBlank (bit 15: pending)
-hsLines		ds.w 1			; 1 - hsTable has splits (line scroll), 0 - one scroll
 ppuSp0State	ds.w 1			; what the game saw of sprite 0 hit this frame (rdPPU_Status)
 ppuRdSite	ds.l 1			; where the last $2002 read came from (rdPPU_Status)
 vbLate		ds.w 1			; a VBlank came during the NMI handler: next NMI on its RTI
@@ -396,12 +401,30 @@ MD_Vint:
 		bne.s	.nmi_on
 		jsr	ppuFrameStart
 .nmi_on:
-		jsr	ppuMaskApply			; $2001 takes effect here, not mid-screen
-		jsr	hsBuild				; line scroll table, DMAed below
+		tst.w	cpuFamiVint(a4)			; $2001 takes effect here, not
+		beq.s	.mask				; mid-screen, and not while the game
+		cmpi.w	#2,ppuSp0State(a4)		; is in its VBlank work (in its NMI
+		bne.s	.mask_later			; handler, before sprite 0 hit):
+.mask:							; that only shows from the next frame
+		jsr	ppuMaskApply
+.mask_later:
 		move.w	#$8F02,4(a6)
 		move.l	#$40000010,4(a6)
 		move.l	vdpScrlY(a4),(a6)
-		move.l	#$94019318,4(a6)
+		if FPS
+		move.l	#$94019318,4(a6)		; 64 sprites and the counter's 6
+		else
+		move.w	vdpSprWords(a4),d0		; the sprites listed
+		bne.s	.spr_words
+		moveq	#4,d0				; none yet
+.spr_words:
+		move.w	#$9300,d1
+		move.b	d0,d1
+		move.w	d1,4(a6)
+		lsr.w	#8,d0
+		ori.w	#$9400,d0
+		move.w	d0,4(a6)
+		endif
 		move.w	#$0100,(z80_bus).l
 		move.l	#$96009500+(((RAM_Fami_Emu+vdpSprData)<<7)&$FF0000)|(((RAM_Fami_Emu+vdpSprData)>>1)&$FF),4(a6)
 		move.w	#$9700|(((RAM_Fami_Emu+vdpSprData)>>17)&$7F),4(a6)
@@ -410,6 +433,9 @@ MD_Vint:
 .wait:		btst	#0,(z80_bus).l
 		bne.s	.wait
 		move.w	(sp)+,4(a6)
+		tst.b	vdpPalDirty(a4)			; palette, if it changed
+		beq.s	.same_palette
+		sf	vdpPalDirty(a4)
 		move.l	#$94009340,4(a6)
 		move.l	#$96009500+(((RAM_Fami_Emu+vdpPalette)<<7)&$FF0000)|(((RAM_Fami_Emu+vdpPalette)>>1)&$FF),4(a6)
 		move.w	#$9700|(((RAM_Fami_Emu+vdpPalette)>>17)&$7F),4(a6)
@@ -418,21 +444,8 @@ MD_Vint:
 .wait2:		btst	#0,(z80_bus).l
 		bne.s	.wait2
 		move.w	(sp)+,4(a6)
-		tst.w	hsLines(a4)
-		bne.s	.hs_lines
-		move.w	#$8B00,4(a6)			; one scroll for the screen
-		move.l	#$78000002,4(a6)		; HScroll table at $B800
-		move.l	hsTable(a4),(a6)
-		bra.s	.hs_done
-.hs_lines:
-		move.w	#$8B03,4(a6)			; per line
-		move.l	#$940193C0,4(a6)		; 224 lines * 2 words
-		move.l	#$96009500+(((RAM_Fami_Emu+hsTable)<<7)&$FF0000)|(((RAM_Fami_Emu+hsTable)>>1)&$FF),4(a6)
-		move.w	#$9700|(((RAM_Fami_Emu+hsTable)>>17)&$7F),4(a6)
-		move.w	#$7800,4(a6)
-		move.w	#$0002|$80,-(sp)
-		move.w	(sp)+,4(a6)
-.hs_done:
+.same_palette:
+		jsr	hsApply				; horizontal scroll
 		bsr	apuUpdate			; needs the Z80 bus
 		move.w	#0,(z80_bus).l			; Release Z80
 		bsr	readInput
