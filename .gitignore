@@ -11,3 +11,6 @@ md.h
 
 # Python
 __pycache__/
+
+# Disassemblies and other reference material for games: never committed
+reference/

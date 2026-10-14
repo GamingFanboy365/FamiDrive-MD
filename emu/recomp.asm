@@ -128,12 +128,13 @@ rcNmiIdle:
 rcNmi:
 		clr.w	FamiMdVint(a4)
 		move.w	#$80,ppuStatus(a4)
-		tst.w	cpuFamiVint(a4)		; already in the NMI handler
-		bne.s	.none
+		tst.w	cpuFamiVint(a4)		; already in the NMI handler: the
+		bne.s	.late			; next NMI when it returns (rcRti)
 		tst.w	ppuNmiFlag(a4)
 		beq.s	.none
 		addq.l	#4,sp			; not returning
 		move.w	#1,cpuFamiVint(a4)
+		jsr	ppuFrameStart
 		swap	d3			; push PC
 		move.w	d4,d6
 		lsr.w	#8,d6
@@ -151,8 +152,27 @@ rcNmi:
 		move.w	#1,cpuModeIntDis(a4)
 		move.w	#rcVecNmi,d4
 		bra	rcDispatch
+.late:
+		move.w	#1,vbLate(a4)
 .none:
 		rts
+
+; ----------------------------------------------------------------
+; RTI, after the 6502 code popped P and the PC (d4)
+;
+; A game whose frame outlasts an MD frame would otherwise wait for
+; the VBlank after next: each frame would take two. Its next NMI
+; comes as soon as the handler returns instead.
+; ----------------------------------------------------------------
+
+rcRti:
+		clr.w	cpuFamiVint(a4)
+		tst.w	vbLate(a4)
+		beq.s	.on_time
+		clr.w	vbLate(a4)
+		move.w	#1,FamiMdVint(a4)
+.on_time:
+		bra	rcDispatch
 
 ; ----------------------------------------------------------------
 ; Read/write at a computed address
@@ -189,3 +209,25 @@ rcWrite16:
 		andi.w	#$FF,d4
 		lsr.w	#8,d6
 		bra	addr_Write		; its handlers return through RAM_EmuLoop
+
+; ----------------------------------------------------------------
+; Read from a controller port: $4016/$4017, or $4016,X and the
+; like, which games use to read either pad. Saves the trip through
+; addr_Read to APU_Input_1/2.
+;
+; d4.w - 6502 address - $4016 (0: $4016, 1: $4017)
+; d7 - value read
+; ----------------------------------------------------------------
+
+rcReadPad:
+		cmpi.w	#1,d4
+		bhi.s	.other
+		add.w	d4,d4
+		move.w	cpuInputData(a4,d4.w),d7
+		andi.w	#1,d7
+		lsr	cpuInputData(a4,d4.w)
+		rts
+.other:
+		move.w	d4,d6
+		addi.w	#$4016,d6
+		bra.s	rcRead16

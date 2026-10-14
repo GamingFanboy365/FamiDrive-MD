@@ -59,6 +59,7 @@ fpsInit:
 		dbf	d7,.link
 		move.w	#$0000,vdpPalette+14*2(a4)	; colors 14 and 15 of the
 		move.w	#$0EEE,vdpPalette+15*2(a4)	; first line: NES colors don't use them
+		st	vdpPalDirty(a4)
 		move.w	#1,fpsOn(a4)
 		rts
 

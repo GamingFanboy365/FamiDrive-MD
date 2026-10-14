@@ -87,13 +87,35 @@ ppuChrRam	ds.w 1			; 1 - pattern tables are CHR-RAM
 vdpScrlX	ds.l 1
 vdpScrlY	ds.l 1
 vdpPalette	ds.w 64
+vdpPalDirty	ds.b 1			; vdpPalette changed since the last DMA
+		ds.b 1
 vdpSprData	ds.w 8*64
+vdpSprWords	ds.w 1			; words of vdpSprData in use (APU_OAMDMA)
 fpsIdle		ds.w 1			; FPS counter (emu/fps.asm)
 fpsTick		ds.w 1
 fpsShow		ds.w 1
 fpsOn		ds.w 1
 fpsWasOn	ds.w 1
 padXyz		ds.w 1
+vNmi		ds.w 1			; ppuClock when the game's frame began (ppuFrameStart)
+hsTopCur	ds.l 1			; this game frame's scroll from the top (planes A, B)
+hsCurN		ds.w 1			; and its splits: line, scroll
+hsCur		ds.l 8
+hsTopDone	ds.l 1			; the previous game frame's
+hsDoneN		ds.w 1
+hsDone		ds.l 8
+hsShown		ds.l 1			; the scroll last set (hsApply): as hsTopCur,
+		ds.w 1			; hsCurN
+		ds.l 8			; and hsCur
+hsShownOk	ds.w 1			; hsShown is valid
+ppuTX		ds.w 1			; the PPU's horizontal scroll (t register): nametable X, coarse X, fine X
+ppuMaskOn	ds.w 1			; $2001 shows the background or sprites
+ppuMaskNew	ds.w 1			; $2001 write for the next VBlank (bit 15: pending)
+ppuSp0State	ds.w 1			; what the game saw of sprite 0 hit this frame (rdPPU_Status)
+ppuRdSite	ds.l 1			; where the last $2002 read came from (rdPPU_Status)
+vbLate		ds.w 1			; a VBlank came during the NMI handler: next NMI on its RTI
+ppuNtXor	ds.w 1			; nametable address xor for the mirrored copy ($400 or $800)
+ppuCmdXor	ds.l 1			; and VDP command xor for its cells (ppuDrwCell)
 		finish
 
 ; ====================================================================
@@ -246,27 +268,23 @@ list_InitRegs:	dc.w $8000		; d5
 
 
 Fami_InitVideo:
+		move.w	#$8124,4(a6)		; display off: the VDP takes VRAM writes much
+						; faster (ppuMaskApply turns it on with the
+						; game's rendering)
 		move.w	#$8F02,4(a6)
 
 	; Clear all of VRAM: a real console (and some emulators, like
-	; AtGames') starts with garbage there, and the planes below use
-	; tile $200, past the NES CHR tiles, as the blank tile
+	; AtGames') starts with garbage there
 		move.l	#$40000000,4(a6)
 		move.w	#($10000/4)-1,d7
 .clrvram:
 		move.l	#0,(a6)
 		dbf	d7,.clrvram
 
-		move.w	#$FFF,d7
-		move.l	#$40000003,4(a6)
-.loopfg:
-		move.w	#$200,(a6)
-		dbf	d7,.loopfg
-		move.w	#$FFF,d7
-		move.l	#$60000003,4(a6)
-.loopbg:
-		move.w	#$200,(a6)
-		dbf	d7,.loopbg
+		move.l	#$40000003,4(a6)	; plane A
+		bsr.s	.plane
+		move.l	#$60000003,4(a6)	; plane B
+		bsr.s	.plane
 		move.l	#$68000002,4(a6)
 		move.l	#0,(a6)
 		move.l	#$40000010,4(a6)
@@ -277,6 +295,21 @@ Fami_InitVideo:
 .clrpal:
 		move.w	#0,(a6)
 		dbf	d7,.clrpal
+		rts
+
+; The NES nametables' rows (0-29) as the empty copy of them in RAM
+; (tile 0, attribute 0) draws them, so that writing a byte that
+; doesn't change can skip VRAM (wrPPU_Data); rows 30-31 and the
+; next 4 KB (unused) with tile $200, past the NES tiles: blank
+.plane:
+		move.w	#30*64-1,d7
+.cells:
+		move.w	#$8000,(a6)
+		dbf	d7,.cells
+		move.w	#2*64+$1000/2-1,d7
+.blank:
+		move.w	#$200,(a6)
+		dbf	d7,.blank
 		rts
 
 
@@ -330,7 +363,7 @@ Video_RegList:
 		dc.b $00			; Nothing
 		dc.b $00			; Nothing
 		dc.b $DF			; HInt value
-		dc.b (%000|%00)			; No ExtInt, Scroll: VSCR:full HSCR:full
+		dc.b (%000|%00)			; No ExtInt, Scroll: VSCR:full HSCR:full (per line when split, MD_Vint)
 		dc.b $00			; H40, No shadow mode, Normal resolution
 		dc.b (($B800)>>10)		; HScroll at VRAM $B800 (%00xxxxxx)
 		dc.b $00			; Nothing
@@ -369,16 +402,42 @@ MD_Init:
 
 MD_Vint:
 		movem.l	d0-d7/a0-a6,-(sp)
+		lea	(RAM_Fami_Emu).l,a4		; whatever the interrupted code had there
+		lea	($C00000).l,a6
 		if FPS
 		jsr	fpsUpdate
 		endif
 
+		tst.w	ppuNmiFlag(a4)			; no NMI (and not in the NMI handler,
+		bne.s	.nmi_on				; which turns it off while it runs):
+		tst.w	cpuFamiVint(a4)			; frames start at VBlank
+		bne.s	.nmi_on
+		jsr	ppuFrameStart
+.nmi_on:
+		tst.w	cpuFamiVint(a4)			; $2001 takes effect here, not
+		beq.s	.mask				; mid-screen, and not while the game
+		cmpi.w	#2,ppuSp0State(a4)		; is in its VBlank work (in its NMI
+		bne.s	.mask_later			; handler, before sprite 0 hit):
+.mask:							; that only shows from the next frame
+		jsr	ppuMaskApply
+.mask_later:
 		move.w	#$8F02,4(a6)
-		move.l	#$78000002,4(a6)
-		move.l	vdpScrlX(a4),(a6)
 		move.l	#$40000010,4(a6)
 		move.l	vdpScrlY(a4),(a6)
-		move.l	#$94019318,4(a6)
+		if FPS
+		move.l	#$94019318,4(a6)		; 64 sprites and the counter's 6
+		else
+		move.w	vdpSprWords(a4),d0		; the sprites listed
+		bne.s	.spr_words
+		moveq	#4,d0				; none yet
+.spr_words:
+		move.w	#$9300,d1
+		move.b	d0,d1
+		move.w	d1,4(a6)
+		lsr.w	#8,d0
+		ori.w	#$9400,d0
+		move.w	d0,4(a6)
+		endif
 		move.w	#$0100,(z80_bus).l
 		move.l	#$96009500+(((RAM_Fami_Emu+vdpSprData)<<7)&$FF0000)|(((RAM_Fami_Emu+vdpSprData)>>1)&$FF),4(a6)
 		move.w	#$9700|(((RAM_Fami_Emu+vdpSprData)>>17)&$7F),4(a6)
@@ -387,6 +446,9 @@ MD_Vint:
 .wait:		btst	#0,(z80_bus).l
 		bne.s	.wait
 		move.w	(sp)+,4(a6)
+		tst.b	vdpPalDirty(a4)			; palette, if it changed
+		beq.s	.same_palette
+		sf	vdpPalDirty(a4)
 		move.l	#$94009340,4(a6)
 		move.l	#$96009500+(((RAM_Fami_Emu+vdpPalette)<<7)&$FF0000)|(((RAM_Fami_Emu+vdpPalette)>>1)&$FF),4(a6)
 		move.w	#$9700|(((RAM_Fami_Emu+vdpPalette)>>17)&$7F),4(a6)
@@ -395,6 +457,8 @@ MD_Vint:
 .wait2:		btst	#0,(z80_bus).l
 		bne.s	.wait2
 		move.w	(sp)+,4(a6)
+.same_palette:
+		jsr	hsApply				; horizontal scroll
 		bsr	apuUpdate			; needs the Z80 bus
 		move.w	#0,(z80_bus).l			; Release Z80
 		bsr	readInput
@@ -489,6 +553,13 @@ Fami_LoadRom:
 		move.w	#1,d7			; 1 - vertical
 .mirror_set:
 		move.w	d7,ppuMirror(a3)
+		move.w	#$400,ppuNtXor(a3)	; horizontal: 0 = 1, 2 = 3, the other half
+		move.l	#$00400000,ppuCmdXor(a3) ; of the plane
+		tst.w	d7
+		beq.s	.xor_set
+		move.w	#$800,ppuNtXor(a3)	; vertical: 0 = 2, 1 = 3, the other plane
+		move.l	#$20000000,ppuCmdXor(a3)
+.xor_set:
 		
 	; COPY CHR-ROM TO RAM, or use the (cleared) buffer as CHR-RAM
 		move.l	a4,emuChrRom(a3)
@@ -623,15 +694,42 @@ emuStart:
 famiVInt:
 		clr.w	FamiMdVint(a4)
 		move.w	#$80,ppuStatus(a4)
-		tst.w	cpuFamiVint(a4)
-		bne.s	emuVint
+		tst.w	cpuFamiVint(a4)		; in the NMI handler: the next NMI
+		bne.s	.late			; when it returns (mos_RTI)
 		tst.w	ppuNmiFlag(a4)
 		beq.s	emuVint
 
+		jmp	doVint			; NMI: out of line, see after cpu.asm
+.late:
+		move.w	#1,vbLate(a4)
+		bra.s	emuVint
+
+
 ; ------------------------------------------------
+; Main Loop
+; ------------------------------------------------
+
+emuLoop:
+		tst.w	FamiMdVint(a4)
+		bne.s	famiVInt
+emuVint:
+		clr.w	d4
+		move.b	(a0)+,d4
+		add.w	d4,d4
+		move.w	mosCpu(pc,d4.w),d6
+		jmp	mosCpu(pc,d6.w)	; mosCpu must stay right after this
+
+		
+; ====================================================================
+
+		include	"emu/cpu.asm"		; 6502 CPU, must follow emuVint
+
+; ------------------------------------------------
+; Take the NMI (from famiVInt)
 doVint:
 		move.l	#emuVint,(RAM_EmuLoop+2).l
 		move.w	#1,cpuFamiVint(a4)
+		bsr	ppuFrameStart
 
 		bsr	famiGetP		; Save PC and P (B clear)
 		move.b	d5,d7
@@ -660,26 +758,8 @@ doVint:
 		and.w	#$7FFF,d6
 		movea.l	a1,a0
 		add.w	d6,a0
-		bra	emuVint
+		jmp	emuVint
 
-; ------------------------------------------------
-; Main Loop
-; ------------------------------------------------
-
-emuLoop:
-		tst.w	FamiMdVint(a4)
-		bne.s	famiVInt
-emuVint:
-		clr.w	d4
-		move.b	(a0)+,d4
-		add.w	d4,d4
-		move.w	mosCpu(pc,d4.w),d6
-		jmp	mosCpu(pc,d6.w)	; mosCpu must stay right after this
-
-		
-; ====================================================================
-
-		include	"emu/cpu.asm"		; 6502 CPU, must follow emuVint
 		include	"emu/memory.asm"	; CPU memory map
 		include	"emu/ppu.asm"		; PPU
 		include	"emu/apu.asm"		; APU (sound)
@@ -694,6 +774,8 @@ emuVint:
 ; ====================================================================
 
 		include	"system/md/error.asm"	; Error screen
+
+		include	"emu/ppu_tables.asm"	; PPU lookup tables (big: last)
 
 ; ====================================================================
 
