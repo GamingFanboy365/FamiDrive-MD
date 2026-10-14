@@ -2057,6 +2057,11 @@ mos_RTI:
 
 		move.l	#emuLoop,(RAM_EmuLoop+2).l
 		move.w	#0,cpuFamiVint(a4)
+		tst.w	vbLate(a4)		; a VBlank came while the handler ran:
+		beq.s	.on_time		; the next NMI now, not a frame later
+		clr.w	vbLate(a4)
+		move.w	#1,FamiMdVint(a4)
+.on_time:
 		jmp	(RAM_EmuLoop).l
 
 .nonint:

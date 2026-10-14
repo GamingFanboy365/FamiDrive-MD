@@ -619,11 +619,9 @@ class Gen:
 			return self.io_read(a)
 		if m in ('absx', 'absy'):
 			r = 'd1' if m == 'absx' else 'd2'
-			if a + 255 < 0x800:
-				if a < 0x80:
-					return [], self.ix(a, r)
-				return ['lea $%04X(a2),a5' % a], '(a5,%s.w)' % r
-			if a >= 0x8000 and a + 255 <= 0xFFFF:
+			if a + 255 < 0x2000:
+				return self.ram_indexed(i, r)
+			if a >= 0x8000 and a + self.index_hi(i) <= 0xFFFF:
 				return ['lea $%04X(a1),a5' % (a & 0x7FFF)], '(a5,%s.w)' % r
 			return ['move.w #$%04X,d6' % a, 'add.w %s,d6' % r, 'jsr rcRead16'], 'd7'
 		if m == 'indy' and self.fast and 'ptr' in self.fast:
@@ -641,6 +639,24 @@ class Gen:
 		if m == 'indx':
 			return self.indx_addr(a) + ['jsr rcRead16'], 'd7'
 		raise ValueError(m)
+
+	def index_hi(self, i):
+		"""Highest value of an abs,X / abs,Y instruction's index register."""
+		rng = self.ranges.get(i.pc)
+		return rng[1 if i.mode == 'absx' else 2][1] if rng else 255
+
+	def ram_indexed(self, i, r):
+		"""abs,X / abs,Y in RAM: setup and EA. Past $07FF the address
+		wraps into the RAM mirrors, unless the index register's range
+		shows it can't get there."""
+		a = i.arg & 0x7FF
+		if a + self.index_hi(i) < 0x800:
+			if a < 0x80:
+				return [], self.ix(a, r)
+			return ['lea $%04X(a2),a5' % a], '(a5,%s.w)' % r
+		if self.fast and 'off' in self.fast and self.fast['off'][r]:
+			raise Unroll
+		return ['move.w %s,d6' % r, 'addi.w #$%04X,d6' % a, 'andi.w #$7FF,d6'], '(a2,d6.w)'
 
 	def ix(self, a, r, base='a2'):
 		"""a(base,r.w); in an unrolled loop r is off by a known amount."""
@@ -726,10 +742,9 @@ class Gen:
 			return [], None, ['move.w #$%04X,d6' % a, 'jsr rcWrite16']
 		if m in ('absx', 'absy'):
 			r = 'd1' if m == 'absx' else 'd2'
-			if a + 255 < 0x800:
-				if a < 0x80:
-					return [], self.ix(a, r), []
-				return ['lea $%04X(a2),a5' % a], '(a5,%s.w)' % r, []
+			if a + 255 < 0x2000:
+				setup, ea = self.ram_indexed(i, r)
+				return setup, ea, []
 			return [], None, ['move.w #$%04X,d6' % a, 'add.w %s,d6' % r, 'jsr rcWrite16']
 		if m == 'indy':
 			return [], None, self.indy_addr(a) + ['jsr rcWrite16']
@@ -1100,8 +1115,7 @@ class Gen:
 		elif m == 'RTI':
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d5', 'addq.b #1,d3',
 			       'move.b (a2,d3.w),d6', 'addq.b #1,d3', 'move.b (a2,d3.w),d4', 'swap d3',
-			       'jsr famiSetP', 'lsl.w #8,d4', 'move.b d6,d4', 'clr.w cpuFamiVint(a4)',
-			       'jmp rcDispatch')
+			       'jsr famiSetP', 'lsl.w #8,d4', 'move.b d6,d4', 'jmp rcRti')
 		elif m == 'BRK':
 			ret = i.pc + 2
 			self.e('jsr famiGetP', 'swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',

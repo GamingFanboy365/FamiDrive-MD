@@ -105,39 +105,53 @@ rdPPU_Status:
 		move.w	ppuStatus(a4),d7
 		move.w	#0,ppuStatus(a4)
 
-	; sprite 0 hit, timed from the start of the game's frame (ppuLine):
-	; still set from the last frame through VBlank, clear from the
-	; pre-render line, set again from sprite 0's first opaque line
-	; (sp0FirstRow). Hidden sprites (Y >= $EF) never hit.
+	; Sprite 0 hit. The NES sets the flag on sprite 0's first opaque line
+	; (sp0FirstRow) and clears it at the pre-render line; hidden sprites
+	; (Y >= $EF) never hit. FamiDrive's frames don't keep the NES's
+	; timing (code runs at other speeds, a game frame can span several
+	; MD frames), so it goes by what the game does instead: a read from
+	; the same place as the last one (a loop waiting for the flag to
+	; change) moves ppuSp0State on, 0 (VBlank: set from the last frame)
+	; -> 1 (clear: the screen is being drawn) -> 2 (set: sprite 0 hit).
+	; Other reads, such as resetting the address latch before $2006
+	; writes, see it as it is. Scroll changes after the hit are splits
+	; (ppuXChanged), timed from sprite 0's line.
 		move.w	#$2700,sr
 		move.w	ppuSp0Ypos(a4),d4
 		cmpi.w	#$EF,d4
 		bcc.s	.no_hit
 		move.l	d5,-(sp)
-		bsr	ppuLine
-		tst.w	d5
-		bmi.s	.hit			; VBlank
-		cmp.w	d4,d5			; sprite at Y starts on line Y+1
-		bls.s	.clear
-	; The game saw the flag clear and now set: if it got here later
-	; than the NES would (code between its waits running slower), the
-	; NES would only just be on sprite 0's line. Go back to it, so the
-	; split the game makes next is at the right line.
-		tst.w	ppuSp0Clear(a4)
-		beq.s	.hit
-		clr.w	ppuSp0Clear(a4)
-		sub.w	d4,d5
-		subq.w	#1,d5			; lines late
-		add.w	vNmi(a4),d5		; the frame began that much later
-		cmpi.w	#262,d5
-		bcs.s	.late
-		subi.w	#262,d5
-.late:
-		move.w	d5,vNmi(a4)
+		move.l	4(sp),d5		; the caller's return address, plus the
+		add.l	a0,d5			; 6502 PC when interpreted: which read
+		move.w	ppuSp0State(a4),d6
+		cmp.l	ppuRdSite(a4),d5
+		beq.s	.again
+		move.l	d5,ppuRdSite(a4)
+		cmpi.w	#1,d6			; a first read: as it is
+		beq.s	.no_hit_d5
 		bra.s	.hit
-.clear:
-		move.w	#1,ppuSp0Clear(a4)
+.again:
+		cmpi.w	#1,d6			; read again: let it change
+		bhi.s	.hit			; (once hit, it stays set)
+		beq.s	.to_hit
+		move.w	#1,ppuSp0State(a4)	; VBlank is over
 		bra.s	.no_hit_d5
+.to_hit:
+		move.w	#2,ppuSp0State(a4)
+	; The NES is on sprite 0's line now: the frame's line count
+	; (ppuLine, from vNmi) goes from here.
+		bsr	ppuLine
+		sub.w	d4,d5
+		subq.w	#1,d5			; lines from sprite 0's (Y+1)
+		add.w	vNmi(a4),d5
+		bpl.s	.not_before
+		addi.w	#262,d5
+.not_before:
+		cmpi.w	#262,d5
+		bcs.s	.in_frame
+		subi.w	#262,d5
+.in_frame:
+		move.w	d5,vNmi(a4)
 .hit:
 		ori.w	#$40,d7
 .no_hit_d5:
@@ -430,9 +444,7 @@ sp0FirstRow:
 		rts
 
 APU_OAMDMA:
-		move.l	d7,-(sp)
-		move.l	a3,-(sp)
-		
+		movem.l	d0-d3/d7/a3/a6,-(sp)	; d7: handlers leave its upper bits clear
 		lsl.w	#8,d7
 		move.w	ppuOamUnk(a4),d6
 		eori.w	#1,d6
@@ -440,40 +452,43 @@ APU_OAMDMA:
 		lea	(a2,d7.w),a5
 		bsr	sp0FirstRow
 
-		lea 	vdpSprData(a4),a3
-		moveq	#$3F,d5
-		moveq	#0,d7
+	; NES OAM (Y, tile, attributes, X) to the MD's sprite table
+		lea	vdpSprData(a4),a3
+		lea	(oamAttr).l,a6
+		move.w	ppuSprWide(a4),d6
+		addq.w	#1,d6			; size, and the link to the next sprite
+		moveq	#$79,d0			; NES line L+1 is MD line L-8, +128
+		move.w	#$80,d1
+		moveq	#0,d2
+		moveq	#64-1,d5
 .lp_sprnormal:
-		move.b	(a5)+,d7
-		move.w	d7,d6
-		addi.w	#$79,d6
+		move.b	(a5)+,d2		; Y
+		move.w	d2,d7
+		add.w	d0,d7
+		move.w	d7,(a3)+
 		move.w	d6,(a3)+
-
-		moveq	#64,d6
-		sub.b	d5,d6
-		or.w	ppuSprWide(a4),d6
-		move.w	d6,(a3)+
-		
-		move.b	(a5)+,d7
-		move.w	d7,d6
-		ori.w	#$100,d6
-
-		move.b	(a5)+,d7
-		move.w	d7,d4
-		rol.b	#2,d4
-		lsl.w	#1,d4
-		lsl.b	#3,d4
-		lsl.w	#7,d4
-		or.w	d6,d4
-		eori.w	#$8000,d4
-		move.w	d4,(a3)+
-
-		move.b	(a5)+,d7
-		move.w	d7,d6
-		addi.w	#$80,d6
-		move.w	d6,(a3)+
-
+		addq.w	#1,d6
+		move.b	(a5)+,d2		; tile
+		moveq	#0,d3
+		move.b	(a5)+,d3		; attributes
+		add.w	d3,d3
+		move.w	(a6,d3.w),d7
+		or.w	d2,d7
+		move.w	d7,(a3)+
+		move.b	(a5)+,d2		; X
+		move.w	d2,d7
+		add.w	d1,d7
+		move.w	d7,(a3)+
 		dbf	d5,.lp_sprnormal
-		move.l	(sp)+,a3
-		move.l	(sp)+,d7
+		movem.l	(sp)+,d0-d3/d7/a3/a6
 		jmp	(RAM_EmuLoop).l
+
+; NES sprite attributes to the MD's: priority (inverted: the NES's bit
+; puts the sprite behind the background), palette, vertical and
+; horizontal flip; sprite tiles start at $100
+oamAttr:
+oamAttrI	set	0
+		rept	256
+		dc.w	$100|(((~oamAttrI)&$20)<<10)|((oamAttrI&3)<<13)|((oamAttrI&$C0)<<5)
+oamAttrI	set	oamAttrI+1
+		endm

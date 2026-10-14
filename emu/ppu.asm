@@ -173,12 +173,15 @@ wrPPU_Scroll:
 ; The horizontal scroll (ppuTX) changed
 ;
 ; Games keep a status bar still by changing the scroll partway down
-; the screen. A change in the game frame's VBlank, or with rendering
-; off (when games update VRAM), sets the scroll from the top; one
-; while the screen is drawn starts at the line the NES would be on
-; (ppuLine), unless it comes from $2006. Changes at about the same
-; line (the X, then $2000's nametable bit) make one split. hsBuild
-; turns them into the MD's line scroll table.
+; the screen, after waiting for sprite 0 hit. Until the game has seen
+; the hit this frame (ppuSp0State), a change sets the scroll from the
+; top: whatever runs before is the NES's VBlank work, however long it
+; takes here (VRAM addresses written to $2006 pass through the scroll
+; on the NES too, and games set it again after). After the hit, a
+; change starts a split at the line the NES would be on (ppuLine),
+; unless it comes from $2006. Changes at about the same line (the X,
+; then $2000's nametable bit) make one split. hsBuild turns them into
+; the MD's line scroll table.
 ;
 ; d6.w - 0: don't start a split
 ; Uses d4-d6, a5. Call with interrupts off.
@@ -190,14 +193,16 @@ ppuXChanged:
 		move.w	ppuTX(a4),d4
 		neg.w	d4
 		cmp.w	vdpScrlX(a4),d4
-		beq.s	.done
+		beq.w	.done
+		cmpi.w	#2,ppuSp0State(a4)	; before the game saw sprite 0 hit
+		bne.s	.top
 		tst.w	ppuMaskOn(a4)
 		beq.s	.top
-		bsr	ppuLine
-		tst.w	d5
-		bmi.s	.top
 		tst.w	d0			; $2006 mid-screen: leave the scroll
-		beq.s	.done			; (games set it right after)
+		beq.w	.done			; (games set it right after)
+		bsr	ppuLine
+		tst.w	d5			; past the bottom (a very slow frame)
+		bmi.s	.set
 		move.w	d4,vdpScrlX(a4)
 		move.w	d4,vdpScrlX+2(a4)
 		subq.w	#8,d5			; NES line L is MD line L-8
@@ -233,10 +238,11 @@ ppuXChanged:
 		addq.w	#1,hsCurN(a4)
 		bra.s	.done
 .top:
-		move.w	d4,vdpScrlX(a4)
-		move.w	d4,vdpScrlX+2(a4)
 		move.w	d4,hsTopCur(a4)
 		move.w	d4,hsTopCur+2(a4)
+.set:
+		move.w	d4,vdpScrlX(a4)
+		move.w	d4,vdpScrlX+2(a4)
 .done:
 		movem.l	(sp)+,d0/d5
 		rts
@@ -299,34 +305,43 @@ ppuFrameStart:
 		dbf	d0,.copy
 		move.l	vdpScrlX(a4),hsTopCur(a4)
 		clr.w	hsCurN(a4)
-		clr.w	ppuSp0Clear(a4)
+		clr.w	ppuSp0State(a4)
+		clr.l	ppuRdSite(a4)
 		move.w	(sp)+,sr
 		movem.l	(sp)+,d0/d5/a0-a1
 		rts
 
 ; ----------------------------------------------------------------
-; Build the line scroll table, once per frame from MD_Vint: from the
-; current game frame once it has as many splits as the previous one,
-; else from the previous one (a slow game frame can span two MD
-; frames), else one scroll for the whole screen.
+; Build the line scroll table, once per frame from MD_Vint. It shows
+; the current game frame once its scroll from the top is set (its NMI
+; handler returned, or the game saw sprite 0 hit: the screen is being
+; drawn) and it has as many splits as the previous frame; else the
+; previous frame (a slow game frame spans MD frames).
+; hsLines: 0 - one scroll for the screen (hsTable's first line),
+; 1 - per line.
 ; ----------------------------------------------------------------
 
 hsBuild:
 		lea	hsTopCur(a4),a1
+		tst.w	cpuFamiVint(a4)		; NMI handler returned
+		beq.s	.top_set
+		cmpi.w	#2,ppuSp0State(a4)	; or past sprite 0 hit
+		bne.s	.done_frame
+.top_set:
 		move.w	hsCurN(a4),d0
-		beq.s	.done_frame
 		cmp.w	hsDoneN(a4),d0
 		bcc.s	.use
 .done_frame:
 		lea	hsTopDone(a4),a1
-		tst.w	hsDoneN(a4)
-		bne.s	.use
-		clr.w	hsLines(a4)		; no splits: one scroll for the screen
-		rts
 .use:
-		move.w	#1,hsLines(a4)
 		move.l	(a1)+,d1		; scroll from the top
 		move.w	(a1)+,d0		; splits
+		bne.s	.lines
+		move.l	d1,hsTable(a4)
+		clr.w	hsLines(a4)
+		rts
+.lines:
+		move.w	#1,hsLines(a4)
 		lea	hsTable(a4),a0
 		moveq	#0,d2			; line
 		bra.s	.next
@@ -405,11 +420,10 @@ wrPPU_Addr:
 		or.w	d4,d6
 .set:
 		move.w	d6,ppuTX(a4)
-		tst.w	ppuMaskOn(a4)		; with rendering on, games set the
-		bne.s	.scroll_later		; scroll after ($2005, $2000)
 		moveq	#0,d6			; never a split by itself
 		bsr	ppuXChanged
-.scroll_later:
+		clr.l	ppuRdSite(a4)		; a $2002 read before this one was for
+					; the latch, not a wait for sprite 0
 		move.w	#$2000,sr
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------

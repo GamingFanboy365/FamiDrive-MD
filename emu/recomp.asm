@@ -128,8 +128,8 @@ rcNmiIdle:
 rcNmi:
 		clr.w	FamiMdVint(a4)
 		move.w	#$80,ppuStatus(a4)
-		tst.w	cpuFamiVint(a4)		; already in the NMI handler
-		bne.s	.none
+		tst.w	cpuFamiVint(a4)		; already in the NMI handler: the
+		bne.s	.late			; next NMI when it returns (rcRti)
 		tst.w	ppuNmiFlag(a4)
 		beq.s	.none
 		addq.l	#4,sp			; not returning
@@ -152,8 +152,27 @@ rcNmi:
 		move.w	#1,cpuModeIntDis(a4)
 		move.w	#rcVecNmi,d4
 		bra	rcDispatch
+.late:
+		move.w	#1,vbLate(a4)
 .none:
 		rts
+
+; ----------------------------------------------------------------
+; RTI, after the 6502 code popped P and the PC (d4)
+;
+; A game whose frame outlasts an MD frame would otherwise wait for
+; the VBlank after next: each frame would take two. Its next NMI
+; comes as soon as the handler returns instead.
+; ----------------------------------------------------------------
+
+rcRti:
+		clr.w	cpuFamiVint(a4)
+		tst.w	vbLate(a4)
+		beq.s	.on_time
+		clr.w	vbLate(a4)
+		move.w	#1,FamiMdVint(a4)
+.on_time:
+		bra	rcDispatch
 
 ; ----------------------------------------------------------------
 ; Read/write at a computed address

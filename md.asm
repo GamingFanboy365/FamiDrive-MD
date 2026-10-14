@@ -106,7 +106,9 @@ ppuTX		ds.w 1			; the PPU's horizontal scroll (t register): nametable X, coarse 
 ppuMaskOn	ds.w 1			; $2001 shows the background or sprites
 ppuMaskNew	ds.w 1			; $2001 write for the next VBlank (bit 15: pending)
 hsLines		ds.w 1			; 1 - hsTable has splits (line scroll), 0 - one scroll
-ppuSp0Clear	ds.w 1			; the game read the sprite 0 flag clear this frame
+ppuSp0State	ds.w 1			; what the game saw of sprite 0 hit this frame (rdPPU_Status)
+ppuRdSite	ds.l 1			; where the last $2002 read came from (rdPPU_Status)
+vbLate		ds.w 1			; a VBlank came during the NMI handler: next NMI on its RTI
 		finish
 
 ; ====================================================================
@@ -420,7 +422,7 @@ MD_Vint:
 		bne.s	.hs_lines
 		move.w	#$8B00,4(a6)			; one scroll for the screen
 		move.l	#$78000002,4(a6)		; HScroll table at $B800
-		move.l	vdpScrlX(a4),(a6)
+		move.l	hsTable(a4),(a6)
 		bra.s	.hs_done
 .hs_lines:
 		move.w	#$8B03,4(a6)			; per line
@@ -659,12 +661,15 @@ emuStart:
 famiVInt:
 		clr.w	FamiMdVint(a4)
 		move.w	#$80,ppuStatus(a4)
-		tst.w	cpuFamiVint(a4)
-		bne.s	emuVint
+		tst.w	cpuFamiVint(a4)		; in the NMI handler: the next NMI
+		bne.s	.late			; when it returns (mos_RTI)
 		tst.w	ppuNmiFlag(a4)
 		beq.s	emuVint
 
 		jmp	doVint			; NMI: out of line, see after cpu.asm
+.late:
+		move.w	#1,vbLate(a4)
+		bra.s	emuVint
 
 
 ; ------------------------------------------------
