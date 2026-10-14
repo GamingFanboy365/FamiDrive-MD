@@ -114,6 +114,7 @@ ppuMaskNew	ds.w 1			; $2001 write for the next VBlank (bit 15: pending)
 ppuSp0State	ds.w 1			; what the game saw of sprite 0 hit this frame (rdPPU_Status)
 ppuRdSite	ds.l 1			; where the last $2002 read came from (rdPPU_Status)
 vbLate		ds.w 1			; a VBlank came during the NMI handler: next NMI on its RTI
+ppuScrollSet	ds.w 1			; the game wrote both $2005 bytes this frame (ppuXChanged)
 ppuNtXor	ds.w 1			; nametable address xor for the mirrored copy ($400 or $800)
 ppuCmdXor	ds.l 1			; and VDP command xor for its cells (ppuDrwCell)
 		finish

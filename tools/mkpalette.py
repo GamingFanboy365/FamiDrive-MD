@@ -4,11 +4,12 @@
 #
 # usage: mkpalette.py > table.asm
 #
-# Each NES color is matched per channel to a Mega Drive level. The MD's
-# DAC isn't linear, but most emulators (and clone consoles) output linear
-# levels, so the level is picked to be close on both: the one with the
-# smallest summed error against HW_LEVELS (measured on real hardware)
-# and LINEAR_LEVELS.
+# Each NES color is matched to the Mega Drive color (of all 512) that
+# looks closest: the smallest color difference in CIELAB. Matching each
+# channel on its own loses the tint of pale colors (light cyan came out
+# lavender). The MD's DAC isn't linear, but most emulators (and clone
+# consoles) output linear levels, so the difference is summed over both:
+# HW_LEVELS (measured on real hardware) and LINEAR_LEVELS.
 # ======================================================================
 
 # 2C02 palette (as rendered by Nestopia), $00-$3F
@@ -27,13 +28,31 @@ HW_LEVELS = (0, 52, 87, 116, 144, 172, 206, 255)
 LINEAR_LEVELS = tuple(k * 34 for k in range(8))
 
 
-def nearest(v):
-	return min(range(8), key=lambda k: abs(HW_LEVELS[k] - v) + abs(LINEAR_LEVELS[k] - v))
+def lab(rgb):
+	"""sRGB (0-255) -> CIELAB (D65)"""
+	def lin(c):
+		c /= 255
+		return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+	r, g, b = (lin(c) for c in rgb)
+	x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047
+	y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+	z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883
+	f = lambda t: t ** (1 / 3) if t > 0.008856 else 7.787 * t + 16 / 116
+	return 116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z))
+
+
+def diff(a, b):
+	return sum((p - q) ** 2 for p, q in zip(a, b)) ** 0.5
+
+
+MD_COLORS = [(r, g, b) for r in range(8) for g in range(8) for b in range(8)]
+MD_LAB = [(c, lab([HW_LEVELS[k] for k in c]), lab([LINEAR_LEVELS[k] for k in c])) for c in MD_COLORS]
 
 
 def md_color(rgb):
-	r, g, b = (int(rgb[i:i + 2], 16) for i in (0, 2, 4))
-	return nearest(b) << 9 | nearest(g) << 5 | nearest(r) << 1
+	t = lab([int(rgb[i:i + 2], 16) for i in (0, 2, 4)])
+	(r, g, b), _, _ = min(MD_LAB, key=lambda m: diff(m[1], t) + diff(m[2], t))
+	return b << 9 | g << 5 | r << 1
 
 
 if __name__ == "__main__":
