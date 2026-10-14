@@ -927,7 +927,8 @@ class Gen:
 	def inc_run(self, i):
 		"""INX/INY/DEX/DEY: the run of the same instruction that i starts
 		(none of the others a jump target), or [] when i continues one."""
-		if i.m not in ('INX', 'INY', 'DEX', 'DEY') or self.fast:
+		delay = self.delays | self.delay_skip
+		if i.m not in ('INX', 'INY', 'DEX', 'DEY') or self.fast or i.pc in delay:
 			return [i]
 		p = self.insns.get(i.pc - 1)
 		if p is not None and p.m == i.m and i.pc not in self.targets:
@@ -935,7 +936,7 @@ class Gen:
 		run = [i]
 		while len(run) < 8:
 			n = self.insns.get(run[-1].pc + 1)
-			if n is None or n.m != i.m or n.pc in self.targets:
+			if n is None or n.m != i.m or n.pc in self.targets or n.pc in delay:
 				break
 			run.append(n)
 		return run
@@ -963,7 +964,32 @@ class Gen:
 			elif need:
 				self.save_nz()
 
-		if m in ('LDA', 'LDX', 'LDY'):
+		if i.pc in self.delay_skip:
+			pass			# in the nested delay loop at its LDX/LDY
+		elif i.pc in self.delays2:
+			# two nested delay loops (see run), timed in NES cycles: a
+			# turn of the inner one is 5, of the outer DEX and BNE 5
+			kind, n = self.delays2[i.pc]
+			ri, ro = ('d1', 'd2') if m[2] == 'X' else ('d2', 'd1')
+			if self.fast and (self.fast.get('off', {}).get(ri) or self.fast.get('off', {}).get(ro)):
+				raise Unroll
+			if kind == 'A':		# outer turns: LDY, n inner turns, DEX, BNE
+				self.e('move.w %s,d4' % ro, 'move.w #%d,d5' % (5 * n + 6), 'moveq #-1,d6', 'jsr rcDelay')
+			else:			# n turns, then the outer ones with 256
+				self.e('moveq #%d,d4' % (n & 0xFF) if n < 128 else 'move.w #%d,d4' % (n & 0xFF),
+				       'moveq #5,d5', 'moveq #-1,d6', 'jsr rcDelay',
+				       'move.w %s,d4' % ro, 'move.w #1284,d5', 'move.w #-1280,d6', 'jsr rcDelay')
+			self.e('clr.b %s' % ri, 'clr.b %s' % ro)
+			self.save_nz()
+		elif i.pc in self.delays:
+			# a delay loop (to time a raster effect): its NES time moves
+			# the frame's clock on, and it takes none here
+			r = 'd1' if m[2] == 'X' else 'd2'
+			if self.fast and self.fast.get('off', {}).get(r):
+				raise Unroll
+			self.e('move.w %s,d4' % r, 'moveq #5,d5', 'moveq #-1,d6', 'jsr rcDelay', 'clr.b %s' % r)
+			nz_done()
+		elif m in ('LDA', 'LDX', 'LDY'):
 			r = {'LDA': 'd0', 'LDX': 'd1', 'LDY': 'd2'}[m]
 			setup, s = self.src(i, r)
 			self.e(*setup)
@@ -1673,6 +1699,36 @@ class Gen:
 
 	def run(self, vectors):
 		pcs = sorted(self.insns)
+		# delay loops, DEX/DEY then BNE back to it: rcDelay instead
+		self.delays, self.delays2, self.delay_skip = set(), {}, set()
+		for i in self.insns.values():
+			b = self.insns.get(i.pc + 1)
+			if i.m in ('DEX', 'DEY') and b is not None and b.m == 'BNE' and b.arg == i.pc and b.decided is None:
+				self.delays.add(i.pc)
+				b.decided, b.succ = 'not', [b.pc + 2]
+		# and two nested, the outer branch back to the LDY (A) or to the
+		# inner loop (B): LDY #n, [DEY, BNE], DEX, BNE
+		ext = {}
+		for j in self.insns.values():
+			for t in j.succ:
+				if t is not None and t != j.pc + j.n:
+					ext.setdefault(t, set()).add(j.pc)
+		for i in self.insns.values():
+			if i.m not in ('LDX', 'LDY') or i.mode != 'imm' or i.pc + 2 not in self.delays:
+				continue
+			d, b = self.insns.get(i.pc + 5), self.insns.get(i.pc + 6)
+			if not (d is not None and d.m in ('DEX', 'DEY') and d.m[2] != i.m[2] and self.insns[i.pc + 2].m[2] == i.m[2]
+				and b is not None and b.m == 'BNE' and b.decided is None and b.arg in (i.pc, i.pc + 2)):
+				continue
+			inside = {i.pc + 2, i.pc + 3, i.pc + 5, i.pc + 6}
+			if any(ext.get(t, set()) - {i.pc + 3, i.pc + 6} for t in inside):
+				continue	# entered partway from elsewhere
+			if b.arg == i.pc:	# A: each outer turn LDY (2), the inner loop, DEX and BNE (5)
+				self.delays2[i.pc] = ('A', i.arg or 256)
+			else:			# B: later inner passes run 256 turns
+				self.delays2[i.pc] = ('B', i.arg or 256)
+			self.delay_skip |= {i.pc + 2, i.pc + 5}
+			b.decided, b.succ = 'not', [b.pc + 2]
 		self.out.append('rcCode:')
 		self.prologued = set()
 		self.xc = False

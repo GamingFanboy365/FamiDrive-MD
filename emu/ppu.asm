@@ -184,8 +184,8 @@ wrPPU_Scroll:
 ; takes here (VRAM addresses written to $2006 pass through the scroll
 ; on the NES too, and games set it again after). After that, a
 ; change starts a split at the line the NES would be on (ppuLine),
-; unless it comes from $2006. Changes at about the same line (the X,
-; then $2000's nametable bit) make one split. hsBuild turns them into
+; unless it comes from $2006. Changes within 4 lines (the X, then
+; $2000's nametable bit) make one split. hsBuild turns them into
 ; the MD's line scroll table.
 ;
 ; d6.w - 0: don't start a split
@@ -222,7 +222,7 @@ ppuXChanged:
 		beq.s	.append
 		lsl.w	#2,d0
 		move.w	-4(a5,d0.w),d6		; the last split's line
-		addq.w	#2,d6
+		addq.w	#4,d6
 		cmp.w	d6,d5
 		bhi.s	.after
 		move.w	d4,-2(a5,d0.w)		; same moment: same split
@@ -324,8 +324,9 @@ ppuFrameStart:
 ; Set the MD's horizontal scroll, once per frame from MD_Vint (in
 ; VBlank). It shows the current game frame once its scroll from the
 ; top is set (its NMI handler returned, or the game saw sprite 0 hit:
-; the screen is being drawn) and it has as many splits as the previous
-; frame; else the previous frame (a slow game frame spans MD frames).
+; the screen is being drawn, and is well past its last split) and it
+; has as many splits as the previous frame; else the previous frame (a
+; slow game frame spans MD frames).
 ; Without splits it is one scroll for the screen, else the line scroll
 ; table at $B800 is written line by line. Nothing is written while the
 ; scroll stays the same (hsShown).
@@ -337,8 +338,17 @@ hsApply:
 		lea	hsTopCur(a4),a1
 		tst.w	cpuFamiVint(a4)		; NMI handler returned
 		beq.s	.top_set
-		cmpi.w	#2,ppuSp0State(a4)	; or past sprite 0 hit
-		bne.s	.done_frame
+		cmpi.w	#2,ppuSp0State(a4)	; or past sprite 0 hit and well
+		bne.s	.done_frame		; past its last split: one split
+		move.w	hsCurN(a4),d0		; can take writes a few lines
+		beq.s	.top_set		; apart (Excitebike: $2000, then
+		lsl.w	#2,d0			; $2005)
+		lea	hsCur(a4),a0
+		move.w	-4(a0,d0.w),d1		; (an MD line: NES line - 8)
+		addi.w	#8+8,d1
+		bsr	ppuLine
+		cmp.w	d1,d5
+		blt.s	.done_frame
 .top_set:
 		move.w	hsCurN(a4),d0
 		cmp.w	hsDoneN(a4),d0

@@ -114,6 +114,8 @@ ppuMaskNew	ds.w 1			; $2001 write for the next VBlank (bit 15: pending)
 ppuSp0State	ds.w 1			; what the game saw of sprite 0 hit this frame (rdPPU_Status)
 ppuRdSite	ds.l 1			; where the last $2002 read came from (rdPPU_Status)
 vbLate		ds.w 1			; a VBlank came during the NMI handler: next NMI on its RTI
+rcDelayDots	ds.w 1			; NES time left over from rcDelay, in PPU dots
+ppuRdLast	ds.w 1			; what the last $2002 read returned (rdPPU_Status)
 ppuScrollSet	ds.w 1			; the game wrote both $2005 bytes this frame (ppuXChanged)
 ppuNtXor	ds.w 1			; nametable address xor for the mirrored copy ($400 or $800)
 ppuCmdXor	ds.l 1			; and VDP command xor for its cells (ppuDrwCell)
@@ -405,6 +407,8 @@ MD_Vint:
 		movem.l	d0-d7/a0-a6,-(sp)
 		lea	(RAM_Fami_Emu).l,a4		; whatever the interrupted code had there
 		lea	($C00000).l,a6
+		jsr	ppuClock			; when this began (see the end)
+		move.w	d5,-(sp)
 		if FPS
 		jsr	fpsUpdate
 		endif
@@ -467,6 +471,20 @@ MD_Vint:
 		clr.w	vdpHintSp0(a4)
 		move.w	#1,FamiMdVint(a4)
 		move.w	#1,FamiPPUVint(a4)
+
+	; The game's code didn't run meanwhile: its frame's clock (vNmi,
+	; for raster timing) skips the lines this took
+		jsr	ppuClock
+		sub.w	(sp)+,d5
+		bpl.s	.took
+		addi.w	#262,d5
+.took:
+		add.w	vNmi(a4),d5
+		cmpi.w	#262,d5
+		bcs.s	.vnmi_ok
+		subi.w	#262,d5
+.vnmi_ok:
+		move.w	d5,vNmi(a4)
 		movem.l	(sp)+,d0-d7/a0-a6
 		rte
 

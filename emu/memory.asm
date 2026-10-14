@@ -135,6 +135,18 @@ rdPPU_Status:
 		bhi.s	.hit			; (once hit, it stays set)
 		beq.s	.to_hit
 		move.w	#1,ppuSp0State(a4)	; VBlank is over
+		tst.b	ppuRdLast+1(a4)		; a loop waiting for the hit flag to
+		bmi.s	.no_hit_d5		; clear (not for VBlank's): the NES
+		bsr	ppuLine			; is at the top of the screen, line 0
+		add.w	vNmi(a4),d5		; (Excitebike's scroll splits are
+		bpl.s	.top_lo			; timed from here)
+		addi.w	#262,d5
+.top_lo:
+		cmpi.w	#262,d5
+		bcs.s	.top_ok
+		subi.w	#262,d5
+.top_ok:
+		move.w	d5,vNmi(a4)
 		bra.s	.no_hit_d5
 .to_hit:
 		move.w	#2,ppuSp0State(a4)
@@ -167,6 +179,7 @@ rdPPU_Status:
 ; 		beq.s	.novflag
 		ori.w	#$80,d7
 .novflag:
+		move.w	d7,ppuRdLast(a4)
 		move.w	#$2000,sr
 		rts
 ; ----------------------------------------------------------------
