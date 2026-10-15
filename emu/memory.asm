@@ -119,7 +119,7 @@ rdPPU_Status:
 		move.w	#$2700,sr
 		move.w	ppuSp0Ypos(a4),d4
 		cmpi.w	#$EF,d4
-		bcc.s	.no_hit
+		bcc.w	.no_hit
 		move.l	d5,-(sp)
 		move.l	4(sp),d5		; the caller's return address, plus the
 		add.l	a0,d5			; 6502 PC when interpreted: which read
@@ -134,13 +134,27 @@ rdPPU_Status:
 		cmpi.w	#1,d6			; read again: let it change
 		bhi.s	.hit			; (once hit, it stays set)
 		beq.s	.to_hit
-		move.w	#1,ppuSp0State(a4)	; VBlank is over
+		tst.b	ppuRdLast+1(a4)		; the last read had VBlank's flag (now
+		bmi.s	.hit			; clear): a loop waiting for that ends,
+						; one for the hit flag reads again
+		move.w	#1,ppuSp0State(a4)	; VBlank is over: the hit flag clears,
+		bsr.w	ppuLine			; and the NES is at the top of the
+		add.w	vNmi(a4),d5		; screen, line 0 (Excitebike's scroll
+		bpl.s	.top_lo			; splits are timed from here)
+		addi.w	#262,d5
+.top_lo:
+		cmpi.w	#262,d5
+		bcs.s	.top_ok
+		subi.w	#262,d5
+.top_ok:
+		move.w	d5,vNmi(a4)
 		bra.s	.no_hit_d5
 .to_hit:
 		move.w	#2,ppuSp0State(a4)
+		move.w	hsCurN(a4),hsHitN(a4)	; (its split comes next: hsChoose)
 	; The NES is on sprite 0's line now: the frame's line count
 	; (ppuLine, from vNmi) goes from here.
-		bsr	ppuLine
+		bsr.w	ppuLine
 		sub.w	d4,d5
 		subq.w	#1,d5			; lines from sprite 0's (Y+1)
 		add.w	vNmi(a4),d5
@@ -167,6 +181,7 @@ rdPPU_Status:
 ; 		beq.s	.novflag
 		ori.w	#$80,d7
 .novflag:
+		move.w	d7,ppuRdLast(a4)
 		move.w	#$2000,sr
 		rts
 ; ----------------------------------------------------------------
@@ -455,7 +470,10 @@ APU_OAMDMA:
 	; NES OAM (Y, tile, attributes, X) to the MD's sprite table. Only
 	; sprites that can show are listed (the NES hides Y >= $EF, the MD
 	; shows NES lines up to 231), so the list and its DMA are shorter.
+	; It goes in the table for this game frame (sprWrite): MD_Vint shows
+	; the previous frame's sprites while it shows that frame's scroll.
 		lea	vdpSprData(a4),a3
+		adda.w	sprWrite(a4),a3
 		lea	(oamAttr).l,a6
 		move.w	ppuSprWide(a4),d6
 		addq.w	#1,d6			; size, and the link to the next sprite
@@ -463,6 +481,12 @@ APU_OAMDMA:
 		move.w	#$80,d1
 		moveq	#0,d2
 		moveq	#64-1,d5
+		if FPS
+		tst.w	fpsOn(a4)		; the counter takes the last two slots
+		beq.s	.all_64
+		moveq	#64-2-1,d5
+.all_64:
+		endif
 .lp_sprnormal:
 		move.b	(a5)+,d2		; Y
 		cmpi.b	#$E7,d2
@@ -490,20 +514,24 @@ APU_OAMDMA:
 		dbf	d5,.lp_sprnormal
 .listed:
 		lea	vdpSprData(a4),a6
+		adda.w	sprWrite(a4),a6
 		cmpa.l	a6,a3
 		bne.s	.end_list
 		clr.l	(a3)+			; none: one sprite above the screen
 		clr.l	(a3)+
 .end_list:
+		sf	-5(a3)			; the last one ends the list,
 		if FPS
-		move.b	#64,-5(a3)		; the last one links to the FPS counter
-		else
-		sf	-5(a3)			; the last one ends the list
+		tst.w	fpsOn(a4)
+		beq.s	.no_counter
+		move.b	#fpsSprite,-5(a3)	; or links to the FPS counter
+.no_counter:
 		endif
 		suba.l	a6,a3
 		move.l	a3,d7
 		lsr.w	#1,d7
-		move.w	d7,vdpSprWords(a4)	; for the DMA (MD_Vint)
+		move.w	d7,vdpSprWords-vdpSprData(a6)	; for the DMA (MD_Vint)
+		move.w	sprWrite(a4),sprLatest(a4)
 		movem.l	(sp)+,d0-d3/d7/a3/a6
 		jmp	(RAM_EmuLoop).l
 

@@ -167,12 +167,12 @@ apuUpdate:
 		lea	apuRegs+$00(a5),a1
 		lea	apuWrote+$00(a5),a2
 		moveq	#0,d6
-		bsr	apuPulseWrites
+		bsr.w	apuPulseWrites
 		lea	apuCh2(a5),a0
 		lea	apuRegs+$04(a5),a1
 		lea	apuWrote+$04(a5),a2
 		moveq	#1,d6
-		bsr	apuPulseWrites
+		bsr.w	apuPulseWrites
 
 		tst.b	apuWrote+$0B(a5)	; triangle length / linear reload
 		beq.s	.no_tri
@@ -203,7 +203,7 @@ apuUpdate:
 	; half frames at 120 Hz. One MD frame = Q, Q+H, Q, Q+H. The units
 	; don't affect each other, so each is clocked its 4 or 2 times in
 	; one go.
-		bsr	apuSequence
+		bsr.w	apuSequence
 
 	; outputs
 		lea	apuCh1(a5),a0

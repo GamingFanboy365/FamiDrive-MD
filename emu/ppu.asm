@@ -158,6 +158,7 @@ wrPPU_Scroll:
 		jmp	(RAM_EmuLoop).l
 
 .vertical:
+		move.w	#1,ppuScrollSet(a4)
 		addq.w	#8,d4
 		lsl.b	#1,d6
 		bcs.s	.vert_swap
@@ -175,14 +176,16 @@ wrPPU_Scroll:
 ; The horizontal scroll (ppuTX) changed
 ;
 ; Games keep a status bar still by changing the scroll partway down
-; the screen, after waiting for sprite 0 hit. Until the game has seen
-; the hit this frame (ppuSp0State), a change sets the scroll from the
+; the screen, after waiting for sprite 0 hit, or after a delay loop
+; once their VBlank work and its scroll are done (Balloon Fight's
+; Balloon Trip). Until the game has polled $2002 (ppuSp0State) or set
+; both bytes of $2005 this frame, a change sets the scroll from the
 ; top: whatever runs before is the NES's VBlank work, however long it
 ; takes here (VRAM addresses written to $2006 pass through the scroll
-; on the NES too, and games set it again after). After the hit, a
+; on the NES too, and games set it again after). After that, a
 ; change starts a split at the line the NES would be on (ppuLine),
-; unless it comes from $2006. Changes at about the same line (the X,
-; then $2000's nametable bit) make one split. hsBuild turns them into
+; unless it comes from $2006. Changes within 4 lines (the X, then
+; $2000's nametable bit) make one split. hsBuild turns them into
 ; the MD's line scroll table.
 ;
 ; d6.w - 0: don't start a split
@@ -196,13 +199,16 @@ ppuXChanged:
 		neg.w	d4
 		cmp.w	vdpScrlX(a4),d4
 		beq.w	.done
-		cmpi.w	#2,ppuSp0State(a4)	; before the game saw sprite 0 hit
-		bne.s	.top
+		tst.w	ppuSp0State(a4)		; the game polled $2002 this frame,
+		bne.s	.split_ok
+		tst.w	ppuScrollSet(a4)	; or set the whole scroll already
+		beq.s	.top			; (both $2005 bytes): else from the top
+.split_ok:
 		tst.w	ppuMaskOn(a4)
 		beq.s	.top
 		tst.w	d0			; $2006 mid-screen: leave the scroll
 		beq.w	.done			; (games set it right after)
-		bsr	ppuLine
+		bsr.w	ppuLine
 		tst.w	d5			; past the bottom (a very slow frame)
 		bmi.s	.set
 		move.w	d4,vdpScrlX(a4)
@@ -216,7 +222,7 @@ ppuXChanged:
 		beq.s	.append
 		lsl.w	#2,d0
 		move.w	-4(a5,d0.w),d6		; the last split's line
-		addq.w	#2,d6
+		addq.w	#4,d6
 		cmp.w	d6,d5
 		bhi.s	.after
 		move.w	d4,-2(a5,d0.w)		; same moment: same split
@@ -296,6 +302,12 @@ ppuFrameStart:
 		move.w	#$2700,sr
 		bsr.s	ppuClock
 		move.w	d5,vNmi(a4)
+		addq.w	#1,hsFrame(a4)
+		move.w	sprLatest(a4),d0	; the frame before is done: its sprites
+		move.w	d0,sprDone(a4)		; and vertical scroll (MD_Vint), and
+		eori.w	#sprTable2,d0		; this frame's sprites go in the other
+		move.w	d0,sprWrite(a4)		; table
+		move.l	vdpScrlY(a4),vsDone(a4)
 		lea	hsTopCur(a4),a0
 		lea	hsTopDone(a4),a1
 		move.l	(a0)+,(a1)+		; top
@@ -309,16 +321,67 @@ ppuFrameStart:
 		clr.w	hsCurN(a4)
 		clr.w	ppuSp0State(a4)
 		clr.l	ppuRdSite(a4)
+		clr.w	ppuScrollSet(a4)
 		move.w	(sp)+,sr
 		movem.l	(sp)+,d0/d5/a0-a1
 		rts
 
 ; ----------------------------------------------------------------
+; Which game frame MD_Vint shows: the current one once its scroll from
+; the top is set (its NMI handler returned, or the game saw sprite 0
+; hit: the screen is being drawn, wrote the split that follows the hit,
+; and is well past its last split) and it has as many splits as the
+; previous frame; else the previous frame (a slow game frame spans MD
+; frames). Frames shown go up one at a time when they can: if the game
+; has begun two or more since the one shown last, the previous one
+; rather than a skip (which a repeat would follow when the game's
+; frames end around VBlank: judder). Its sprites and vertical scroll go
+; with it: a game uploads its sprites before it sets the scroll, so
+; showing them with the previous frame's would put them a frame ahead.
+;
+; hsShowDone: 0 - the current frame, 1 - the previous one
+; ----------------------------------------------------------------
+
+hsChoose:
+		move.w	hsFrame(a4),d0		; frames since the one shown last:
+		sub.w	hsShownF(a4),d0		; none, show it again; two or more,
+		beq.s	.this_frame		; the one before this (a step of
+		subq.w	#1,d0			; one, not a skip and a repeat)
+		bne.s	.done_frame
+		tst.w	cpuFamiVint(a4)		; NMI handler returned
+		beq.s	.top_set
+		cmpi.w	#2,ppuSp0State(a4)	; or past sprite 0 hit, with the
+		bne.s	.done_frame		; split that follows it, and well
+		move.w	hsCurN(a4),d0		; past its last split: one split
+		cmp.w	hsHitN(a4),d0		; can take writes a few lines
+		beq.s	.done_frame		; apart (Excitebike: $2000, then
+		tst.w	d0			; $2005)
+		beq.s	.top_set
+		lsl.w	#2,d0
+		lea	hsCur(a4),a0
+		move.w	-4(a0,d0.w),d1		; (an MD line: NES line - 8)
+		addi.w	#8+8,d1
+		bsr.w	ppuLine
+		cmp.w	d1,d5
+		blt.s	.done_frame
+.top_set:
+		move.w	hsCurN(a4),d0
+		cmp.w	hsDoneN(a4),d0
+		bcc.s	.this_frame
+.done_frame:
+		move.w	#1,hsShowDone(a4)
+		move.w	hsFrame(a4),d0
+		subq.w	#1,d0
+		move.w	d0,hsShownF(a4)
+		rts
+.this_frame:
+		clr.w	hsShowDone(a4)
+		move.w	hsFrame(a4),hsShownF(a4)
+		rts
+
+; ----------------------------------------------------------------
 ; Set the MD's horizontal scroll, once per frame from MD_Vint (in
-; VBlank). It shows the current game frame once its scroll from the
-; top is set (its NMI handler returned, or the game saw sprite 0 hit:
-; the screen is being drawn) and it has as many splits as the previous
-; frame; else the previous frame (a slow game frame spans MD frames).
+; VBlank), for the game frame hsChoose picked.
 ; Without splits it is one scroll for the screen, else the line scroll
 ; table at $B800 is written line by line. Nothing is written while the
 ; scroll stays the same (hsShown).
@@ -328,15 +391,8 @@ ppuFrameStart:
 
 hsApply:
 		lea	hsTopCur(a4),a1
-		tst.w	cpuFamiVint(a4)		; NMI handler returned
-		beq.s	.top_set
-		cmpi.w	#2,ppuSp0State(a4)	; or past sprite 0 hit
-		bne.s	.done_frame
-.top_set:
-		move.w	hsCurN(a4),d0
-		cmp.w	hsDoneN(a4),d0
-		bcc.s	.use
-.done_frame:
+		tst.w	hsShowDone(a4)
+		beq.s	.use
 		lea	hsTopDone(a4),a1
 .use:
 	; the same as last time?
@@ -555,14 +611,14 @@ ppuSetColor:
 
 ; NES palette $00-$3F as MD colors, generated by tools/mkpalette.py
 ppuVdpColors:
-		dc.w $666,$820,$A00,$A02,$804,$406,$006,$024	; $00-$07
-		dc.w $022,$040,$040,$040,$440,$000,$000,$000	; $08-$0F
-		dc.w $AAA,$C60,$E44,$E26,$C2A,$62A,$22A,$048	; $10-$17
-		dc.w $066,$082,$080,$280,$860,$000,$000,$000	; $18-$1F
+		dc.w $666,$820,$A02,$A04,$806,$406,$006,$026	; $00-$07
+		dc.w $022,$040,$040,$040,$442,$000,$000,$000	; $08-$0F
+		dc.w $AAA,$C40,$E24,$E26,$C0A,$60A,$22A,$048	; $10-$17
+		dc.w $066,$082,$080,$280,$A80,$000,$000,$000	; $18-$1F
 		dc.w $EEE,$EA6,$E88,$E6C,$E6E,$C6E,$68E,$2AE	; $20-$27
-		dc.w $0CA,$0C8,$2E4,$8C4,$CC4,$444,$000,$000	; $28-$2F
-		dc.w $EEE,$ECC,$ECC,$ECE,$ECE,$ECE,$CCE,$ACE	; $30-$37
-		dc.w $8EE,$8EC,$AEC,$CEA,$EEA,$AAA,$000,$000	; $38-$3F
+		dc.w $2CC,$0C8,$4E6,$6C2,$CC4,$444,$000,$000	; $28-$2F
+		dc.w $EEE,$ECA,$ECC,$ECE,$ECE,$ECE,$CCE,$ACE	; $30-$37
+		dc.w $AEE,$AEC,$AEC,$CEA,$EEC,$AAA,$000,$000	; $38-$3F
 
 ; ----------------------------------------------------------------
 ; Attribute byte -> the palettes of its 4x4 cells, in both copies of

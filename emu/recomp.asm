@@ -231,3 +231,46 @@ rcReadPad:
 		move.w	d4,d6
 		addi.w	#$4016,d6
 		bra.s	rcRead16
+
+; ----------------------------------------------------------------
+; A delay loop: DEX or DEY, then BNE back to it, or two of them nested
+; (tools/recomp6502.py)
+;
+; Games use these to time raster effects (Excitebike's scroll split,
+; Balloon Trip's score bar). It takes no time here: the NES time it
+; would take moves the game's frame clock (vNmi) on, so what comes
+; after happens at the NES's line.
+;
+; d4.w - turns (0: 256)
+; d5.w - NES cycles a turn
+; d6.w - and cycles to add (-1: the last branch isn't taken)
+; ----------------------------------------------------------------
+
+rcDelay:
+		andi.w	#$FF,d4
+		bne.s	.turns
+		move.w	#256,d4
+.turns:
+		mulu	d5,d4
+		ext.l	d6
+		add.l	d6,d4			; cycles
+		move.l	d4,d5
+		add.l	d4,d4
+		add.l	d5,d4			; PPU dots: 3 a cycle
+		moveq	#0,d5
+		move.w	rcDelayDots(a4),d5	; with what was left over
+		add.l	d5,d4
+		divu	#341,d4			; lines, and dots left over
+		move.l	d4,d5
+		swap	d5
+		move.w	d5,rcDelayDots(a4)
+		andi.l	#$FFFF,d4
+		divu	#262,d4			; (whole frames don't change the line)
+		swap	d4
+		move.w	vNmi(a4),d5		; the frame began that much earlier
+		sub.w	d4,d5
+		bpl.s	.vnmi
+		addi.w	#262,d5
+.vnmi:
+		move.w	d5,vNmi(a4)
+		rts

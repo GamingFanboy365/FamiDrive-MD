@@ -32,7 +32,8 @@ The build uses the [AS macro assembler](http://john.ccac.rwth-aachen.de:8000/as/
 6502 code into 68000 code at build time with `tools/recomp6502.py`, instead of interpreting it
 while the game runs. Games that use a lot of CPU run many times faster: Pinball's gameplay goes
 from about 3.5 to about 55 game frames per second, as fast as on a NES (which also drops frames
-when the game is busy), and Super Mario Bros. runs at full speed (60) while you play.
+when the game is busy). Super Mario Bros., Balloon Fight, Ice Climber and Excitebike run at full
+speed (60) while you play.
 
 The translated code goes to `out/recomp.asm`. It is the game's code in another form, so like the
 built ROM it stays out of git and shouldn't be published. Code the recompiler can't find ahead of
@@ -85,11 +86,15 @@ Anything else shows an error screen saying what isn't supported.
   though its attract demo still runs at about 97%
 - Recompiled Super Mario Bros. can drop the odd frame in its busiest scenes (about 2% of frames in
   World 4-1, with Lakitu and several enemies on screen), and the black screen before a level
-  lasts about a tenth of a second longer than on a NES
+  lasts about a tenth of a second longer than on a NES. As a level restarts after a death, one
+  frame shows the screen half cleared where the NES shows plain sky
+- Ice Climber's pause while it builds a mountain lasts about a third of a second longer than on
+  a NES
 - Graphics glitches from timing inaccuracy. The emulator can't tell which line the NES would be
-  drawing, so sprite 0 hit is reported when the game polls for it, and the scroll change that
-  follows is placed on sprite 0's line. Split-screen effects timed any other way can be off by a
-  few lines, and only horizontal splits are supported
+  drawing, so it goes by what the game does: sprite 0 hit is reported when the game polls for
+  it, a poll that sees the hit flag clear marks the top of the screen, and delay loops count as
+  the NES time they would take. Split-screen effects timed any other way can be off by a few
+  lines, and only horizontal splits are supported
 - Sound is approximate: no DMC (sample) channel, the PSG only plays 50% squares so pulse duty is
   approximated by volume, pulse notes below about 109 Hz play an octave up, and timing assumes
   an NTSC console

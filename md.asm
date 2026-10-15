@@ -89,8 +89,18 @@ vdpScrlY	ds.l 1
 vdpPalette	ds.w 64
 vdpPalDirty	ds.b 1			; vdpPalette changed since the last DMA
 		ds.b 1
-vdpSprData	ds.w 8*64
-vdpSprWords	ds.w 1			; words of vdpSprData in use (APU_OAMDMA)
+vdpSprData	ds.w 4*64		; sprite tables (APU_OAMDMA), two: one for the game
+vdpSprWords	ds.w 1			; frame being run, one for the frame before it,
+vdpSprData2	ds.w 4*64		; each with its words in use. sprWrite etc. are
+vdpSprWords2	ds.w 1			; offsets from vdpSprData: 0 or sprTable2
+sprWrite	ds.w 1			; the table this game frame's OAM DMA goes to
+sprLatest	ds.w 1			; the table with the newest sprites
+sprDone		ds.w 1			; the previous game frame's
+hsShowDone	ds.w 1			; MD_Vint shows the previous game frame (hsChoose)
+hsHitN		ds.w 1			; hsCurN when the game saw sprite 0 hit (rdPPU_Status)
+hsFrame		ds.w 1			; game frames begun (ppuFrameStart)
+hsShownF	ds.w 1			; and the one MD_Vint showed last (hsChoose)
+vsDone		ds.l 1			; and its vertical scroll
 fpsIdle		ds.w 1			; FPS counter (emu/fps.asm)
 fpsTick		ds.w 1
 fpsShow		ds.w 1
@@ -114,9 +124,13 @@ ppuMaskNew	ds.w 1			; $2001 write for the next VBlank (bit 15: pending)
 ppuSp0State	ds.w 1			; what the game saw of sprite 0 hit this frame (rdPPU_Status)
 ppuRdSite	ds.l 1			; where the last $2002 read came from (rdPPU_Status)
 vbLate		ds.w 1			; a VBlank came during the NMI handler: next NMI on its RTI
+rcDelayDots	ds.w 1			; NES time left over from rcDelay, in PPU dots
+ppuRdLast	ds.w 1			; what the last $2002 read returned (rdPPU_Status)
+ppuScrollSet	ds.w 1			; the game wrote both $2005 bytes this frame (ppuXChanged)
 ppuNtXor	ds.w 1			; nametable address xor for the mirrored copy ($400 or $800)
 ppuCmdXor	ds.l 1			; and VDP command xor for its cells (ppuDrwCell)
 		finish
+sprTable2	equ vdpSprData2-vdpSprData
 
 ; ====================================================================
 ; Header
@@ -404,9 +418,8 @@ MD_Vint:
 		movem.l	d0-d7/a0-a6,-(sp)
 		lea	(RAM_Fami_Emu).l,a4		; whatever the interrupted code had there
 		lea	($C00000).l,a6
-		if FPS
-		jsr	fpsUpdate
-		endif
+		jsr	ppuClock			; when this began (see the end)
+		move.w	d5,-(sp)
 
 		tst.w	ppuNmiFlag(a4)			; no NMI (and not in the NMI handler,
 		bne.s	.nmi_on				; which turns it off while it runs):
@@ -421,13 +434,24 @@ MD_Vint:
 .mask:							; that only shows from the next frame
 		jsr	ppuMaskApply
 .mask_later:
+		jsr	hsChoose			; the game frame to show: its
+		lea	vdpScrlY(a4),a0		; vertical scroll, sprites and
+		move.w	sprLatest(a4),d2		; horizontal scroll (hsApply)
+		tst.w	hsShowDone(a4)
+		beq.s	.this_frame
+		lea	vsDone(a4),a0
+		move.w	sprDone(a4),d2
+.this_frame:
 		move.w	#$8F02,4(a6)
 		move.l	#$40000010,4(a6)
-		move.l	vdpScrlY(a4),(a6)
+		move.l	(a0),(a6)
+		lea	vdpSprData(a4),a0		; its sprite table
+		adda.w	d2,a0
 		if FPS
-		move.l	#$94019318,4(a6)		; 64 sprites and the counter's 6
+		jsr	fpsUpdate			; the counter's sprites, in that table
+		move.l	#$94019300,4(a6)		; all 64: the counter is in the last two
 		else
-		move.w	vdpSprWords(a4),d0		; the sprites listed
+		move.w	vdpSprWords-vdpSprData(a0),d0	; the sprites listed
 		bne.s	.spr_words
 		moveq	#4,d0				; none yet
 .spr_words:
@@ -439,8 +463,19 @@ MD_Vint:
 		move.w	d0,4(a6)
 		endif
 		move.w	#$0100,(z80_bus).l
-		move.l	#$96009500+(((RAM_Fami_Emu+vdpSprData)<<7)&$FF0000)|(((RAM_Fami_Emu+vdpSprData)>>1)&$FF),4(a6)
-		move.w	#$9700|(((RAM_Fami_Emu+vdpSprData)>>17)&$7F),4(a6)
+		move.l	a0,d0				; DMA source: the table
+		lsr.l	#1,d0
+		move.w	#$9500,d1
+		move.b	d0,d1
+		move.w	d1,4(a6)
+		lsr.l	#8,d0
+		move.w	#$9600,d1
+		move.b	d0,d1
+		move.w	d1,4(a6)
+		lsr.l	#8,d0
+		andi.w	#$7F,d0
+		ori.w	#$9700,d0
+		move.w	d0,4(a6)
 		move.w	#$7C00,4(a6)
 		move.w	#$0002|$80,-(sp)
 .wait:		btst	#0,(z80_bus).l
@@ -466,6 +501,20 @@ MD_Vint:
 		clr.w	vdpHintSp0(a4)
 		move.w	#1,FamiMdVint(a4)
 		move.w	#1,FamiPPUVint(a4)
+
+	; The game's code didn't run meanwhile: its frame's clock (vNmi,
+	; for raster timing) skips the lines this took
+		jsr	ppuClock
+		sub.w	(sp)+,d5
+		bpl.s	.took
+		addi.w	#262,d5
+.took:
+		add.w	vNmi(a4),d5
+		cmpi.w	#262,d5
+		bcs.s	.vnmi_ok
+		subi.w	#262,d5
+.vnmi_ok:
+		move.w	d5,vNmi(a4)
 		movem.l	(sp)+,d0-d7/a0-a6
 		rte
 

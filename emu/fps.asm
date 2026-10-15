@@ -49,23 +49,31 @@ fpsInit:
 		dbf	d7,.pixel
 		move.l	d4,(a6)
 		dbf	d6,.row
-		lea	vdpSprData+2(a4),a5		; link the empty sprite list so
-		moveq	#1,d4				; it reaches the counter's slots
-		moveq	#64-1,d7			; before the game's first OAM DMA
-.link:
-		move.w	d4,(a5)
-		addq.w	#8,a5
-		addq.w	#1,d4
-		dbf	d7,.link
+		lea	vdpSprData+2(a4),a5		; link the empty sprite lists
+		bsr.s	.links				; (both tables) so they reach
+		lea	vdpSprData2+2(a4),a5		; the counter's slots before the
+		bsr.s	.links				; game's first OAM DMA
 		move.w	#$0000,vdpPalette+14*2(a4)	; colors 14 and 15 of the
 		move.w	#$0EEE,vdpPalette+15*2(a4)	; first line: NES colors don't use them
 		st	vdpPalDirty(a4)
 		move.w	#1,fpsOn(a4)
 		rts
 
+.links:
+		moveq	#1,d4
+		moveq	#fpsSprite-1,d7
+.link:
+		move.w	d4,(a5)
+		addq.w	#8,a5
+		addq.w	#1,d4
+		dbf	d7,.link
+		rts
+
 ; ----------------------------------------------------------------
 ; Once per frame from MD_Vint, before the sprite table goes to VRAM:
 ; count the second and put the digits in the sprite table
+;
+; a0 - the sprite table MD_Vint shows (vdpSprData or vdpSprData2)
 ; ----------------------------------------------------------------
 
 fpsUpdate:
@@ -78,7 +86,7 @@ fpsUpdate:
 .draw:
 		tst.w	fpsOn(a4)
 		beq.s	.off
-		lea	vdpSprData+fpsSprite*8(a4),a5
+		lea	fpsSprite*8(a0),a5
 		moveq	#0,d4
 		move.w	fpsShow(a4),d4
 		cmpi.w	#60,d4				; two wait loops can end in one frame
@@ -93,7 +101,7 @@ fpsUpdate:
 		move.w	#fpsX,(a5)+
 		swap	d4
 		move.w	#fpsY,(a5)+
-		move.w	#fpsSprite+2,(a5)+		; link: past the last sprite, ends the list
+		move.w	#0,(a5)+			; 8x8, the end of the list
 		addi.w	#$8000|fpsTiles,d4
 		move.w	d4,(a5)+
 		move.w	#fpsX+8,(a5)+
@@ -103,11 +111,14 @@ fpsUpdate:
 		tst.w	fpsWasOn(a4)			; just hidden: clear the two
 		beq.s	.done				; slots until the game rewrites them
 		clr.w	fpsWasOn(a4)
-		lea	vdpSprData+fpsSprite*8(a4),a5
-		move.w	#0,(a5)
+		lea	vdpSprData+fpsSprite*8(a4),a5	; (both tables: one still
+		bsr.s	.hide				; links to the counter until
+		lea	vdpSprData2+fpsSprite*8(a4),a5	; the game's next OAM DMA)
+.hide:
+		move.w	#0,(a5)				; above the screen
 		move.w	#fpsSprite+1,2(a5)
 		move.w	#0,8(a5)
-		move.w	#fpsSprite+2,10(a5)
+		move.w	#0,10(a5)
 .done:
 		rts
 
