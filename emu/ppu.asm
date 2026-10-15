@@ -208,7 +208,7 @@ ppuXChanged:
 		beq.s	.top
 		tst.w	d0			; $2006 mid-screen: leave the scroll
 		beq.w	.done			; (games set it right after)
-		bsr	ppuLine
+		bsr.w	ppuLine
 		tst.w	d5			; past the bottom (a very slow frame)
 		bmi.s	.set
 		move.w	d4,vdpScrlX(a4)
@@ -302,6 +302,12 @@ ppuFrameStart:
 		move.w	#$2700,sr
 		bsr.s	ppuClock
 		move.w	d5,vNmi(a4)
+		addq.w	#1,hsFrame(a4)
+		move.w	sprLatest(a4),d0	; the frame before is done: its sprites
+		move.w	d0,sprDone(a4)		; and vertical scroll (MD_Vint), and
+		eori.w	#sprTable2,d0		; this frame's sprites go in the other
+		move.w	d0,sprWrite(a4)		; table
+		move.l	vdpScrlY(a4),vsDone(a4)
 		lea	hsTopCur(a4),a0
 		lea	hsTopDone(a4),a1
 		move.l	(a0)+,(a1)+		; top
@@ -321,12 +327,61 @@ ppuFrameStart:
 		rts
 
 ; ----------------------------------------------------------------
+; Which game frame MD_Vint shows: the current one once its scroll from
+; the top is set (its NMI handler returned, or the game saw sprite 0
+; hit: the screen is being drawn, wrote the split that follows the hit,
+; and is well past its last split) and it has as many splits as the
+; previous frame; else the previous frame (a slow game frame spans MD
+; frames). Frames shown go up one at a time when they can: if the game
+; has begun two or more since the one shown last, the previous one
+; rather than a skip (which a repeat would follow when the game's
+; frames end around VBlank: judder). Its sprites and vertical scroll go
+; with it: a game uploads its sprites before it sets the scroll, so
+; showing them with the previous frame's would put them a frame ahead.
+;
+; hsShowDone: 0 - the current frame, 1 - the previous one
+; ----------------------------------------------------------------
+
+hsChoose:
+		move.w	hsFrame(a4),d0		; frames since the one shown last:
+		sub.w	hsShownF(a4),d0		; none, show it again; two or more,
+		beq.s	.this_frame		; the one before this (a step of
+		subq.w	#1,d0			; one, not a skip and a repeat)
+		bne.s	.done_frame
+		tst.w	cpuFamiVint(a4)		; NMI handler returned
+		beq.s	.top_set
+		cmpi.w	#2,ppuSp0State(a4)	; or past sprite 0 hit, with the
+		bne.s	.done_frame		; split that follows it, and well
+		move.w	hsCurN(a4),d0		; past its last split: one split
+		cmp.w	hsHitN(a4),d0		; can take writes a few lines
+		beq.s	.done_frame		; apart (Excitebike: $2000, then
+		tst.w	d0			; $2005)
+		beq.s	.top_set
+		lsl.w	#2,d0
+		lea	hsCur(a4),a0
+		move.w	-4(a0,d0.w),d1		; (an MD line: NES line - 8)
+		addi.w	#8+8,d1
+		bsr.w	ppuLine
+		cmp.w	d1,d5
+		blt.s	.done_frame
+.top_set:
+		move.w	hsCurN(a4),d0
+		cmp.w	hsDoneN(a4),d0
+		bcc.s	.this_frame
+.done_frame:
+		move.w	#1,hsShowDone(a4)
+		move.w	hsFrame(a4),d0
+		subq.w	#1,d0
+		move.w	d0,hsShownF(a4)
+		rts
+.this_frame:
+		clr.w	hsShowDone(a4)
+		move.w	hsFrame(a4),hsShownF(a4)
+		rts
+
+; ----------------------------------------------------------------
 ; Set the MD's horizontal scroll, once per frame from MD_Vint (in
-; VBlank). It shows the current game frame once its scroll from the
-; top is set (its NMI handler returned, or the game saw sprite 0 hit:
-; the screen is being drawn, and is well past its last split) and it
-; has as many splits as the previous frame; else the previous frame (a
-; slow game frame spans MD frames).
+; VBlank), for the game frame hsChoose picked.
 ; Without splits it is one scroll for the screen, else the line scroll
 ; table at $B800 is written line by line. Nothing is written while the
 ; scroll stays the same (hsShown).
@@ -336,24 +391,8 @@ ppuFrameStart:
 
 hsApply:
 		lea	hsTopCur(a4),a1
-		tst.w	cpuFamiVint(a4)		; NMI handler returned
-		beq.s	.top_set
-		cmpi.w	#2,ppuSp0State(a4)	; or past sprite 0 hit and well
-		bne.s	.done_frame		; past its last split: one split
-		move.w	hsCurN(a4),d0		; can take writes a few lines
-		beq.s	.top_set		; apart (Excitebike: $2000, then
-		lsl.w	#2,d0			; $2005)
-		lea	hsCur(a4),a0
-		move.w	-4(a0,d0.w),d1		; (an MD line: NES line - 8)
-		addi.w	#8+8,d1
-		bsr	ppuLine
-		cmp.w	d1,d5
-		blt.s	.done_frame
-.top_set:
-		move.w	hsCurN(a4),d0
-		cmp.w	hsDoneN(a4),d0
-		bcc.s	.use
-.done_frame:
+		tst.w	hsShowDone(a4)
+		beq.s	.use
 		lea	hsTopDone(a4),a1
 .use:
 	; the same as last time?
