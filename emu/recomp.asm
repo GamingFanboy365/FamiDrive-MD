@@ -265,12 +265,12 @@ rcDelay:
 		swap	d5
 		move.w	d5,rcDelayDots(a4)
 		andi.l	#$FFFF,d4
-		divu	#262,d4			; (whole frames don't change the line)
+		divu	mdLines(a4),d4		; (whole frames don't change the line)
 		swap	d4
 		move.w	vNmi(a4),d5		; the frame began that much earlier
 		sub.w	d4,d5
 		bpl.s	.vnmi
-		addi.w	#262,d5
+		add.w	mdLines(a4),d5
 .vnmi:
 		move.w	d5,vNmi(a4)
 		rts

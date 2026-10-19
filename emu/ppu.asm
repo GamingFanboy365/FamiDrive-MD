@@ -263,30 +263,105 @@ ppuXChanged:
 ; are timed from when the game's frame began, at its NMI: the NES
 ; line the game would be on, if each MD line is one NES line.
 ;
-; ppuClock: d5.w = MD line, counted from the start of VBlank (0-261,
-; roughly: the V counter repeats a few values in VBlank)
+; ppuClock: d5.w = MD line, counted from the start of VBlank (0 to
+; mdLines-1; on a Mega Drive the V counter repeats a few values in
+; VBlank, which count from their first time)
 ; ppuLine: d5.w = NES line now (negative: still in VBlank), from
 ; the lines since ppuFrameStart; 20 VBlank lines follow the NMI, and
-; a frame that outlasts 262 lines goes round again
+; a frame that outlasts the MD's goes round again
 ; Call with interrupts off.
 ; ----------------------------------------------------------------
 
 ppuClock:
-		move.w	8(a6),d5		; V counter
-		lsr.w	#8,d5
-		subi.w	#$E0,d5			; lines since the MD's VBlank began
-		bcc.s	.vblank
-		addi.w	#$E0+262-224,d5
-.vblank:
+		moveq	#0,d5
+		move.b	8(a6),d5		; V counter
+.read:
+		cmp.b	8(a6),d5		; the same again? AtGames' VDP can return a
+		beq.s	.stable			; mix of the old and new count when it reads
+		move.b	8(a6),d5		; it as it changes (7F, 81, 80)
+		bra.s	.read
+.stable:
+		tst.w	vOddLine(a4)		; a console whose V counter reads odd
+		bpl.s	.odd			; values in VBlank (ppuMeasureLines)?
+.table:
+		add.w	d5,d5			; lines since the MD's VBlank began
+		addi.w	#vLineTbl,d5		; (ppuMeasureLines)
+		move.w	(a4,d5.w),d5
+		rts
+.odd:
+		cmpi.b	#$10,d5			; a line of the screen with the VBlank
+		bcs.s	.table			; flag on: one of VBlank's last lines
+		cmpi.b	#$D0,d5			; (AtGames: $7E, $7F)
+		bcc.s	.table
+		btst	#3,5(a6)
+		beq.s	.table
+		move.w	vOddLine(a4),d5
 		rts
 
 ppuLine:
-		bsr.s	ppuClock
+		bsr.w	ppuClock
 		sub.w	vNmi(a4),d5		; lines since, less whole frames: the
 		bpl.s	.ahead			; NES keeps drawing frames meanwhile
-		addi.w	#262,d5
+		add.w	mdLines(a4),d5
 .ahead:
 		subi.w	#21,d5			; pre-render line: NES line 0 starts after it
+		rts
+
+; ----------------------------------------------------------------
+; At startup: the lines the console draws a frame (mdLines) and the
+; line each V counter value means (vLineTbl), for ppuClock. A Mega
+; Drive's are known; a clone's are measured (vlMeasure): an AtGames
+; handheld draws 246.
+;
+; a6 - VDP ports. Leaves the display off with VBlank interrupts on,
+; as Fami_InitVideo did.
+; ----------------------------------------------------------------
+
+ppuMeasureLines:
+		movem.l	d0-d7/a0-a5,-(sp)
+		lea	(RAM_Fami_Emu).l,a4
+		move.w	#$8144,4(a6)		; display on (all black), no VBlank interrupts
+		move.w	#$8A63,4(a6)		; line interrupts every 100 lines
+		move.w	#$8014,4(a6)		; on
+		move.w	#$2300,sr
+		lea	vLineTbl(a4),a0
+		lea	(RAM_HintCount).w,a1
+		jsr	vlMeasure
+		move.w	d2,vOddLine(a4)		; odd V values in VBlank: their line
+		move.w	#$2700,sr
+		move.w	#$8004,4(a6)		; line interrupts off
+		move.w	#$8ADF,4(a6)
+		move.w	#$8124,4(a6)
+		cmpi.w	#200,d0			; none came, or nothing like a frame:
+		bcs.s	.mega_drive		; as on a Mega Drive
+		cmpi.w	#320,d0
+		bhi.s	.mega_drive
+		tst.w	d2			; odd V values in VBlank: a clone
+		bpl.s	.clone
+		move.w	d0,d1
+		subi.w	#262-2,d1
+		cmpi.w	#4,d1			; 262 give or take 2: a Mega Drive
+		bls.s	.mega_drive
+.clone:
+		move.w	d0,mdLines(a4)		; a clone: as measured
+		bra.s	.done
+.mega_drive:
+		move.w	#262,mdLines(a4)
+		move.w	#-1,vOddLine(a4)
+		lea	vLineTbl(a4),a0		; $E0 on: lines since VBlank began,
+		moveq	#0,d1			; the rest after the 38 lines of VBlank
+.line:
+		move.w	d1,d0
+		subi.w	#$E0,d0
+		bcc.s	.vblank
+		addi.w	#262,d0
+.vblank:
+		move.w	d0,(a0)+
+		addq.w	#1,d1
+		cmpi.w	#256,d1
+		bne.s	.line
+.done:
+		movem.l	(sp)+,d0-d7/a0-a5
 		rts
 
 ; ----------------------------------------------------------------
@@ -300,7 +375,7 @@ ppuFrameStart:
 		movem.l	d0/d5/a0-a1,-(sp)
 		move.w	sr,-(sp)
 		move.w	#$2700,sr
-		bsr.s	ppuClock
+		bsr.w	ppuClock
 		move.w	d5,vNmi(a4)
 		addq.w	#1,hsFrame(a4)
 		move.w	sprLatest(a4),d0	; the frame before is done: its sprites
