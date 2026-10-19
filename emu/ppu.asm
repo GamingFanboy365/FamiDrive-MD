@@ -272,8 +272,14 @@ ppuXChanged:
 ; ----------------------------------------------------------------
 
 ppuClock:
-		move.w	8(a6),d5		; V counter
-		lsr.w	#8,d5
+		moveq	#0,d5
+		move.b	8(a6),d5		; V counter
+.read:
+		cmp.b	8(a6),d5		; the same again? AtGames' VDP can return a
+		beq.s	.stable			; mix of the old and new count when it reads
+		move.b	8(a6),d5		; it as it changes (7F, 81, 80)
+		bra.s	.read
+.stable:
 		subi.w	#$E0,d5			; lines since the MD's VBlank began
 		bcc.s	.vblank
 		addi.w	#$E0+262-224,d5
