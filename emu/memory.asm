@@ -141,11 +141,11 @@ rdPPU_Status:
 		bsr.w	ppuLine			; and the NES is at the top of the
 		add.w	vNmi(a4),d5		; screen, line 0 (Excitebike's scroll
 		bpl.s	.top_lo			; splits are timed from here)
-		addi.w	#262,d5
+		add.w	mdLines(a4),d5
 .top_lo:
-		cmpi.w	#262,d5
+		cmp.w	mdLines(a4),d5
 		bcs.s	.top_ok
-		subi.w	#262,d5
+		sub.w	mdLines(a4),d5
 .top_ok:
 		move.w	d5,vNmi(a4)
 		bra.s	.no_hit_d5
@@ -159,11 +159,11 @@ rdPPU_Status:
 		subq.w	#1,d5			; lines from sprite 0's (Y+1)
 		add.w	vNmi(a4),d5
 		bpl.s	.not_before
-		addi.w	#262,d5
+		add.w	mdLines(a4),d5
 .not_before:
-		cmpi.w	#262,d5
+		cmp.w	mdLines(a4),d5
 		bcs.s	.in_frame
-		subi.w	#262,d5
+		sub.w	mdLines(a4),d5
 .in_frame:
 		move.w	d5,vNmi(a4)
 .hit:

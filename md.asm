@@ -46,6 +46,7 @@ cpuIRQ		equ $7FFE
 		struct RAM_Fami_Emu+$FF0
 RAM_EmuLoop	ds.w 3
 RAM_RcStack	ds.l 1			; recompiled code: stack at dispatch (emu/recomp.asm)
+RAM_HintCount	ds.w 1			; line interrupts taken (MD_Hint, ppuMeasureLines)
 		finish
 
 ; ----------------------------------------------------------------
@@ -129,6 +130,8 @@ ppuRdLast	ds.w 1			; what the last $2002 read returned (rdPPU_Status)
 ppuScrollSet	ds.w 1			; the game wrote both $2005 bytes this frame (ppuXChanged)
 ppuNtXor	ds.w 1			; nametable address xor for the mirrored copy ($400 or $800)
 ppuCmdXor	ds.l 1			; and VDP command xor for its cells (ppuDrwCell)
+mdLines		ds.w 1			; lines the console draws a frame: 262 on a Mega Drive
+vLineTbl	ds.w 256		; lines since VBlank began, for each V counter value
 		finish
 sprTable2	equ vdpSprData2-vdpSprData
 
@@ -507,12 +510,12 @@ MD_Vint:
 		jsr	ppuClock
 		sub.w	(sp)+,d5
 		bpl.s	.took
-		addi.w	#262,d5
+		add.w	mdLines(a4),d5
 .took:
 		add.w	vNmi(a4),d5
-		cmpi.w	#262,d5
+		cmp.w	mdLines(a4),d5
 		bcs.s	.vnmi_ok
-		subi.w	#262,d5
+		sub.w	mdLines(a4),d5
 .vnmi_ok:
 		move.w	d5,vNmi(a4)
 		movem.l	(sp)+,d0-d7/a0-a6
@@ -524,9 +527,7 @@ MD_Vint:
 ; ----------------------------------------------------------------
 
 MD_Hint:
-; 		move.w	#$2700,sr
-; 		move.w	#$8ADF,4(a6)
-; 		move.w	#1,vdpHintSp0(a4)
+		addq.w	#1,(RAM_HintCount).w	; only on while ppuMeasureLines runs
 		rte
 
 ; ====================================================================
@@ -680,6 +681,7 @@ emuStart:
 		bsr	Fami_LoadRom
 		
 		lea	($C00000).l,a6
+		jsr	ppuMeasureLines
 		bsr	apuInit
 		lea 	(RAM_Fami_Emu),a4
 		lea	(RAM_Fami_PPU).w,a3
@@ -811,6 +813,7 @@ doVint:
 
 		include	"emu/memory.asm"	; CPU memory map
 		include	"emu/ppu.asm"		; PPU
+		include	"emu/vlines.asm"	; lines a frame, and the V counter's
 		include	"emu/apu.asm"		; APU (sound)
 		if RECOMP
 		include	"emu/recomp.asm"	; recompiled code support
