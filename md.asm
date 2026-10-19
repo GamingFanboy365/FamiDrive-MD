@@ -131,7 +131,9 @@ ppuScrollSet	ds.w 1			; the game wrote both $2005 bytes this frame (ppuXChanged)
 ppuNtXor	ds.w 1			; nametable address xor for the mirrored copy ($400 or $800)
 ppuCmdXor	ds.l 1			; and VDP command xor for its cells (ppuDrwCell)
 mdLines		ds.w 1			; lines the console draws a frame: 262 on a Mega Drive
-vLineTbl	ds.w 256		; lines since VBlank began, for each V counter value
+vOddLine	ds.w 1			; line for odd V values in VBlank (AtGames), -1: none
+vLineTbl	ds.w 512		; lines since VBlank began, for each V counter value
+				; (the second half: ppuMeasureLines' scratch)
 		finish
 sprTable2	equ vdpSprData2-vdpSprData
 

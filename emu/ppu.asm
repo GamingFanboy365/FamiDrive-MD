@@ -281,9 +281,21 @@ ppuClock:
 		move.b	8(a6),d5		; it as it changes (7F, 81, 80)
 		bra.s	.read
 .stable:
+		tst.w	vOddLine(a4)		; a console whose V counter reads odd
+		bpl.s	.odd			; values in VBlank (ppuMeasureLines)?
+.table:
 		add.w	d5,d5			; lines since the MD's VBlank began
 		addi.w	#vLineTbl,d5		; (ppuMeasureLines)
 		move.w	(a4,d5.w),d5
+		rts
+.odd:
+		cmpi.b	#$10,d5			; a line of the screen with the VBlank
+		bcs.s	.table			; flag on: one of VBlank's last lines
+		cmpi.b	#$D0,d5			; (AtGames: $7E, $7F)
+		bcc.s	.table
+		btst	#3,5(a6)
+		beq.s	.table
+		move.w	vOddLine(a4),d5
 		rts
 
 ppuLine:
@@ -315,6 +327,7 @@ ppuMeasureLines:
 		lea	vLineTbl(a4),a0
 		lea	(RAM_HintCount).w,a1
 		jsr	vlMeasure
+		move.w	d2,vOddLine(a4)		; odd V values in VBlank: their line
 		move.w	#$2700,sr
 		move.w	#$8004,4(a6)		; line interrupts off
 		move.w	#$8ADF,4(a6)
@@ -323,14 +336,18 @@ ppuMeasureLines:
 		bcs.s	.mega_drive		; as on a Mega Drive
 		cmpi.w	#320,d0
 		bhi.s	.mega_drive
+		tst.w	d2			; odd V values in VBlank: a clone
+		bpl.s	.clone
 		move.w	d0,d1
 		subi.w	#262-2,d1
 		cmpi.w	#4,d1			; 262 give or take 2: a Mega Drive
 		bls.s	.mega_drive
+.clone:
 		move.w	d0,mdLines(a4)		; a clone: as measured
 		bra.s	.done
 .mega_drive:
 		move.w	#262,mdLines(a4)
+		move.w	#-1,vOddLine(a4)
 		lea	vLineTbl(a4),a0		; $E0 on: lines since VBlank began,
 		moveq	#0,d1			; the rest after the 38 lines of VBlank
 .line:
