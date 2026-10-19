@@ -76,6 +76,7 @@ Anything else shows an error screen saying what isn't supported.
 | `emu/recomp.asm` | Support code for recompiled games (dispatch, NMI, interpreter fallback) |
 | `emu/fps.asm` | FPS counter (`--fps` builds) |
 | `tools/recomp6502.py` | The 6502-to-68000 recompiler |
+| `tools/hwtest/` | A test ROM that shows what a console does differently from a Mega Drive in what FamiDrive depends on (see its README) |
 | `system/md/error.asm` | Error screen |
 | `system/` | Assembler macros and Mega Drive hardware definitions |
 
@@ -101,6 +102,8 @@ Anything else shows an error screen saying what isn't supported.
   an NTSC console
 - 8x16 sprites show the wrong tiles (NES 8x16 sprites work differently from the MD's)
 - Some games do not work
-- The fixes made in October 2026 were tested in an emulator (Genesis Plus GX), not on real hardware
+- Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
+- An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its
+  YM2612's clock), so games and their music would run about 3% fast on it
 
 See [TODO.md](TODO.md) for smaller known bugs and planned work.
