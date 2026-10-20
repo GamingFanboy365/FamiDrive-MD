@@ -1,0 +1,81 @@
+# Builds FamiDrive on Linux and Windows, and checks that it still works on an AtGames handheld
+# (tools/test/run.sh). No NES ROM is in the repo: the builds use a small game that
+# tools/test/nrom.py writes.
+name: Build and check
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # The ROMs' fingerprints: build.bat's assembler (AS for Windows) is a newer build than
+  # build.sh's, and both should make the same ROMs
+  SUMS: import hashlib, sys; print(' '.join(hashlib.sha256(open(f, 'rb').read()).hexdigest()[:16] for f in sys.argv[1:]))
+
+jobs:
+  linux:
+    # (a pull request from a branch of this repo was checked as it was pushed)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      sums: ${{ steps.roms.outputs.sums }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build with build.sh (interpreted, recompiled, with the FPS counter)
+        run: |
+          mkdir -p out
+          python3 tools/test/nrom.py out/test.nes
+          ./build.sh out/test.nes && cp out/rom_md.bin out/interpreted.bin
+          ./build.sh --recompile out/test.nes && cp out/rom_md.bin out/recompiled.bin
+          ./build.sh --recompile --fps out/test.nes && cp out/rom_md.bin out/fps.bin
+
+      - id: roms
+        run: echo "sums=$(python3 -c "$SUMS" out/interpreted.bin out/recompiled.bin out/fps.bin)" >> "$GITHUB_OUTPUT"
+
+      - name: Build the hardware test ROM
+        run: tools/hwtest/build.sh
+
+      - uses: actions/cache@v4
+        with:
+          path: out/test/cores
+          key: gpgx-${{ runner.os }}-${{ hashFiles('tools/test/run.sh', 'tools/test/gpgx_atgames.py') }}
+
+      - name: Check AtGames handheld support
+        run: tools/test/run.sh
+
+  windows:
+    needs: linux
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Build with build.bat (interpreted, recompiled, with the FPS counter)
+        shell: cmd
+        run: |
+          if not exist out mkdir out
+          python tools\test\nrom.py out\test.nes || exit /b 1
+          call build.bat out\test.nes || exit /b 1
+          copy /y out\rom_md.bin out\interpreted.bin || exit /b 1
+          call build.bat --recompile out\test.nes || exit /b 1
+          copy /y out\rom_md.bin out\recompiled.bin || exit /b 1
+          call build.bat --recompile --fps out\test.nes || exit /b 1
+          copy /y out\rom_md.bin out\fps.bin || exit /b 1
+
+      - name: The same ROMs as build.sh's
+        shell: bash
+        run: |
+          got=$(python -c "$SUMS" out/interpreted.bin out/recompiled.bin out/fps.bin | tr -d '\r')
+          echo "build.bat: $got"
+          echo "build.sh:  ${{ needs.linux.outputs.sums }}"
+          [ "$got" = "${{ needs.linux.outputs.sums }}" ]

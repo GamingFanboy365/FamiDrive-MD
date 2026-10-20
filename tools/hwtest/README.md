@@ -69,21 +69,8 @@ These come from an AtGames Genesis handheld. Where two values are given, they va
 
 So the handheld draws a shorter frame (246 lines, VBlank 22 lines long) a little faster than a Mega Drive. Its 68000 does about 20% more work a frame, its VDP writes VRAM and runs DMA far faster, and its YM2612 never shows busy. Its V counter is the part that matters to FamiDrive. It skips from $E0 to $F3, reads $7E or $7F (values of the middle of the screen) for VBlank's last 9 lines, and briefly shows one value ahead as it changes. FamiDrive measures the line count and every V value's line at startup, and takes those $7E/$7F reads with the VBlank flag on for line 16, halfway through them; before it did, scroll writes made during VBlank were taken for splits partway down the screen.
 
-## Imitating the handheld's V counter in an emulator
+## Imitating the handheld in an emulator
 
-FamiDrive can be tested against a V counter like the handheld's in a build of Genesis Plus GX (libretro) with a few lines added to `vdp_hvc_r` in `core/vdp_ctrl.c`, after the V counter for the current line (`vc`) is worked out:
+`tools/test/gpgx_atgames.py` changes the source of Genesis Plus GX (libretro) to act like the handheld in what FamiDrive depends on: a frame 246 lines long, the V counter's values in VBlank ($E0, $F4 to $FF, then $7E or $7F for VBlank's last 9 lines), and the VBlank flag staying on until the screen's second line. It doesn't imitate the reads that mix two values, or the handheld's speed. On it, FamiDrive measures 246 lines a frame and puts the $7E/$7F reads at line 17. `tools/test/run.sh` builds it and checks that FamiDrive still handles all this, and GitHub runs that on every push and pull request.
 
-```c
-  /* an AtGames handheld's V counter in VBlank: $E0, then $F4-$FF,
-     then 9 lines of $7E/$7F (this frame has 16 more: $E1-$F0) */
-  if (vc >= 225 && vc < lines_per_frame && !interlaced)
-  {
-    if (vc <= 236) vc = 0xF4 + (vc - 225);
-    else if (vc <= 245) vc = 0x7E | ((cycles >> 9) & 1);
-    else vc = 0xE1 + (vc - 246);
-    data |= ((vc & 0xff) << 8);
-    return (data);
-  }
-```
-
-The frame stays 262 lines long, so the line count isn't imitated, but the V counter's odd values are. In an Excitebike race on that build, FamiDrive before it handled them showed 107 out-of-step frames in 2,000 (the bottom panel moving with the track, the stands out of step), and none after.
+An earlier version of the change imitated only the V counter, in a 262-line frame. In an Excitebike race on that build, FamiDrive before it handled the odd values showed 107 out-of-step frames in 2,000 (the bottom panel moving with the track, the stands out of step), and none after.
