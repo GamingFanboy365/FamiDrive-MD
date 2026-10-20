@@ -61,6 +61,15 @@ hide or show it. Builds without `--fps` don't contain it.
 
 Anything else shows an error screen saying what isn't supported.
 
+### Checks
+
+GitHub builds FamiDrive on every push and pull request, with `build.sh` on Linux and `build.bat` on
+Windows, and checks that the two make the same ROM. It also runs `tools/test/run.sh`, which you can
+run yourself on Linux (it needs git, make, a C compiler and Python 3). That script builds FamiDrive
+with a small test game and runs it on Genesis Plus GX, both as it is and changed to act like an
+AtGames handheld, whose VDP differs from a Mega Drive's. It fails if FamiDrive stops handling the
+handheld's differences.
+
 ## Source layout
 
 | File | Contents |
@@ -77,6 +86,7 @@ Anything else shows an error screen saying what isn't supported.
 | `emu/fps.asm` | FPS counter (`--fps` builds) |
 | `tools/recomp6502.py` | The 6502-to-68000 recompiler |
 | `tools/hwtest/` | A test ROM that shows what a console does differently from a Mega Drive in what FamiDrive depends on (see its README) |
+| `tools/test/` | Checks that FamiDrive still works on an AtGames handheld (`run.sh`, see Checks above) |
 | `system/md/error.asm` | Error screen |
 | `system/` | Assembler macros and Mega Drive hardware definitions |
 
