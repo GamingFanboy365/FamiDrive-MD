@@ -48,6 +48,8 @@ GLBL_LASTORG	set *
 ; -------------------------------------
 
 finish		macro				; Then finish
+		dephase				; (AS 1.42 Bld 142, build.bat's, takes an org
+						; in a phase as the phased address)
 		!org GLBL_LASTORG
 		phase GLBL_LASTPC
 		endm
