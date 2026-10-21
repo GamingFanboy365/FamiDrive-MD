@@ -48,15 +48,16 @@ wrPPU_Ctrl:
 .spr_size:
 		move.w	d6,ppuSprWide(a4)
 		
-	; PPU VRAM BG bank/Sprites bank
+	; Pattern tables: BG (bit 7 here), 8x8 sprites (bit 6). The sprite
+	; tile sets hold both tables (Nemul_LoadChr), so only a new BG
+	; table is converted again
 		move.b	d7,d6
 		andi.w	#$C0,d6
 		move.w	ppuChrBank(a4),d5
-		eor.w	d6,d5			; the tables that changed
-		beq.s	.no_reload
 		move.w	d6,ppuChrBank(a4)
-		move.w	d5,d6
-		bsr	Nemul_LoadChrSets	; convert those tile sets again
+		eor.b	d6,d5
+		bpl.s	.no_reload
+		bsr	chrLoadBg
 .no_reload:
 
 	; PPU VRAM increment
@@ -806,9 +807,9 @@ ppuDrwCellPal:
 ; $2007 write to the pattern tables ($0000-$1FFF)
 ;
 ; Ignored for CHR-ROM. For CHR-RAM, store the byte and re-convert
-; that row of the tile in each MD tile set showing this table:
-; MD tiles $000-$0FF hold the BG table, $100-$1FF the sprite table
-; with colors +8 (see Nemul_LoadChr).
+; that row of the tile in each MD tile set showing this table: MD
+; tiles $000-$0FF hold the BG table, and for sprites $100-$1FF
+; table 0 and $200-$2FF table 1, with colors +8 (Nemul_LoadChr).
 ;
 ; d4 - NES pattern address
 ; ----------------------------------------------------------------
@@ -871,14 +872,7 @@ ppuChrRamWrite:
 		move.l	d0,(a6)
 .no_bg:
 
-	; sprite set: bit 6 selects its table, nonzero pixels +8
-		moveq	#0,d5
-		btst	#6,d2
-		beq.s	.spr0
-		moveq	#-1,d5
-.spr0:
-		cmp.b	d1,d5
-		bne.s	.no_spr
+	; the sprite set for its table ($2000, $4000), nonzero pixels +8
 		move.l	d0,d6
 		lsr.l	#1,d6
 		or.l	d0,d6
@@ -888,11 +882,16 @@ ppuChrRamWrite:
 		moveq	#0,d5
 		move.w	d3,d5
 		addi.w	#$2000,d5
+		tst.b	d1
+		beq.s	.spr0
+		addi.w	#$2000,d5
+.spr0:
+		lsl.l	#2,d5			; VDP command: VRAM write
+		lsr.w	#2,d5
 		swap	d5
 		ori.l	#$40000000,d5
 		move.l	d5,4(a6)
 		move.l	d0,(a6)
-.no_spr:
 		move.w	#$2000,sr
 		movem.l	(sp)+,d0-d3
 .done:
@@ -900,51 +899,239 @@ ppuChrRamWrite:
 
 
 ; ----------------------------------------------------------------
-; Pattern tables (the copy in a3) -> MD tiles, a row at a time
-; through ppuChrSpread
+; The mapper changed the nametables' mirroring (MMC3 $A000): the NES's
+; second nametable moves in the copy of the nametables (a3), and both
+; MD planes are drawn again from it
+;
+; d7.w - 0: horizontal, 1: vertical (as ppuMirror)
+; ----------------------------------------------------------------
+
+ppuSetMirror:
+		cmp.w	ppuMirror(a4),d7
+		beq.s	.same
+		move.w	d7,ppuMirror(a4)
+		movem.l	d0/a0/a5,-(sp)
+		lea	$2000(a3),a5		; the first nametable stays
+		tst.w	d7
+		bne.s	.vertical
+	; horizontal: the second from $2400 to $2800 ($2C00 has it too),
+	; then the first to $2400
+		move.w	#$400,ppuNtXor(a4)
+		move.l	#$00400000,ppuCmdXor(a4)
+		lea	$400(a5),a0
+		bsr.s	.copy_second
+		bra.s	.redraw
+	; vertical: the second from $2800 to $2400, the first to $2800
+.vertical:
+		move.w	#$800,ppuNtXor(a4)
+		move.l	#$20000000,ppuCmdXor(a4)
+		lea	$800(a5),a0
+		bsr.s	.copy_second
+.redraw:
+		bsr.s	ppuRedrawPlanes
+		movem.l	(sp)+,d0/a0/a5
+.same:
+		rts
+
+; a0 - where the second nametable is now (it goes to a0 xor $C00, the
+; first to a0)
+.copy_second:
+		move.l	a0,d0			; the second to its new place
+		eori.w	#$C00,d0
+		exg	d0,a0
+		movea.l	d0,a5
+		move.w	#$400/4-1,d0
+.second:
+		move.l	(a5)+,(a0)+
+		dbf	d0,.second
+		lea	-$400(a5),a0		; the first where the second was
+		lea	$2000(a3),a5
+		move.w	#$400/4-1,d0
+.first:
+		move.l	(a5)+,(a0)+
+		dbf	d0,.first
+		rts
+
+; ----------------------------------------------------------------
+; Both MD planes, drawn from the copy of the nametables (a3): plane
+; A has nametables 0 and 1 side by side, B 2 and 3 (see ppuCellTbl)
+; ----------------------------------------------------------------
+
+ppuRedrawPlanes:
+		movem.l	d0-d7/a0-a1/a5,-(sp)
+		move.w	sr,-(sp)
+		lea	(ppuAttrPal).l,a1
+		moveq	#0,d0			; nametable * $400
+.nametable:
+		moveq	#0,d1			; row
+.row:
+		move.w	d1,d7			; VRAM: row * 128,
+		lsl.w	#7,d7
+		btst	#10,d0			; + $40 for 1 and 3,
+		beq.s	.left
+		addi.w	#$40,d7
+.left:
+		addi.w	#$C000,d7		; plane A or B
+		btst	#11,d0
+		beq.s	.plane_a
+		addi.w	#$2000,d7
+.plane_a:
+		moveq	#0,d6			; -> VDP command
+		move.w	d7,d6
+		lsl.l	#2,d6
+		lsr.w	#2,d6
+		swap	d6
+		ori.l	#$40000000,d6
+		move.w	d0,d7			; the row's tiles
+		addi.w	#$2000,d7
+		move.w	d1,d5
+		lsl.w	#5,d5
+		add.w	d7,d5
+		lea	(a3,d5.w),a5
+		move.w	d1,d5			; and its attribute bytes
+		lsr.w	#2,d5
+		lsl.w	#3,d5
+		addi.w	#$3C0,d5
+		add.w	d7,d5
+		lea	(a3,d5.w),a0
+		move.w	d1,d4			; the bottom 2 rows of each 4:
+		andi.w	#2,d4			; the attribute's fields 2, 3
+		lsl.w	#8,d4			; (ppuAttrPal tables 2, 3: $400)
+		add.w	d4,d4
+		move.w	#$2700,sr
+		move.w	#$8F02,4(a6)
+		move.l	d6,4(a6)
+		moveq	#8-1,d3			; 8 groups of 4 cells
+.group:
+		moveq	#0,d2
+		move.b	(a0)+,d2		; attribute byte
+		add.w	d2,d2
+		add.w	d4,d2
+		move.w	(a1,d2.w),d5		; left 2 cells: palette, priority
+		addi.w	#$200,d2
+		move.w	(a1,d2.w),d6		; right 2
+		move.w	d5,d7
+		move.b	(a5)+,d7
+		move.w	d7,(a6)
+		move.b	(a5)+,d5
+		move.w	d5,(a6)
+		move.w	d6,d7
+		move.b	(a5)+,d7
+		move.w	d7,(a6)
+		move.b	(a5)+,d6
+		move.w	d6,(a6)
+		dbf	d3,.group
+		move.w	(sp),sr
+		addq.w	#1,d1
+		cmpi.w	#30,d1
+		bcs.w	.row
+		addi.w	#$400,d0
+		cmpi.w	#$1000,d0
+		bcs.w	.nametable
+		addq.w	#2,sp
+		movem.l	(sp)+,d0-d7/a0-a1/a5
+		rts
+
+; ----------------------------------------------------------------
+; Pattern tables (the copy in a3) -> MD tiles. MD tiles $000-$0FF
+; hold the BG table (the one $2000 bit 4 picks), and for sprites,
+; $100-$1FF table 0 and $200-$2FF table 1, with their opaque pixels'
+; colors +8 (the sprite palettes, see ppuSetColor). Both tables are
+; there for sprites since 8x16 ones take theirs from the tile number.
 ;
 ; a6 - $C00000
 ; a4 - RAM_Fami_Emu
 ; ----------------------------------------------------------------
 
 Nemul_LoadChr:
-		moveq	#-1,d6			; both tile sets
-
-; d6 - bit 7: the BG set (MD tiles $000-$0FF), bit 6: the sprite set
-; ($100-$1FF, colors +8), each from the pattern table ppuChrBank picks
-Nemul_LoadChrSets:
-		move.w	#$2700,sr
-		move.w	#$8F02,4(a6)
-		move.w	d6,-(sp)
-		tst.b	d6
-		bpl.s	.sprites
-		move.l	#$40000000,4(a6)	; VRAM $0000
-		moveq	#0,d5
-		move.w	ppuChrBank(a4),d6
-		bsr.w	.make_chr
-.sprites:
-		move.w	(sp)+,d6
-		btst	#6,d6
-		beq.s	.done
-		move.l	#$60000000,4(a6)	; VRAM $2000
-		moveq	#8,d5
-		move.w	ppuChrBank(a4),d6
-		lsl.b	#1,d6
-		bsr.w	.make_chr
-.done:
-		move.w	#$2000,sr
+		movem.l	d4/d6,-(sp)
+		moveq	#0,d4			; the sprite sets: both tables
+		move.w	#$2000,d6
+		bsr.s	chrToSprites
+		bsr.s	chrLoadBg
+		movem.l	(sp)+,d4/d6
 		rts
 
-.make_chr:
-		movea.l	a3,a5
-		lsl.b	#1,d6
-		bcc.s	.got_table
-		adda.l	#$1000,a5
-.got_table:
-		movem.l	d0-d3/d7/a0,-(sp)
+; The BG set, from the table $2000 bit 4 picks (ppuChrBank bit 7)
+chrLoadBg:
+		movem.l	d4/d6,-(sp)
+		moveq	#0,d4
+		tst.b	ppuChrBank+1(a4)
+		bpl.s	.table
+		move.w	#$1000,d4
+.table:
+		move.w	#$1000,d6
+		bsr.s	chrToBg
+		movem.l	(sp)+,d4/d6
+		rts
+
+; ----------------------------------------------------------------
+; Pattern bytes that changed -> the MD tile sets that show them
+;
+; d4.w - pattern table address (whole tiles, $0000-$1FFF)
+; d6.w - bytes (whole tiles, within one table)
+; ----------------------------------------------------------------
+
+chrRefresh:
+		bsr.s	chrToBg
+		bra.s	chrToSprites
+
+; Into the BG set, if they're in its table
+chrToBg:
+		movem.l	d4/d6-d7/a5,-(sp)
+		move.w	d4,d7
+		lsr.w	#5,d7			; their table ($1000) -> bit 7
+		move.b	ppuChrBank+1(a4),d5	; the BG's: bit 7
+		eor.b	d7,d5
+		bmi.s	.not_bg
+		lea	(a3,d4.w),a5
+		andi.w	#$FFF,d4		; VRAM: tile * 32
+		add.w	d4,d4
+		lsr.w	#4,d6
+		move.w	d6,d7
+		moveq	#0,d5			; BG colors
+		bsr.s	chrConvert
+.not_bg:
+		movem.l	(sp)+,d4/d6-d7/a5
+		rts
+
+; Into the sprite set for their table
+chrToSprites:
+		movem.l	d4/d6-d7/a5,-(sp)
+		lea	(a3,d4.w),a5
+		add.w	d4,d4			; VRAM: $2000 + tile * 32
+		addi.w	#$2000,d4
+		lsr.w	#4,d6
+		move.w	d6,d7
+		moveq	#8,d5			; sprite colors
+		bsr.s	chrConvert
+		movem.l	(sp)+,d4/d6-d7/a5
+		rts
+
+; ----------------------------------------------------------------
+; NES tiles -> MD tiles through ppuChrSpread, a tile at a time with
+; interrupts off (MD_Vint uses the VDP too) so that converting many
+; doesn't hold up the VBlank interrupt
+;
+; a5 - first tile, d7.w - tiles, d4.w - VRAM address of the first,
+; d5.b - 8: sprites (opaque pixels +8), 0: BG
+; ----------------------------------------------------------------
+
+chrConvert:
+		movem.l	d0-d3/d6-d7/a0,-(sp)
+		move.w	sr,-(sp)
 		lea	(ppuChrSpread).l,a0
-		move.w	#256-1,d7		; tiles
+		subq.w	#1,d7
 .tile:
+		moveq	#0,d6			; VDP command: VRAM write at d4
+		move.w	d4,d6
+		lsl.l	#2,d6
+		lsr.w	#2,d6
+		swap	d6
+		ori.l	#$40000000,d6
+		move.w	#$2700,sr
+		move.w	#$8F02,4(a6)
+		move.l	d6,4(a6)
 		moveq	#8-1,d3			; rows
 .row:
 		moveq	#0,d1
@@ -968,7 +1155,10 @@ Nemul_LoadChrSets:
 		or.l	d2,d0
 		move.l	d0,(a6)
 		dbf	d3,.row
+		move.w	(sp),sr
 		addq.l	#8,a5
+		addi.w	#32,d4
 		dbf	d7,.tile
-		movem.l	(sp)+,d0-d3/d7/a0
+		addq.w	#2,sp
+		movem.l	(sp)+,d0-d3/d6-d7/a0
 		rts

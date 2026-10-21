@@ -28,6 +28,8 @@ if not exist "%ROM%" (
 )
 if not exist out mkdir out
 copy /y "%ROM%" out\nes_rom.bin >nul
+python tools\nesinfo.py out\nes_rom.bin out\nes_info.asm
+if errorlevel 1 exit /b 1
 if %RECOMP%==1 (
 	python tools\recomp6502.py out\nes_rom.bin out\recomp.asm
 	if errorlevel 1 exit /b 1

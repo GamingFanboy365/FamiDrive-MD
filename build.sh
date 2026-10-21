@@ -31,6 +31,7 @@ if [ ! -f "$ROM" ]; then
 fi
 mkdir -p out
 cp "$ROM" out/nes_rom.bin
+python3 tools/nesinfo.py out/nes_rom.bin out/nes_info.asm
 if [ $RECOMP = 1 ]; then
 	python3 tools/recomp6502.py out/nes_rom.bin out/recomp.asm
 fi

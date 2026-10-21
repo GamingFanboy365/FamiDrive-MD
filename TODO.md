@@ -22,9 +22,15 @@ finished in #1 to #6.
   to `$0100` like PLP and RTS do.
 - [ ] **Reset state.** The 6502 starts with SP = `$00` and I clear; after reset
   it should be SP = `$FD` with I set.
-- [ ] **8x16 sprites.** `$2000` bit 5 makes MD sprites two tiles tall
-  (`ppuSprWide`), but NES 8x16 sprites take their pattern table from bit 0 of
-  the tile number and use the even/odd tile pair, so they show the wrong tiles.
+- [ ] **Recompiling banked games.** `tools/recomp6502.py` only takes NROM and
+  CNROM. Mappers 2 and 4 need it to translate each PRG bank, and to dispatch by
+  the bank at $8000 (`cpuPrgImg`).
+- [ ] **MMC3: more of it.** Only R6 and R7 as a 16 KB pair in PRG mode 0 are
+  supported (`mmc3Write`, PRG_IMAGES), and the scanline IRQ isn't emulated.
+- [ ] **CHR bank switches on a Mega Drive.** `mmc3Chr` converts the bank's
+  tiles into VRAM as the game switches it: up to 4 KB of VRAM writes with the
+  display on, which is slow on a Mega Drive (fast on an AtGames handheld).
+  Converted tiles in ROM, DMAed in VBlank, would be quicker.
 
 ## Sound
 

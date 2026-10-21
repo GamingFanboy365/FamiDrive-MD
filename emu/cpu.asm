@@ -311,7 +311,7 @@ mos_ADC_abs:
 		move.b	(a0)+,d4
 		clr.w	d6
 		move.b	(a0)+,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		ori.b	#4,d3
 		move	d3,sr
 		addx.b	d7,d0
@@ -327,7 +327,7 @@ mos_ADC_absx:
 		clr.b	d7
 		add.b	d1,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		ori.b	#4,d3
 		move	d3,sr
 		addx.b	d7,d0
@@ -343,7 +343,7 @@ mos_ADC_absy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		ori.b	#4,d3
 		move	d3,sr
 		addx.b	d7,d0
@@ -360,7 +360,7 @@ mos_ADC_indx:
 		move.b	(a2,d5.w),d4
 		add.b	#1,d5
 		move.b	(a2,d5.w),d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		ori.b	#4,d3
 		move	d3,sr
 		addx.b	d7,d0
@@ -379,7 +379,7 @@ mos_ADC_indy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		ori.b	#4,d3
 		move	d3,sr
 		addx.b	d7,d0
@@ -427,7 +427,7 @@ mos_AND_abs:
 		move.b	(a0)+,d4
 		clr.w	d6
 		move.b	(a0)+,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		and.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -444,7 +444,7 @@ mos_AND_absx:
 		clr.b	d7
 		add.b	d1,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		and.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -461,7 +461,7 @@ mos_AND_absy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		and.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -479,7 +479,7 @@ mos_AND_indx:
 		move.b	(a2,d5.w),d4
 		add.b	#1,d5
 		move.b	(a2,d5.w),d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		and.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -499,7 +499,7 @@ mos_AND_indy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		and.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -631,7 +631,7 @@ mos_BIT_abs:
 		move.b	(a0)+,d4
 		clr.w	d6
 		move.b	(a0)+,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		move.b	d7,d4
 		andi.b	#$F1,d3
 		lsl.b	#1,d7
@@ -705,7 +705,7 @@ mos_BRK:
 		swap	d3
 		move.w	#1,cpuModeIntDis(a4)
 
-		lea 	(RAM_Fami_ROM),a5
+		movea.l	a1,a5			; PRG at $8000-$FFFF
 		move.w	#cpuIRQ,d6		; go to IRQ
 		add.w	d6,a5
 		moveq	#0,d6
@@ -819,7 +819,7 @@ mos_CMP_abs:
 		move.b	(a0)+,d4
 		clr.w	d6
 		move.b	(a0)+,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		cmp.b	d7,d0
 		move	sr,d5
 		andi.w	#$D,d5
@@ -840,7 +840,7 @@ mos_CMP_absx:
 		clr.b	d7
 		add.b	d1,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		cmp.b	d7,d0
 		move	sr,d5
 		andi.w	#$D,d5
@@ -861,7 +861,7 @@ mos_CMP_absy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		cmp.b	d7,d0
 		move	sr,d5
 		andi.w	#$D,d5
@@ -883,7 +883,7 @@ mos_CMP_indx:
 		move.b	(a2,d5.w),d4
 		add.b	#1,d5
 		move.b	(a2,d5.w),d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		cmp.b	d7,d0
 		move	sr,d5
 		andi.w	#$D,d5
@@ -907,7 +907,7 @@ mos_CMP_indy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		cmp.b	d7,d0
 		move	sr,d5
 		andi.w	#$D,d5
@@ -955,7 +955,7 @@ mos_CPX_abs:
 		move.b	(a0)+,d4
 		clr.w	d6
 		move.b	(a0)+,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		cmp.b	d7,d1
 		move	sr,d5
 		andi.w	#$D,d5
@@ -1003,7 +1003,7 @@ mos_CPY_abs:
 		move.b	(a0)+,d4
 		clr.w	d6
 		move.b	(a0)+,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		cmp.b	d7,d2
 		move	sr,d5
 		andi.w	#$D,d5
@@ -1124,7 +1124,7 @@ mos_EOR_abs:
 		move.b	(a0)+,d4
 		clr.w	d6
 		move.b	(a0)+,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		eor.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1141,7 +1141,7 @@ mos_EOR_absx:
 		clr.b	d7
 		add.b	d1,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		eor.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1158,7 +1158,7 @@ mos_EOR_absy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		eor.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1176,7 +1176,7 @@ mos_EOR_indx:
 		move.b	(a2,d5.w),d4
 		add.b	#1,d5
 		move.b	(a2,d5.w),d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		eor.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1196,7 +1196,7 @@ mos_EOR_indy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		eor.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1379,7 +1379,7 @@ mos_LDA_abs:
 		clr.w	d6
 		move.b	(a0)+,d4
 		move.b	(a0)+,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		move.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1396,7 +1396,7 @@ mos_LDA_absx:
 		clr.b	d7
 		add.b	d1,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		move.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1413,7 +1413,7 @@ mos_LDA_absy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		move.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1432,7 +1432,7 @@ mos_LDA_indx:
 		move.b	(a2,d5.w),d4
 		add.b	#1,d5
 		move.b	(a2,d5.w),d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		move.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1452,7 +1452,7 @@ mos_LDA_indy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		move.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1498,7 +1498,7 @@ mos_LDX_abs:
 		move.b	(a0)+,d4
 		clr.w	d6
 		move.b	(a0)+,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		move.b	d7,d1
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1515,7 +1515,7 @@ mos_LDX_absy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		move.b	d7,d1
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1561,7 +1561,7 @@ mos_LDY_abs:
 		move.b	(a0)+,d4
 		clr.w	d6
 		move.b	(a0)+,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		move.b	d7,d2
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1578,7 +1578,7 @@ mos_LDY_absx:
 		clr.b	d7
 		add.b	d1,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		move.b	d7,d2
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1700,7 +1700,7 @@ mos_ORA_abs:
 		move.b	(a0)+,d4
 		clr.w	d6
 		move.b	(a0)+,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		or.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1717,7 +1717,7 @@ mos_ORA_absx:
 		clr.b	d7
 		add.b	d1,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		or.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1734,7 +1734,7 @@ mos_ORA_absy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		or.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1752,7 +1752,7 @@ mos_ORA_indx:
 		move.b	(a2,d5.w),d4
 		add.b	#1,d5
 		move.b	(a2,d5.w),d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		or.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1772,7 +1772,7 @@ mos_ORA_indy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		or.b	d7,d0
 		move	sr,d5
 		andi.w	#$C,d5
@@ -2146,7 +2146,7 @@ mos_SBC_abs:
 		move.b	(a0)+,d4
 		clr.w	d6
 		move.b	(a0)+,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		eori.b	#$11,d3
 		ori.b	#4,d3
 		move	d3,sr
@@ -2164,7 +2164,7 @@ mos_SBC_absx:
 		clr.b	d7
 		add.b	d1,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		eori.b	#$11,d3
 		ori.b	#4,d3
 		move	d3,sr
@@ -2182,7 +2182,7 @@ mos_SBC_absy:
 		move.b	(a0)+,d6
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		eori.b	#$11,d3
 		ori.b	#4,d3
 		move	d3,sr
@@ -2202,7 +2202,7 @@ mos_SBC_indx:
 		add.b	#1,d5
 		move.b	(a2,d5.w),d6
 
-		bsr	addr_Read
+		bsr.w	addr_Read
 		eori.b	#$11,d3
 		ori.b	#4,d3
 		move	d3,sr
@@ -2223,7 +2223,7 @@ mos_SBC_indy:
 		clr.b	d7
 		add.b	d2,d4
 		addx.b	d7,d6
-		bsr	addr_Read
+		bsr.w	addr_Read
 		eori.b	#$11,d3
 		ori.b	#4,d3
 		move	d3,sr
@@ -2276,7 +2276,7 @@ mos_STA_abs:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	d0,d7
-		bra	addr_Write
+		bra.w	addr_Write
 ; ----------------------------------------------------------------
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
@@ -2290,7 +2290,7 @@ mos_STA_absx:
 		add.b	d1,d4
 		addx.b	d7,d6
 		move.b	d0,d7
-		bra	addr_Write
+		bra.w	addr_Write
 ; ----------------------------------------------------------------
 
 mos_STA_absy:
@@ -2302,7 +2302,7 @@ mos_STA_absy:
 		add.b	d2,d4
 		addx.b	d7,d6
 		move.b	d0,d7
-		bra	addr_Write
+		bra.w	addr_Write
 ; ----------------------------------------------------------------
 ; STA (oper,X)
 
@@ -2316,7 +2316,7 @@ mos_STA_indx:
 		add.b	#1,d5
 		move.b	(a2,d5.w),d6
 		move.b	d0,d7
-		bra	addr_Write
+		bra.w	addr_Write
 ; ----------------------------------------------------------------
 
 mos_STA_indy:
@@ -2331,7 +2331,7 @@ mos_STA_indy:
 		add.b	d2,d4
 		addx.b	d7,d6
 		move.b	d0,d7
-		bra	addr_Write
+		bra.w	addr_Write
 ; ----------------------------------------------------------------
 
 mos_STX_zp:
@@ -2355,7 +2355,7 @@ mos_STX_abs:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	d1,d7
-		bra	addr_Write
+		bra.w	addr_Write
 ; ----------------------------------------------------------------
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
@@ -2381,7 +2381,7 @@ mos_STY_abs:
 		clr.w	d6
 		move.b	(a0)+,d6
 		move.b	d2,d7
-		bra	addr_Write
+		bra.w	addr_Write
 ; ----------------------------------------------------------------
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------

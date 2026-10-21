@@ -19,7 +19,8 @@
 addr_Read:
 		tst.b	d6		; $8000
 		bmi	rdFrom_PRG
-	; TODO: $6000-$7FFF
+		cmp.b	#$60,d6		; $6000
+		bge	rdFrom_WRAM
 		cmp.b	#$40,d6		; $4000
 		bge	rdFrom_APU
 		cmp.b	#$20,d6		; $2000
@@ -40,6 +41,19 @@ rdFrom_PRG:
 		move.b	d4,d6
 		andi.w	#$7FFF,d6
 		move.b	(a1,d6.w),d7
+		rts
+; ----------------------------------------------------------------
+
+; $6000-$7FFF: PRG RAM, when there is some (cpuWram). Without it,
+; as $4000-$5FFF.
+rdFrom_WRAM:
+		tst.w	cpuWram(a4)
+		beq.s	rdFrom_APU
+		lsl.w	#8,d6
+		move.b	d4,d6
+		andi.w	#$1FFF,d6
+		lea	(RAM_Fami_WRAM).l,a5
+		move.b	(a5,d6.w),d7
 		rts
 ; ----------------------------------------------------------------
 
@@ -211,7 +225,8 @@ rdPPU_Data:
 addr_Write:
 		tst.b	d6		; $8000
 		bmi	wrTo_PRG
-	; TODO: $6000-$7FFF
+		cmp.b	#$60,d6		; $6000
+		bge	wrTo_WRAM
 		cmp.b	#$40,d6		; $4000
 		bge	wrTo_APU
 		cmp.b	#$20,d6		; $2000
@@ -231,12 +246,44 @@ wrTo_RAM:
 
 ; ====================================================================
 ; ----------------------------------------------------------------
+; WRITE request to PRG RAM ($6000-$7FFF), when there is some
+; (cpuWram). Without it, as $4000-$5FFF.
+; ----------------------------------------------------------------
+
+wrTo_WRAM:
+		tst.w	cpuWram(a4)
+		beq	wrTo_APU
+		lsl.w	#8,d6
+		move.b	d4,d6
+		andi.w	#$1FFF,d6
+		lea	(RAM_Fami_WRAM).l,a5
+		move.b	d7,(a5,d6.w)
+		jmp	(RAM_EmuLoop).l
+
+; ====================================================================
+; ----------------------------------------------------------------
 ; WRITE request to ROM area, mappers
 ; ----------------------------------------------------------------
 
 wrTo_PRG:
-		cmp.w	#3,cpuMapper(a4)
+		move.w	cpuMapper(a4),d5
+		subq.w	#2,d5
+		beq.s	.mapper_2
+		subq.w	#1,d5
 		beq.s	.mapper_3
+		subq.w	#1,d5
+		beq.w	mmc3Write
+		jmp	(RAM_EmuLoop).l
+
+; --------------------------------------------------------
+; Mapper $02, UxROM: any write picks the 16 KB PRG bank at $8000
+; (the last is at $C000)
+; --------------------------------------------------------
+
+.mapper_2:
+		moveq	#0,d5
+		move.b	d7,d5
+		bsr	prgSwitch
 		jmp	(RAM_EmuLoop).l
 
 ; --------------------------------------------------------
@@ -268,6 +315,161 @@ wrTo_PRG:
 		move.l	(sp)+,a4
 		bsr	Nemul_LoadChr
 		jmp	(RAM_EmuLoop).l
+
+; --------------------------------------------------------
+; Mapper $04, MMC3. Its registers go by address bits 14-13 and 0:
+; $8000 bank select (bits 2-0: the register $8001 sets, bit 6: PRG
+; mode, bit 7: CHR mode), $8001 bank data, $A000 mirroring, $A001
+; PRG RAM protect (PRG RAM stays on), $C000-$E001 the scanline IRQ
+; (not emulated).
+;
+; PRG: R6 at $8000 and R7 at $A000 (8 KB banks), the last two banks
+; at $C000. Only R6 and R7 as a 16 KB pair (R6 even, R7 = R6+1) are
+; supported, the way games such as Super Mario Bros. 2 use them:
+; PRG_IMAGES has an image for each pair. The pair is switched once
+; both registers make one (the game writes them one at a time).
+; --------------------------------------------------------
+
+mmc3Write:
+		btst	#6,d6			; $C000-$FFFF: the IRQ
+		bne.s	.done
+		btst	#0,d4
+		bne.s	.odd
+		btst	#5,d6
+		bne.s	.mirroring
+		move.b	mmc3Select+1(a4),d5	; $8000
+		move.b	d7,mmc3Select+1(a4)
+		eor.b	d7,d5			; a new CHR mode (bit 7): all the
+		bmi.s	.chr_all		; CHR banks moved
+.done:
+		jmp	(RAM_EmuLoop).l
+.mirroring:
+		moveq	#1,d5			; $A000 bit 0: 0 vertical, 1
+		and.w	d5,d7			; horizontal (ppuMirror: 1, 0)
+		eor.w	d5,d7
+		bsr	ppuSetMirror
+		jmp	(RAM_EmuLoop).l
+.chr_all:
+		moveq	#6-1,d5
+.chr_bank:
+		move.w	d5,-(sp)
+		bsr.s	mmc3Chr
+		move.w	(sp)+,d5
+		dbf	d5,.chr_bank
+		jmp	(RAM_EmuLoop).l
+.odd:
+		btst	#5,d6			; $A001: PRG RAM protect
+		bne.s	.done
+		move.w	mmc3Select(a4),d5	; $8001: bank data
+		andi.w	#7,d5
+		lea	mmc3Regs(a4),a5
+		cmpi.w	#6,d5
+		bcc.s	.prg
+		cmp.b	(a5,d5.w),d7		; R0-R5: CHR, a new bank
+		beq.s	.done			; (games set them every frame)
+		move.b	d7,(a5,d5.w)
+		bsr.s	mmc3Chr
+		jmp	(RAM_EmuLoop).l
+.prg:
+		move.b	d7,(a5,d5.w)
+		moveq	#0,d5
+		move.b	6(a5),d5		; R6, R7: PRG
+		lsr.b	#1,d5
+		bcs.s	.done
+		move.b	7(a5),d6
+		lsr.b	#1,d6
+		bcc.s	.done
+		cmp.b	d5,d6
+		bne.s	.done
+		btst	#6,mmc3Select+1(a4)	; PRG mode 1: R6 at $C000
+		bne.s	.prg_mode_1
+		bsr	prgSwitch
+		jmp	(RAM_EmuLoop).l
+.prg_mode_1:
+		lea	(errStrMmc3Prg).l,a0
+		jmp	(MD_ShowError).l
+
+; --------------------------------------------------------
+; MMC3: a CHR bank register -> its bank in the copy of the pattern
+; tables (a3), and the MD tiles that show it (chrRefresh). CHR mode
+; 0: R0, R1 are 2 KB at $0000, $0800, R2-R5 1 KB at $1000-$1C00;
+; mode 1 swaps the halves.
+;
+; d5.w - the register, 0-5
+; --------------------------------------------------------
+
+mmc3Chr:
+		tst.w	ppuChrRam(a4)		; CHR-RAM: the registers do nothing
+		bne.s	.done
+		movem.l	d0/a0,-(sp)
+		lea	mmc3Regs(a4),a5
+		moveq	#0,d0
+		move.b	(a5,d5.w),d0		; the bank, in 1 KB
+		cmpi.w	#2,d5
+		bcc.s	.one_kb
+		andi.b	#$FE,d0			; R0, R1: 2 KB
+		move.w	d5,d4
+		ror.w	#5,d4			; * $800
+		move.w	#$800,d6
+		bra.s	.place
+.one_kb:
+		move.w	d5,d4			; R2-R5: 1 KB
+		subq.w	#2,d4
+		lsl.w	#8,d4
+		lsl.w	#2,d4
+		addi.w	#$1000,d4
+		move.w	#$400,d6
+.place:
+		tst.b	mmc3Select+1(a4)	; mode 1
+		bpl.s	.mode_0
+		eori.w	#$1000,d4
+.mode_0:
+		andi.w	#chrBankMask,d0
+		lsl.l	#8,d0			; * 1 KB
+		lsl.l	#2,d0
+		movea.l	emuChrRom(a4),a0
+		adda.l	d0,a0
+		lea	(a3,d4.w),a5
+		move.w	d6,d0
+		lsr.w	#2,d0
+		subq.w	#1,d0
+.copy:
+		move.l	(a0)+,(a5)+
+		dbf	d0,.copy
+		movem.l	(sp)+,d0/a0
+		bra	chrRefresh
+.done:
+		rts
+
+; --------------------------------------------------------
+; Banked PRG (PRG_BANKED): switch the 16 KB bank at $8000.
+; a1 moves to the bank's image in PRG_IMAGES, and so does the PC
+; (a0), unless it's in RAM.
+;
+; d5.l - bank
+; --------------------------------------------------------
+
+prgSwitch:
+		if PRG_BANKED
+		andi.l	#prgBankMask,d5
+		cmpi.w	#NES_PRG16,d5
+		bcs.s	.bank_ok
+		subi.w	#NES_PRG16,d5
+.bank_ok:
+		swap	d5			; image: bank * $8000
+		lsr.l	#1,d5
+		addi.l	#PRG_IMAGES,d5
+		move.l	a0,d6
+		sub.l	a1,d6
+		cmpi.l	#$8000,d6
+		bcc.s	.pc_elsewhere
+		movea.l	d5,a0
+		adda.l	d6,a0
+.pc_elsewhere:
+		movea.l	d5,a1
+		move.l	d5,cpuPrgImg(a4)
+		endif
+		rts
 
 ; ====================================================================
 ; ----------------------------------------------------------------
@@ -474,7 +676,15 @@ APU_OAMDMA:
 	; the previous frame's sprites while it shows that frame's scroll.
 		lea	vdpSprData(a4),a3
 		adda.w	sprWrite(a4),a3
-		lea	(oamAttr).l,a6
+		lea	(oamAttr).l,a6		; MD tiles $100: table 0, $200: table 1
+		moveq	#1,d4			; 8x16: tile bit 0 picks the table
+		tst.w	ppuSprWide(a4)
+		bne.s	.tall
+		moveq	#0,d4			; 8x8: $2000 bit 3 does
+		btst	#6,ppuChrBank+1(a4)
+		beq.s	.tall
+		lea	(oamAttr1).l,a6
+.tall:
 		move.w	ppuSprWide(a4),d6
 		addq.w	#1,d6			; size, and the link to the next sprite
 		moveq	#$79,d0			; NES line L+1 is MD line L-8, +128
@@ -497,11 +707,14 @@ APU_OAMDMA:
 		move.w	d6,(a3)+
 		addq.w	#1,d6
 		move.b	(a5)+,d2		; tile
+		move.w	d2,d7			; 8x16, an odd one: table 1 ($100
+		and.w	d4,d7			; on) and the even tile, + $FF
+		neg.b	d7
+		add.w	d2,d7
 		moveq	#0,d3
 		move.b	(a5)+,d3		; attributes
 		add.w	d3,d3
-		move.w	(a6,d3.w),d7
-		or.w	d2,d7
+		add.w	(a6,d3.w),d7
 		move.w	d7,(a3)+
 		move.b	(a5)+,d2		; X
 		move.w	d2,d7
@@ -537,10 +750,14 @@ APU_OAMDMA:
 
 ; NES sprite attributes to the MD's: priority (inverted: the NES's bit
 ; puts the sprite behind the background), palette, vertical and
-; horizontal flip; sprite tiles start at $100
-oamAttr:
+; horizontal flip, and the first tile of the sprite tile set: $100
+; for table 0 (and 8x16 sprites, added to the tile), $200 for table 1
+oamAttrs	macro tiles
 oamAttrI	set	0
 		rept	256
-		dc.w	$100|(((~oamAttrI)&$20)<<10)|((oamAttrI&3)<<13)|((oamAttrI&$C0)<<5)
+		dc.w	tiles|(((~oamAttrI)&$20)<<10)|((oamAttrI&3)<<13)|((oamAttrI&$C0)<<5)
 oamAttrI	set	oamAttrI+1
 		endm
+		endm
+oamAttr:	oamAttrs $100
+oamAttr1:	oamAttrs $200
