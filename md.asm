@@ -275,9 +275,9 @@ old_md:
 clrstack:
 		move.l	d0,-(a6)
 		dbf	d6,clrstack
-		bsr	Sound_LoadZ80
-		bsr	Sound_PsgInit
-		bsr	Video_Init
+		bsr.w	Sound_LoadZ80
+		bsr.w	Sound_PsgInit
+		bsr.w	Video_Init
 		movem.l	(a6),d0-a6
 		move.b	#$40,($A10009).l
 		move.b	#$40,($A1000B).l
@@ -435,7 +435,7 @@ MD_Init:
 		move.w	#0,(z80_bus).l			; Start Z80
 		move.w	#$100,(z80_reset).l		; Reset cancel
 		
-		bra	emuStart
+		bra.w	emuStart
 
 ; ====================================================================
 ; ----------------------------------------------------------------
@@ -476,7 +476,7 @@ MD_Vint:
 		lea	vdpSprData(a4),a0		; its sprite table
 		adda.w	d2,a0
 		if FPS
-		jsr	fpsUpdate			; the counter's sprites, in that table
+		jsr	(fpsUpdate).l			; the counter's sprites, in that table
 		move.l	#$94019300,4(a6)		; all 64: the counter is in the last two
 		else
 		move.w	vdpSprWords-vdpSprData(a0),d0	; the sprites listed
@@ -522,9 +522,9 @@ MD_Vint:
 		move.w	(sp)+,4(a6)
 .same_palette:
 		jsr	hsApply				; horizontal scroll
-		bsr	apuUpdate			; needs the Z80 bus
+		bsr.w	apuUpdate			; needs the Z80 bus
 		move.w	#0,(z80_bus).l			; Release Z80
-		bsr	readInput
+		bsr.w	readInput
 
 		clr.w	vdpHintSp0(a4)
 		move.w	#1,FamiMdVint(a4)
@@ -735,14 +735,14 @@ emuStart:
 		
 		lea	($C00000).l,a6
 		jsr	ppuMeasureLines
-		bsr	apuInit
+		bsr.w	apuInit
 		lea 	(RAM_Fami_Emu),a4
 		lea	(RAM_Fami_PPU).w,a3
 		lea	(RAM_Fami_RAM).w,a2
 		if FPS
-		jsr	fpsInit
+		jsr	(fpsInit).l
 		endif
-		bsr	Nemul_LoadChr
+		bsr.w	Nemul_LoadChr
 		movea.l	cpuPrgImg(a4),a1	; PRG at $8000-$FFFF
 		movea.l	a1,a0
 		move.w	#cpuEntry,d0		; go to Entry
@@ -833,7 +833,7 @@ emuVint:
 doVint:
 		move.l	#emuVint,(RAM_EmuLoop+2).l
 		move.w	#1,cpuFamiVint(a4)
-		bsr	ppuFrameStart
+		bsr.w	ppuFrameStart
 
 		bsr	famiGetP		; Save PC and P (B clear)
 		move.b	d5,d7

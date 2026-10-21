@@ -228,9 +228,9 @@ addr_Write:
 		cmp.b	#$60,d6		; $6000
 		bge	wrTo_WRAM
 		cmp.b	#$40,d6		; $4000
-		bge	wrTo_APU
+		bge.w	wrTo_APU
 		cmp.b	#$20,d6		; $2000
-		bge	wrTo_PPU
+		bge.w	wrTo_PPU
 
 ; ====================================================================
 ; ----------------------------------------------------------------
@@ -252,7 +252,7 @@ wrTo_RAM:
 
 wrTo_WRAM:
 		tst.w	cpuWram(a4)
-		beq	wrTo_APU
+		beq.w	wrTo_APU
 		lsl.w	#8,d6
 		move.b	d4,d6
 		andi.w	#$1FFF,d6
@@ -283,7 +283,7 @@ wrTo_PRG:
 .mapper_2:
 		moveq	#0,d5
 		move.b	d7,d5
-		bsr	prgSwitch
+		bsr.w	prgSwitch
 		jmp	(RAM_EmuLoop).l
 
 ; --------------------------------------------------------
@@ -313,7 +313,7 @@ wrTo_PRG:
 		move.l	(a5)+,(a4)+
 		dbf	d4,.copychr
 		move.l	(sp)+,a4
-		bsr	Nemul_LoadChr
+		bsr.w	Nemul_LoadChr
 		jmp	(RAM_EmuLoop).l
 
 ; --------------------------------------------------------
@@ -347,7 +347,7 @@ mmc3Write:
 		moveq	#1,d5			; $A000 bit 0: 0 vertical, 1
 		and.w	d5,d7			; horizontal (ppuMirror: 1, 0)
 		eor.w	d5,d7
-		bsr	ppuSetMirror
+		bsr.w	ppuSetMirror
 		jmp	(RAM_EmuLoop).l
 .chr_all:
 		moveq	#6-1,d5
@@ -437,7 +437,7 @@ mmc3Chr:
 		move.l	(a0)+,(a5)+
 		dbf	d0,.copy
 		movem.l	(sp)+,d0/a0
-		bra	chrRefresh
+		bra.w	chrRefresh
 .done:
 		rts
 
@@ -544,7 +544,7 @@ readInput:
 		lea	padState(a4),a5
 		bsr	.this_pad
 		if FPS
-		jsr	readXyz			; pad 1's X Y Z toggle the FPS counter
+		jsr	(readXyz).l			; pad 1's X Y Z toggle the FPS counter
 		endif
 		addq.w	#2,a3
 

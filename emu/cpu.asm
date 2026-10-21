@@ -690,7 +690,7 @@ mos_BPL:
 
 mos_BRK:
 		addq.l	#1,a0			; skip the padding byte
-		bsr	famiGetP		; P with B set
+		bsr.w	famiGetP		; P with B set
 		swap	d3			; push PC, P
 		move.w	a0,d4
 		move.b	d4,d6

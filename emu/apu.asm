@@ -211,15 +211,15 @@ apuUpdate:
 		move.b	apuRegs+$01(a5),d5
 		moveq	#1,d2
 		moveq	#$00,d6			; PSG tone 0
-		bsr	apuPulseOut
+		bsr.w	apuPulseOut
 		lea	apuCh2(a5),a0
 		move.b	apuRegs+$04(a5),d0
 		move.b	apuRegs+$05(a5),d5
 		moveq	#0,d2
 		moveq	#$20,d6			; PSG tone 1
-		bsr	apuPulseOut
-		bsr	apuNoiseOut
-		bra	apuTriOut
+		bsr.w	apuPulseOut
+		bsr.w	apuNoiseOut
+		bra.w	apuTriOut
 
 ; ----------------------------------------------------------------
 ; Pulse register writes
@@ -265,13 +265,13 @@ apuPulseWrites:
 apuSequence:
 		lea	apuCh1(a5),a0
 		move.b	apuRegs+$00(a5),d0
-		bsr	apuEnvelope4
+		bsr.w	apuEnvelope4
 		lea	apuCh2(a5),a0
 		move.b	apuRegs+$04(a5),d0
-		bsr	apuEnvelope4
+		bsr.w	apuEnvelope4
 		lea	apuChN(a5),a0
 		move.b	apuRegs+$0C(a5),d0
-		bsr	apuEnvelope4
+		bsr.w	apuEnvelope4
 
 		move.b	apuRegs+$08(a5),d0	; triangle linear counter
 		move.b	apuTriLinear(a5),d1

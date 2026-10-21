@@ -57,7 +57,7 @@ wrPPU_Ctrl:
 		move.w	d6,ppuChrBank(a4)
 		eor.b	d6,d5
 		bpl.s	.no_reload
-		bsr	chrLoadBg
+		bsr.w	chrLoadBg
 .no_reload:
 
 	; PPU VRAM increment
@@ -82,7 +82,7 @@ wrPPU_Ctrl:
 .nt_x0:
 		move.w	d4,ppuTX(a4)
 		moveq	#1,d6
-		bsr	ppuXChanged
+		bsr.w	ppuXChanged
 		move.w	#$2000,sr
 		jmp	(RAM_EmuLoop).l
 
