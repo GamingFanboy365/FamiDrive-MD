@@ -35,9 +35,10 @@
 # jumps; indirect jumps (RTS, RTI, JMP (ind)) go through rcTable.
 #
 # Hot code gets second copies: routines that return normally are called
-# with the 68000's jsr (routine_body), and loops reading through a
-# (zp),Y pointer get a guarded fast copy, unrolled when short
-# (version_plan). Fill loops become straight stores (fill_plan).
+# with the 68000's jsr (routine_body), or put in place of the call when
+# small (emit_inline), and loops reading through a (zp),Y pointer get a
+# guarded fast copy, unrolled when short (version_plan). Fill loops
+# become straight stores (fill_plan).
 #
 # The output contains the game's code in another form: don't publish
 # it, keep it in out/ like the built ROM.
@@ -817,6 +818,7 @@ class Gen:
 		self.ext_routines = {}		# the fixed bank's routine copies a bank's code calls: (heavy, switches)
 		self.copies_for = ()		# (the fixed bank's: routines banks' code calls, to have copies of)
 		self.ext_ret = {}		# flags live where other units' calls return (cross_flags)
+		self.inline = set()		# small routines put in place of their calls (emit_inline)
 		self.out, self.stubs = [], []
 		self.fast = None
 
@@ -1556,6 +1558,8 @@ class Gen:
 		elif m == 'JSR' and not (self.fast and not self.fast.get('routine')) and i.arg in self.engines and \
 		     (i.arg in self.insns or i.arg in self.ext) and self.engine_table(i):
 			self.emit_engine_call(i)
+		elif m == 'JSR' and i.arg in self.inline and (not self.fast or self.fast.get('routine')):
+			self.emit_inline(i)
 		elif m == 'JSR' and i.arg in self.callable:
 			if self.callable[i.arg][1]:
 				ret = i.pc + 2
@@ -1585,6 +1589,9 @@ class Gen:
 				self.e('jmp %s' % lab(i.arg))
 			else:
 				self.e('move.w #$%04X,d4' % i.arg, 'jmp rcDispatch')
+		elif m == 'RTS' and self.fast and self.fast.get('inline'):
+			if self.fast['last'] != i.pc:		# (the last one falls into the code after the call)
+				self.e('bra.w %s' % self.fast['inline'])
 		elif m == 'RTS' and self.fast and self.fast.get('routine'):
 			if self.fast['heavy']:
 				self.e('swap d3', 'addq.b #2,d3', 'swap d3')	# drop the return address
@@ -2100,7 +2107,31 @@ class Gen:
 			for pc, out in saved.items():
 				self.insns[pc].live_out = out
 
-	def emit_routine_body(self, pcs):
+	def emit_inline(self, i):
+		"""A JSR to a small light routine: its code in place, with its own
+		liveness (it returns here only). Its own calls are put in place or
+		called as usual."""
+		f = i.arg
+		pcs = sorted(self.callable[f][0])
+		outer, end = self.fast, self.tag('Ie', i.pc)
+		saved = {pc: self.insns[pc].live_out for pc in pcs}
+		for pc, out in copy_liveness(self.insns, set(pcs), self.live_in[i.pc + 3], self.live_in, self.sums).items():
+			self.insns[pc].live_out = out
+		last = max(pcs, key=lambda pc: pc + self.insns[pc].n)
+		self.fast = {'pcs': set(pcs), 'prefix': '%sI%04X' % (outer['prefix'] if outer else '', i.pc), 'routine': True,
+			     'heavy': False, 'inline': end, 'last': last if self.insns[last].m == 'RTS' else None}
+		if pcs[0] != f:				# code before its start: go in at its start
+			self.e('bra.w %s' % self.lab(f))
+		try:
+			self.emit_routine_body(pcs, False)
+		finally:
+			for pc, out in saved.items():
+				self.insns[pc].live_out = out
+			self.fast = outer
+		self.out.append(end + ':')
+		self.xc = False
+
+	def emit_routine_body(self, pcs, whole=True):
 		dk = None
 		for k, pc in enumerate(pcs):
 			i = self.insns[pc]
@@ -2119,9 +2150,10 @@ class Gen:
 				if DEFS.get(i.m, 0) & C and i.m not in ('ASL', 'LSR', 'ROL', 'ROR', 'ADC'):
 					self.xc = False
 			self.fall_through(i, pcs, k)
-		self.out += self.stubs
-		self.stubs = []
-		self.fast = None
+		if whole:
+			self.out += self.stubs
+			self.stubs = []
+			self.fast = None
 
 	def fall_through(self, i, pcs, k):
 		"""Jump to the next instruction if it isn't next in the output."""
@@ -2216,6 +2248,8 @@ class Gen:
 					plans[i.arg] = plan
 		self.versioned = []
 		self.plans = plans
+		self.inline = {f for f, (body, heavy, sw) in self.callable.items() if not heavy and len(body) <= 24 and
+			       not any(pc in plans for pc in body)}
 		direct_kind = None
 		for k, pc in enumerate(pcs):
 			i = self.insns[pc]
