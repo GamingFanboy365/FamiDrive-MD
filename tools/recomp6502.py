@@ -13,7 +13,9 @@
 # bank's code once, and each bank's at $8000 once, with labels B<n>_...
 # The fixed bank calls into a bank through rcDispatch, which goes by the
 # bank at $8000 then (emu/recomp.asm); a bank calls the fixed bank's
-# code directly. PRG RAM ($6000-$7FFF) is read and written directly.
+# code directly (its routines' jsr copies, checking after one that may
+# switch banks that its own is still there). PRG RAM ($6000-$7FFF) is
+# read and written directly.
 #
 # The output is included by md.asm when building with RECOMP=1 (see
 # build.sh --recompile). It uses the interpreter's register layout so
@@ -713,17 +715,19 @@ def liveness(insns, returns=(), tables=(), rts_targets=(), ext=(), others=(), ex
 				continue
 			ext_out[pc] = ext_out.get(pc, 0) | v
 	ext_only = set(ext_out) - unknown - set(rts_returns(insns, tables))
-	plp = [i for i in insns.values() if i.m in ('PLP', 'RTI')]
 	whole = set()			# PHPs whose byte may be pulled by PLA
+	pulls = {}			# the others: the PLPs that pull their byte
 	for i in insns.values():
 		if i.m == 'PHP':
-			seen, work = set(), [i.pc + 1]
+			seen, work, pulls[i.pc] = set(), [i.pc + 1], set()
 			while work:		# every path must reach a PLP soon
 				pc = work.pop()
 				j = insns.get(pc)
 				if j is None or len(seen) > 32 or j.m in ('PLA', 'PHP', 'JSR', 'RTS', 'RTI', 'BRK', 'TSX', 'TXS'):
 					whole.add(i.pc)
 					break
+				if j.m == 'PLP':
+					pulls[i.pc].add(pc)
 				if pc in seen or j.m == 'PLP':
 					continue
 				seen.add(pc)
@@ -763,15 +767,14 @@ def liveness(insns, returns=(), tables=(), rts_targets=(), ext=(), others=(), ex
 				out |= inn[s] if s in insns else ext_live.get(s, ALL)
 		uses = USES.get(i.m, 0)
 		if i.m == 'PHP' and pc not in whole:
-			uses = pulled
+			uses = 0
+			for q in pulls[pc]:
+				uses |= getattr(insns[q], 'live_out', ALL)
 		return out, uses | (out & ~DEFS.get(i.m, 0))
 
 	changed = True
 	while changed:
 		changed = False
-		pulled = 0
-		for i in plp:
-			pulled |= getattr(i, 'live_out', ALL)
 		jumped = 0
 		for t in tables:
 			jumped |= live_in[t]
@@ -806,6 +809,9 @@ class Gen:
 	def __init__(self, prg, insns, ext=()):
 		self.prg, self.insns = prg, insns
 		self.ext = set(ext)		# translated in another unit, jumped to directly
+		self.ext_routines = {}		# the fixed bank's routine copies a bank's code calls: (heavy, switches)
+		self.copies_for = ()		# (the fixed bank's: routines banks' code calls, to have copies of)
+		self.ext_ret = {}		# flags live where other units' calls return (cross_flags)
 		self.out, self.stubs = [], []
 		self.fast = None
 
@@ -993,10 +999,12 @@ class Gen:
 
 	def switches(self, i):
 		"""Can i, in a bank's code, write to the mapper (and switch the
-		bank it runs in)? With MMC3, only its $8001 can."""
-		if not (self.prg.banked and self.prg.unit != 'F' and i.mode in ('abs', 'absx', 'absy') and
-			i.m in ('STA', 'STX', 'STY', 'INC', 'DEC', 'ASL', 'LSR', 'ROL', 'ROR') and
-			i.arg + (0 if i.mode == 'abs' else 255) >= 0x8000):
+		bank it runs in)?"""
+		return self.prg.unit != 'F' and self.prg_switch(i)
+
+	def prg_switch(self, i):
+		"""Can i switch the bank at $8000? With MMC3, only its $8001 can."""
+		if not (self.prg.banked and mapper_write(i)):
 			return False
 		return not (i.mode == 'abs' and self.prg.mapper == 4 and i.arg & 0xE001 != 0x8001)
 
@@ -1088,10 +1096,6 @@ class Gen:
 
 	def save_nzc(self):			# shifts: X N Z C, keep V
 		self.e('move sr,d5', 'andi.w #$1D,d5', 'andi.b #$E2,d3', 'or.b d5,d3')
-
-	def save_cmp(self):			# N Z, C = no borrow (and X), keep V
-		self.e('move sr,d5', 'andi.w #$D,d5', 'eori.b #1,d5', 'andi.b #2,d3', 'or.b d5,d3',
-		       'andi.b #1,d5', 'lsl.b #4,d5', 'or.b d5,d3')
 
 	# ---- control flow ---------------------------------------------------
 
@@ -1441,21 +1445,22 @@ class Gen:
 				r = {'CMP': 'd0', 'CPX': 'd1', 'CPY': 'd2'}[m]
 				setup, s = self.src(i)
 				self.e(*setup)
-				if need and not direct and not live & V:
-					# r + ~s + 1 carries like the 6502's compare; V is dead
+				if need and not direct:
+					# r + ~s + 1 carries like the 6502's compare (X too)
 					if s.startswith('#'):	# (handlers expect d7's upper bits clear)
 						self.e('move.b #$%02X,d7' % (~int(s[2:], 16) & 0xFF))
 					else:
 						self.e('move.b %s,d7' % s, 'not.b d7')
-					self.e('move.b %s,d6' % r, 'move #$14,ccr', 'addx.b d7,d6', 'move sr,d3')
-					if nxt_i is not None and nxt_i.mode == 'rel' and nxt_i.decided is None:
-						self.direct_next = 'flags'	# also still in the CCR
+					self.e('move.b %s,d6' % r, 'move #$14,ccr', 'addx.b d7,d6')
+					if live & V:		# X N Z C into d3, V as it was
+						self.e('move sr,d5', 'andi.b #$1D,d5', 'andi.b #$E2,d3', 'or.b d5,d3')
+					else:
+						self.e('move sr,d3')
+						if nxt_i is not None and nxt_i.mode == 'rel' and nxt_i.decided is None:
+							self.direct_next = 'flags'	# also still in the CCR
 					return
 				self.e(('cmpi.b %s,%s' if s.startswith('#') else 'cmp.b %s,%s') % (s, r))
-				if direct:
-					self.direct_next = 'cmp'
-				else:
-					self.save_cmp()
+				self.direct_next = 'cmp'	# only the branch after it reads them
 		elif m == 'BIT':
 			setup, s = self.src(i)
 			self.e(*setup)
@@ -1558,6 +1563,18 @@ class Gen:
 				       'move.b #$%02X,(a2,d3.w)' % (ret & 0xFF), 'subq.b #1,d3', 'swap d3')
 			self.e('jsr R%04X_%04X' % (i.arg, i.arg))	# see routine_body
 			self.called.add(i.arg)
+		elif m == 'JSR' and i.arg in self.ext_routines and not i.table:
+			heavy, sw, label = self.ext_routines[i.arg]
+			if heavy:
+				ret = i.pc + 2
+				self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
+				       'move.b #$%02X,(a2,d3.w)' % (ret & 0xFF), 'subq.b #1,d3', 'swap d3')
+			self.e('jsr ' + label)		# the fixed bank's copy
+			if sw:				# it may have switched this bank out
+				k = self.tag('Sw', i.pc)
+				self.e('cmpa.l #PRG_IMAGES+$%X,a1' % (self.prg.unit * 0x8000), 'beq.s ' + k,
+				       'move.w #$%04X,d4' % ((i.pc + 3) & 0xFFFF), 'jmp rcDispatch')
+				self.out.append(k + ':')
 		elif m == 'JSR':
 			ret = i.pc + 2
 			self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
@@ -1994,7 +2011,7 @@ class Gen:
 		if f in memo:
 			return memo[f]
 		memo[f] = None			# recursion: not callable
-		depth, work, heavy = {}, [(f, 0)], False
+		depth, work, heavy, sw = {}, [(f, 0)], False, False
 		while work:
 			pc, d = work.pop()
 			i = self.insns[pc]
@@ -2007,6 +2024,7 @@ class Gen:
 			depth[pc] = d
 			if self.switches(i):
 				heavy = True		# may go on in another bank, through rcDispatch
+			sw |= self.prg_switch(i)	# (the fixed bank's: its callers in banks check)
 			if i.m in ('PHA', 'PHP', 'PLA', 'PLP'):
 				d += 1 if i.m[1] == 'H' else -1
 				if d < 0:
@@ -2021,6 +2039,11 @@ class Gen:
 					if sub is None:
 						return None
 					heavy |= sub[1]
+					sw |= sub[2]
+				elif i.arg in self.ext_routines and not i.table:
+					h, s, _ = self.ext_routines[i.arg]
+					heavy |= h or s		# a switch goes on through rcDispatch
+					sw |= s
 				elif i.arg < 0x800:
 					heavy = True	# a jump table in RAM, through rcDispatch
 				else:
@@ -2034,18 +2057,29 @@ class Gen:
 					if self.back(i, t) and not (i.mode == 'rel' and i.decided is None and pc in self.counted):
 						heavy = True	# NMI check
 					work.append((t, d))
-		memo[f] = (set(depth), heavy)
+		memo[f] = (set(depth), heavy, sw)
 		return memo[f]
 
-	def emit_routine(self, f):
-		pcs = sorted(self.callable[f][0])
-		self.fast = {'pcs': set(pcs), 'prefix': 'R%04X' % f, 'routine': True, 'heavy': self.callable[f][1]}
-		self.xc, self.c_skipped = False, 0
-		self.out.append('')
-		# its own liveness: it returns only to its callers
-		ctx = 0
+	def copy_label(self, f):
+		"""The label of the copy of the fixed bank's routine f that the
+		banks' code calls: a copy of its own (X) where they need more
+		flags kept than this unit's calls do."""
+		mine, calls = 0, False
 		for i in self.insns.values():
 			if i.m == 'JSR' and i.arg == f and i.pc + 3 in self.insns:
+				mine |= self.live_in[i.pc + 3]
+				calls = True
+		return ('X%04X_%04X' if calls and self.ext_ret.get(f, ALL) & ~mine else 'R%04X_%04X') % (f, f)
+
+	def emit_routine(self, f, prefix='R'):
+		pcs = sorted(self.callable[f][0])
+		self.fast = {'pcs': set(pcs), 'prefix': '%s%04X' % (prefix, f), 'routine': True, 'heavy': self.callable[f][1]}
+		self.xc, self.c_skipped = False, 0
+		self.out.append('')
+		# its own liveness: it returns only to its callers (the banks', for X)
+		ctx = self.ext_ret.get(f, ALL) if prefix == 'X' or self.copy_label(f)[0] == 'R' and f in self.copies_for else 0
+		for i in self.insns.values():
+			if i.m == 'JSR' and i.arg == f and i.pc + 3 in self.insns and prefix == 'R':
 				ctx |= self.live_in[i.pc + 3]
 		saved = {pc: self.insns[pc].live_out for pc in pcs}
 		for pc, out in copy_liveness(self.insns, set(pcs), ctx, self.live_in, self.sums).items():
@@ -2084,7 +2118,8 @@ class Gen:
 		if i.mode == 'rel':
 			if i.decided == 'taken':
 				return
-		elif i.m in ('JMP', 'RTS', 'RTI', 'BRK') or (i.m == 'JSR' and i.arg not in self.callable):
+		elif i.m in ('JMP', 'RTS', 'RTI', 'BRK') or (i.m == 'JSR' and i.arg not in self.callable and
+							     (i.table or i.arg not in self.ext_routines)):
 			return
 		f = i.pc + i.n
 		if k + 1 >= len(pcs) or pcs[k + 1] != f:
@@ -2153,7 +2188,10 @@ class Gen:
 		for i in self.insns.values():
 			if i.m == 'JSR' and i.arg in self.insns and self.routine_body(i.arg, memo):
 				self.callable[i.arg] = memo[i.arg]
-		self.called = set()
+		for f in self.copies_for:
+			if f in self.insns and self.routine_body(f, memo):
+				self.callable[f] = memo[f]
+		self.called = {f for f in self.copies_for if f in self.callable}
 		self.returns = self.return_points()
 		heads = set()
 		for i in self.insns.values():
@@ -2207,6 +2245,8 @@ class Gen:
 			f = min(self.called - done)
 			done.add(f)
 			self.emit_routine(f)
+			if f in self.copies_for and self.copy_label(f)[0] == 'X':
+				self.emit_routine(f, 'X')
 		# dispatch table: PRG offset -> code
 		self.out += ['', '\t\talign 4', 'rcTable:']
 		size = len(self.prg.data)
@@ -2312,13 +2352,17 @@ def cross_flags(us, lives):
 	return ext_live, ext_ret, ext_sum
 
 
-def generate(prg, u, ext_entries=(), ext_insns=(), facts=(None, None, None)):
+def generate(prg, u, ext_entries=(), ext_insns=(), facts=(None, None, None), copies_for=(), ext_routines=None):
 	"""A unit's 68000 code. ext_entries: its code that other units' code
 	goes to; ext_insns: other units' code it can jump to directly; facts:
-	cross_flags' for it."""
+	cross_flags' for it. The fixed bank's: copies_for, the routines the
+	banks' code calls (copies of them, Gen.routine_body, if they can
+	have one). A bank's: ext_routines, those copies ((heavy, switches)
+	by address)."""
 	insns, vectors, extra, tables = u['insns'], u['vectors'], u['extra'], u['tables']
 	g = Gen(prg, insns, ext_insns)
 	g.live_in, g.sums = unit_liveness(u, ext_entries, facts)
+	g.copies_for, g.ext_routines, g.ext_ret = copies_for, ext_routines or {}, facts[1] or {}
 	g.tables = tables
 	g.engines = {}
 	for i in insns.values():
@@ -2391,10 +2435,13 @@ def main():
 			if new == facts:
 				break
 			facts = new
-		g = generate(fixed, uf, back, (), facts[0])
+		# the banks' code calls the fixed bank's routines' copies
+		calls = {i.arg for ub in ubs for i in ub['insns'].values() if i.m == 'JSR' and not i.table and i.arg >= 0xC000}
+		g = generate(fixed, uf, back, (), facts[0], calls)
+		copies = {f: g.callable[f][1:] + (g.copy_label(f),) for f in calls if f in g.callable}
 		out, units = list(g.out), [(uf, g)]
 		for n, (b, ub) in enumerate(zip(banks, ubs)):
-			gb = generate(b, ub, ub['entries'], uf['insns'], facts[n + 1])
+			gb = generate(b, ub, ub['entries'], uf['insns'], facts[n + 1], (), copies)
 			out += [''] + prefixed(gb.out, 'B%d_' % n)
 			units.append((ub, gb))
 		out += ['', '; each bank\'s code, by the bank at $8000 (rcDispatch)', '\t\talign 4', 'rcBankTables:'] + \
