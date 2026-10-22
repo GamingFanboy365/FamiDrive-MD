@@ -1134,6 +1134,69 @@ class Gen:
 			return 'tst.w nmiWaitDue(a4)', 'jsr rcNmiWait'
 		return 'tst.w FamiMdVint(a4)', 'jsr rcNmi'
 
+	def php_pairs(self):
+		"""PHPs whose byte only a PLP pulls, and those PLPs: from the
+		PHP, every way reaches a PLP soon, with no other stack use, SEI,
+		CLI, SED or CLD on the way, and nothing else jumps into the code
+		between them. The PHP can push d3's flags as they are, and the
+		PLP take them back (I and D are as they were)."""
+		preds = {pc: set() for pc in self.insns}
+		for i in self.insns.values():
+			for s in i.succ:
+				if s in preds:
+					preds[s].add(i.pc)
+		outside = set(self.entries) | set(self.tables) | {i.pc + 3 for i in self.insns.values() if i.m == 'JSR'}
+		found = set()
+		for p in self.insns.values():
+			if p.m != 'PHP':
+				continue
+			walk, work, ok = set(), [p.pc + 1], True
+			while work and ok:
+				pc = work.pop()
+				i = self.insns.get(pc)
+				if i is None or len(walk) > 32 or i.m in ('PLA', 'PHA', 'PHP', 'JSR', 'RTS', 'RTI', 'BRK', 'TSX',
+									   'TXS', 'SEI', 'CLI', 'SED', 'CLD') or None in i.succ:
+					ok = False
+				elif pc not in walk:
+					walk.add(pc)
+					if i.m != 'PLP':
+						work += i.succ
+			if ok and walk and not (walk & outside) and all(preds[pc] <= walk | {p.pc} for pc in walk):
+				found |= {p.pc} | {pc for pc in walk if self.insns[pc].m == 'PLP'}
+		return found
+
+	def loop_edges(self):
+		"""Backward branches and jumps that close a loop: their target
+		can come back to them. Only those need an NMI check (a branch
+		back to an RTS doesn't). Through a computed jump or code that
+		isn't translated here, it might: those count as loops."""
+		found = set()
+		for b in self.insns.values():
+			if not ((b.mode == 'rel' and b.decided != 'not') or (b.m == 'JMP' and b.mode == 'abs')) or b.arg > b.pc:
+				continue
+			seen, work = set(), [b.arg]
+			while work:
+				pc = work.pop()
+				if pc == b.pc or pc not in self.insns or len(seen) > 2000:
+					found.add(b.pc)
+					break
+				if pc in seen:
+					continue
+				seen.add(pc)
+				i = self.insns[pc]
+				if i.m == 'JSR':
+					work += list(i.table) if i.table else [pc + 3]
+				elif i.m not in ('RTS', 'RTI'):
+					if None in i.succ:
+						found.add(b.pc)
+						break
+					work += i.succ
+		return found
+
+	def back(self, i, t):
+		"""Does going from i to t close a loop (and need an NMI check)?"""
+		return t <= i.pc and (i.pc in self.loopy or i.mode not in ('rel', 'abs'))
+
 	def counted_loops(self):
 		"""Back edges of short counted loops, which don't need an NMI
 		check: an innermost loop closed by a branch on a register that
@@ -1193,13 +1256,14 @@ class Gen:
 
 	def goto(self, i, target, tag='K'):
 		"""Unconditional jump; backward jumps check for an NMI first."""
-		if target <= i.pc and i.pc in self.counted and target in self.insns:
+		back = self.back(i, target)
+		if back and i.pc in self.counted and target in self.insns:
 			self.e('jmp %s' % self.lab(target))
 			return
-		if target <= i.pc and target in self.prologued and not self.fast:
+		if back and target in self.prologued and not self.fast:
 			self.e('jmp C_%04X' % target)
 			return
-		if target <= i.pc:
+		if back:
 			flag, call = self.nmi_check(target)
 			self.e(flag, 'beq.s %s' % self.tag(tag, i.pc), 'move.w #$%04X,d4' % target, call)
 			self.out.append('%s:' % self.tag(tag, i.pc))
@@ -1214,13 +1278,14 @@ class Gen:
 		"""Conditional branch on 68k condition cc (flags already in the CCR).
 		Out-of-line stubs (tag 'T') are far from their targets: jmp there."""
 		t, nxt = i.arg, i.pc + 2
-		if t <= i.pc and i.pc in self.counted and t in self.insns and tag != 'T':
+		back = self.back(i, t)
+		if back and i.pc in self.counted and t in self.insns and tag != 'T':
 			self.e('b%s.w %s' % (cc, self.lab(t)))
 			return
-		if t <= i.pc and t in self.prologued and tag != 'T' and not self.fast:
+		if back and t in self.prologued and tag != 'T' and not self.fast:
 			self.e('b%s.w C_%04X' % (cc, t))
 			return
-		if t <= i.pc or t not in self.insns or tag == 'T':
+		if back or t not in self.insns or tag == 'T':
 			self.e('b%s.w %s' % (INVERT[cc], self.tag(tag, i.pc)))
 			self.goto(i, t, 'J' if tag == 'T' else 'K')
 			self.out.append('%s:' % self.tag(tag, i.pc))
@@ -1457,11 +1522,15 @@ class Gen:
 			pass
 		elif m == 'PHA':
 			self.e('swap d3', 'move.b d0,(a2,d3.w)', 'subq.b #1,d3', 'swap d3')
+		elif m == 'PHP' and i.pc in self.paired:	# only its PLP reads it: d3's flags as they are
+			self.e('move.b d3,d5', 'swap d3', 'move.b d5,(a2,d3.w)', 'subq.b #1,d3', 'swap d3')
 		elif m == 'PHP':
 			self.e('jsr famiGetP', 'swap d3', 'move.b d5,(a2,d3.w)', 'subq.b #1,d3', 'swap d3')
 		elif m == 'PLA':
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d0', 'swap d3', 'tst.b d0')
 			nz_done()
+		elif m == 'PLP' and i.pc in self.paired:
+			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d5', 'swap d3', 'move.b d5,d3')
 		elif m == 'PLP':
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d5', 'swap d3', 'jsr famiSetP')
 		elif m == 'JMP':
@@ -1962,7 +2031,7 @@ class Gen:
 				if t is None or t not in self.insns:
 					heavy = True	# through rcDispatch
 				else:
-					if t <= pc and not (i.mode == 'rel' and i.decided is None and pc in self.counted):
+					if self.back(i, t) and not (i.mode == 'rel' and i.decided is None and pc in self.counted):
 						heavy = True	# NMI check
 					work.append((t, d))
 		memo[f] = (set(depth), heavy)
@@ -2075,6 +2144,8 @@ class Gen:
 			if i.m == 'JSR':
 				self.targets.add(i.pc + 3)
 		self.counted = self.counted_loops()
+		self.loopy = self.loop_edges()
+		self.paired = self.php_pairs()
 		self.idle_exits, self.idle_jmps = self.idle_loops()
 		self.idle_heads = {self.insns[b].arg for b in self.idle_exits}
 		memo = {}
@@ -2086,8 +2157,8 @@ class Gen:
 		self.returns = self.return_points()
 		heads = set()
 		for i in self.insns.values():
-			if i.m == 'JMP' and i.mode == 'abs' and i.arg <= i.pc: heads.add(i.arg)
-			if i.mode == 'rel' and i.decided != 'not' and i.arg <= i.pc and i.pc not in self.counted:
+			if i.m == 'JMP' and i.mode == 'abs' and self.back(i, i.arg): heads.add(i.arg)
+			if i.mode == 'rel' and i.decided != 'not' and self.back(i, i.arg) and i.pc not in self.counted:
 				heads.add(i.arg)
 		plans = {}
 		for i in self.insns.values():
