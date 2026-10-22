@@ -268,22 +268,11 @@ wrTo_WRAM:
 wrTo_PRG:
 		move.w	cpuMapper(a4),d5
 		subq.w	#2,d5
-		beq.s	.mapper_2
+		beq.s	mapper2Write
 		subq.w	#1,d5
 		beq.s	.mapper_3
 		subq.w	#1,d5
 		beq.w	mmc3Write
-		jmp	(RAM_EmuLoop).l
-
-; --------------------------------------------------------
-; Mapper $02, UxROM: any write picks the 16 KB PRG bank at $8000
-; (the last is at $C000)
-; --------------------------------------------------------
-
-.mapper_2:
-		moveq	#0,d5
-		move.b	d7,d5
-		bsr.w	prgSwitch
 		jmp	(RAM_EmuLoop).l
 
 ; --------------------------------------------------------
@@ -317,6 +306,17 @@ wrTo_PRG:
 		jmp	(RAM_EmuLoop).l
 
 ; --------------------------------------------------------
+; Mapper $02, UxROM: any write picks the 16 KB PRG bank at $8000
+; (the last is at $C000). Recompiled code calls this directly.
+; --------------------------------------------------------
+
+mapper2Write:
+		moveq	#0,d5
+		move.b	d7,d5
+		bsr.w	prgSwitch
+		jmp	(RAM_EmuLoop).l
+
+; --------------------------------------------------------
 ; Mapper $04, MMC3. Its registers go by address bits 14-13 and 0:
 ; $8000 bank select (bits 2-0: the register $8001 sets, bit 6: PRG
 ; mode, bit 7: CHR mode), $8001 bank data, $A000 mirroring, $A001
@@ -328,26 +328,37 @@ wrTo_PRG:
 ; supported, the way games such as Super Mario Bros. 2 use them:
 ; PRG_IMAGES has an image for each pair. The pair is switched once
 ; both registers make one (the game writes them one at a time).
+;
+; Recompiled code calls the handlers of $8000, $8001 and $A000
+; directly (mmc3WrSelect, mmc3WrData, mmc3WrMirror, value in d7).
 ; --------------------------------------------------------
 
 mmc3Write:
 		btst	#6,d6			; $C000-$FFFF: the IRQ
-		bne.s	.done
+		bne.s	mmc3Ignore
 		btst	#0,d4
 		bne.s	.odd
 		btst	#5,d6
-		bne.s	.mirroring
-		move.b	mmc3Select+1(a4),d5	; $8000
-		move.b	d7,mmc3Select+1(a4)
-		eor.b	d7,d5			; a new CHR mode (bit 7): all the
-		bmi.s	.chr_all		; CHR banks moved
-.done:
+		bne.s	mmc3WrMirror
+		bra.s	mmc3WrSelect
+.odd:
+		btst	#5,d6			; $A001: PRG RAM protect
+		beq.s	mmc3WrData
+mmc3Ignore:
 		jmp	(RAM_EmuLoop).l
-.mirroring:
+
+mmc3WrMirror:
 		moveq	#1,d5			; $A000 bit 0: 0 vertical, 1
 		and.w	d5,d7			; horizontal (ppuMirror: 1, 0)
 		eor.w	d5,d7
 		bsr.w	ppuSetMirror
+		jmp	(RAM_EmuLoop).l
+
+mmc3WrSelect:
+		move.b	mmc3Select+1(a4),d5	; $8000
+		move.b	d7,mmc3Select+1(a4)
+		eor.b	d7,d5			; a new CHR mode (bit 7): all the
+		bmi.s	.chr_all		; CHR banks moved
 		jmp	(RAM_EmuLoop).l
 .chr_all:
 		moveq	#6-1,d5
@@ -357,9 +368,8 @@ mmc3Write:
 		move.w	(sp)+,d5
 		dbf	d5,.chr_bank
 		jmp	(RAM_EmuLoop).l
-.odd:
-		btst	#5,d6			; $A001: PRG RAM protect
-		bne.s	.done
+
+mmc3WrData:
 		move.w	mmc3Select(a4),d5	; $8001: bank data
 		andi.w	#7,d5
 		lea	mmc3Regs(a4),a5
@@ -369,6 +379,7 @@ mmc3Write:
 		beq.s	.done			; (games set them every frame)
 		move.b	d7,(a5,d5.w)
 		bsr.s	mmc3Chr
+.done:
 		jmp	(RAM_EmuLoop).l
 .prg:
 		move.b	d7,(a5,d5.w)
@@ -391,7 +402,7 @@ mmc3Write:
 
 ; --------------------------------------------------------
 ; MMC3: a CHR bank register -> its bank in the copy of the pattern
-; tables (a3), and the MD tiles that show it (chrRefresh). CHR mode
+; tables (a3), and the MD tiles that show it (chrUpdate). CHR mode
 ; 0: R0, R1 are 2 KB at $0000, $0800, R2-R5 1 KB at $1000-$1C00;
 ; mode 1 swaps the halves.
 ;
@@ -429,22 +440,16 @@ mmc3Chr:
 		lsl.l	#2,d0
 		movea.l	emuChrRom(a4),a0
 		adda.l	d0,a0
-		lea	(a3,d4.w),a5
-		move.w	d6,d0
-		lsr.w	#2,d0
-		subq.w	#1,d0
-.copy:
-		move.l	(a0)+,(a5)+
-		dbf	d0,.copy
+		bsr.w	chrUpdate
 		movem.l	(sp)+,d0/a0
-		bra.w	chrRefresh
 .done:
 		rts
 
 ; --------------------------------------------------------
 ; Banked PRG (PRG_BANKED): switch the 16 KB bank at $8000.
 ; a1 moves to the bank's image in PRG_IMAGES, and so does the PC
-; (a0), unless it's in RAM.
+; (a0), unless it's in RAM. Recompiled code keeps a1+$8000 in a0,
+; which moves too, and its dispatch goes by the bank's rcTable.
 ;
 ; d5.l - bank
 ; --------------------------------------------------------
@@ -456,13 +461,19 @@ prgSwitch:
 		bcs.s	.bank_ok
 		subi.w	#NES_PRG16,d5
 .bank_ok:
+		if RECOMP
+		move.w	d5,d6			; the bank's code (emu/recomp.asm)
+		lsl.w	#2,d6
+		lea	(rcBankTables).l,a5
+		move.l	(a5,d6.w),rcCurTable(a4)
+		endif
 		swap	d5			; image: bank * $8000
 		lsr.l	#1,d5
 		addi.l	#PRG_IMAGES,d5
 		move.l	a0,d6
 		sub.l	a1,d6
 		cmpi.l	#$8000,d6
-		bcc.s	.pc_elsewhere
+		bhi.s	.pc_elsewhere
 		movea.l	d5,a0
 		adda.l	d6,a0
 .pc_elsewhere:

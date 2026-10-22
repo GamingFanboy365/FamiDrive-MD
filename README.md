@@ -34,8 +34,12 @@ The build uses the [AS macro assembler](http://john.ccac.rwth-aachen.de:8000/as/
 while the game runs. Games that use a lot of CPU run many times faster: Pinball's gameplay goes
 from about 3.5 to about 55 game frames per second, as fast as on a NES (which also drops frames
 when the game is busy). Super Mario Bros., Balloon Fight, Ice Climber and Excitebike run at full
-speed (60) while you play. Only NROM and CNROM games can be recompiled for now: games with banked
-PRG-ROM (mappers 2 and 4) run interpreted, slowly.
+speed (60) while you play. Games with banked PRG-ROM (mappers 2 and 4) are translated a bank at a
+time: Super Mario Bros. 2 goes from about 6 to 60 game frames per second in most of its levels.
+
+When a game's frame needs a little more time than an MD frame, its next NMI waits until the game
+is ready for it (up to a frame), so the game runs a little slower instead of at half speed. NMIs
+still come once per VBlank on average, so music keeps its tempo.
 
 The translated code goes to `out/recomp.asm`. It is the game's code in another form, so like the
 built ROM it stays out of git and shouldn't be published. Code the recompiler can't find ahead of
@@ -90,7 +94,7 @@ handheld's differences.
 | `emu/recomp.asm` | Support code for recompiled games (dispatch, NMI, interpreter fallback) |
 | `emu/fps.asm` | FPS counter (`--fps` builds) |
 | `tools/recomp6502.py` | The 6502-to-68000 recompiler |
-| `tools/nesinfo.py` | Reads the NES ROM's header as it's built (md.asm lays out banked PRG-ROM from it) |
+| `tools/nesinfo.py` | Reads the NES ROM's header as it's built (md.asm lays out banked PRG-ROM from it), and for MMC3 games turns the CHR-ROM into MD tiles, which bank switches copy |
 | `tools/hwtest/` | A test ROM that shows what a console does differently from a Mega Drive in what FamiDrive depends on (see its README) |
 | `tools/test/` | Checks that FamiDrive still works on an AtGames handheld (`run.sh`, see Checks above) |
 | `system/md/error.asm` | Error screen |
@@ -116,9 +120,10 @@ handheld's differences.
 - Sound is approximate: no DMC (sample) channel, the PSG only plays 50% squares so pulse duty is
   approximated by volume, pulse notes below about 109 Hz play an octave up, and timing assumes
   an NTSC console
-- Super Mario Bros. 2 plays at about a tenth of full speed, since it can't be recompiled yet. Its
-  story screen garbles some text lines: its menu code assumes it never runs late, which it does
-  when interpreted
+- Recompiled Super Mario Bros. 2 slows to 40-55 game frames per second in the busiest parts of its
+  horizontally scrolling levels (such as 4-1 and 6-1). Interpreted, it runs at about a tenth of
+  full speed, and its story screen garbles some text lines: its menu code assumes it never runs
+  late
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its

@@ -22,15 +22,11 @@ finished in #1 to #6.
   to `$0100` like PLP and RTS do.
 - [ ] **Reset state.** The 6502 starts with SP = `$00` and I clear; after reset
   it should be SP = `$FD` with I set.
-- [ ] **Recompiling banked games.** `tools/recomp6502.py` only takes NROM and
-  CNROM. Mappers 2 and 4 need it to translate each PRG bank, and to dispatch by
-  the bank at $8000 (`cpuPrgImg`).
 - [ ] **MMC3: more of it.** Only R6 and R7 as a 16 KB pair in PRG mode 0 are
   supported (`mmc3Write`, PRG_IMAGES), and the scanline IRQ isn't emulated.
-- [ ] **CHR bank switches on a Mega Drive.** `mmc3Chr` converts the bank's
-  tiles into VRAM as the game switches it: up to 4 KB of VRAM writes with the
-  display on, which is slow on a Mega Drive (fast on an AtGames handheld).
-  Converted tiles in ROM, DMAed in VBlank, would be quicker.
+- [ ] **Other CHR switches.** MMC3 bank switches copy tiles made with the ROM
+  (`chrUpdate`), but a new BG pattern table (`chrLoadBg`) and CNROM's 8 KB
+  switches still convert every tile, which takes several frames.
 
 ## Sound
 
@@ -51,6 +47,12 @@ finished in #1 to #6.
   pointers outside versioned loops take a slow path (placing NES RAM next to
   the PRG copy would let one `(a0,d6.w)` read both); versioning loops that
   call routines; keeping hot zero-page variables in registers.
+- [ ] **Banked games' calls between banks.** The fixed bank's code calls a
+  bank's code, and returns into it, through `rcDispatch` (about 20 times a
+  frame in Super Mario Bros. 2), and the routines one bank calls in another
+  aren't called with the 68000's `jsr`. Direct calls, checking the bank at
+  $8000, would be faster. Super Mario Bros. 2 still runs at 40-55 frames a
+  second in the busiest parts of its horizontally scrolling levels.
 - [ ] **Gameplay tests.** NES RAM is compared with Nestopia's only for the
   attract demo, up to the NES's first lag frame; gameplay checks are by eye.
   A test that replays input per game frame (not per video frame) could

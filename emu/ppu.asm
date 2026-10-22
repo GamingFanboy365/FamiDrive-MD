@@ -1118,6 +1118,9 @@ chrToSprites:
 ; ----------------------------------------------------------------
 
 chrConvert:
+		if (NES_MAPPER=4)&&(NES_CHR8<>0)
+		bsr.w	chrFlush		; the queued tiles first (chrUpdate)
+		endif
 		movem.l	d0-d3/d6-d7/a0,-(sp)
 		move.w	sr,-(sp)
 		lea	(ppuChrSpread).l,a0
@@ -1161,4 +1164,247 @@ chrConvert:
 		dbf	d7,.tile
 		addq.w	#2,sp
 		movem.l	(sp)+,d0-d3/d6-d7/a0
+		rts
+
+; ----------------------------------------------------------------
+; New CHR-ROM data for part of the pattern tables (MMC3): the tiles
+; that differ from those there now go into the copy (a3), and their
+; MD tiles, made as the ROM was built (CHR_MD in md.asm), into a
+; queue for VRAM. MD_Vint copies those by DMA in VBlank (chrVblank),
+; when the VDP takes them ten times as fast as while it draws.
+; A game that switches banks to animate tiles changes few of them
+; (Super Mario Bros. 2: 20 to 40 of a 2 KB bank's 128). Tiles are
+; told apart by their IDs (CHR_ID, made with the ROM), and
+; RAM_Fami_ChrIds has those of the tiles in the pattern tables.
+;
+; a0 - the new data, d4.w - where it goes ($0000-$1FFF),
+; d6.w - bytes (whole tiles, within one table)
+; ----------------------------------------------------------------
+
+chrUpdate:
+		movem.l	d0-d3/d5-d7/a1-a2/a5,-(sp)
+		move.l	a0,d3			; the new tiles' IDs
+		sub.l	emuChrRom(a4),d3
+		move.l	d3,d2
+		lsr.l	#3,d2
+		lea	(CHR_ID).l,a1
+		adda.l	d2,a1
+		add.l	d3,d3			; d3: their MD tiles, from CHR_MD
+		move.w	d4,d2			; the IDs of the tiles there now
+		lsr.w	#3,d2
+		lea	(RAM_Fami_ChrIds).l,a2
+		adda.w	d2,a2
+		moveq	#-1,d7			; d7: VRAM for the first in the BG
+		move.w	d4,d2			; set, if it's the BG's table
+		lsr.w	#5,d2			; (their table ($1000) -> bit 7,
+		move.b	ppuChrBank+1(a4),d1	; the BG's: bit 7)
+		eor.b	d2,d1
+		bmi.s	.not_bg
+		move.w	d4,d7
+		andi.w	#$FFF,d7
+		add.w	d7,d7
+.not_bg:
+		lea	(RAM_Fami_ChrDma).l,a5
+		lsr.w	#4,d6			; tiles
+		move.w	d6,d0
+		subq.w	#1,d0
+.scan:
+		cmpm.w	(a1)+,(a2)+		; the same tile?
+		dbne	d0,.scan
+		beq.s	.done
+		move.w	d6,d1			; no: a run of new ones from it,
+		sub.w	d0,d1			; tiles d1 to d2-1
+		subq.w	#1,d1
+		move.w	d1,d2
+.run:
+		move.w	-2(a1),-2(a2)
+		addq.w	#1,d2
+		subq.w	#1,d0
+		bmi.s	.last
+		cmpm.w	(a1)+,(a2)+
+		bne.s	.run
+		bsr.s	.flush
+		dbf	d0,.scan
+		bra.s	.done
+.last:
+		bsr.s	.flush
+.done:
+		movem.l	(sp)+,d0-d3/d5-d7/a1-a2/a5
+		rts
+
+	; tiles d1 to d2-1: into the copy, and their MD tiles queued
+.flush:
+		movem.l	d0/a0-a1,-(sp)
+		sub.w	d1,d2			; d2: tiles
+		lsl.w	#4,d1			; d1: the first's offset
+		adda.w	d1,a0
+		lea	(a3,d4.w),a1
+		adda.w	d1,a1
+		move.w	d2,d0
+		subq.w	#1,d0
+.copy:
+		move.l	(a0)+,(a1)+
+		move.l	(a0)+,(a1)+
+		move.l	(a0)+,(a1)+
+		move.l	(a0)+,(a1)+
+		dbf	d0,.copy
+		add.w	d1,d1			; MD tiles: twice the size
+		lsl.w	#4,d2			; words: 16 a tile
+		tst.w	d7
+		bmi.s	.sprites
+		lea	(CHR_MD).l,a0		; into the BG set
+		move.w	d7,d0
+		bsr.s	.queue
+.sprites:
+		lea	(CHR_MD+NES_CHR8*$4000).l,a0	; into the sprite set for their
+		move.w	d4,d0				; table: VRAM $2000 + tile * 32
+		add.w	d0,d0
+		addi.w	#$2000,d0
+		bsr.s	.queue
+		movem.l	(sp)+,d0/a0-a1
+		rts
+
+	; d2 words from a0+d3+d1 to VRAM d0+d1, into the queue
+	; (RAM_Fami_ChrDma, 128: source.l, VRAM.w, words.w)
+.queue:
+		adda.l	d3,a0
+		adda.w	d1,a0
+		add.w	d1,d0
+		move.w	chrDmaTail(a4),d5
+		move.l	a0,(a5,d5.w)
+		move.w	d0,4(a5,d5.w)
+		move.w	d2,6(a5,d5.w)
+		addq.w	#8,d5
+		andi.w	#$3FF,d5
+		cmp.w	chrDmaHead(a4),d5
+		bne.s	.queued
+		bsr.s	chrFlush		; full: copy the others now
+.queued:
+		move.w	d5,chrDmaTail(a4)
+		rts
+
+; ----------------------------------------------------------------
+; Queued MD tiles (chrUpdate) -> VRAM, all of them now, wherever the
+; VDP is: before tiles are written another way (chrConvert), or when
+; the queue is full
+; ----------------------------------------------------------------
+
+chrFlush:
+		movem.l	d0/d5,-(sp)
+		move.w	chrDmaHead(a4),d5
+		cmp.w	chrDmaTail(a4),d5
+		beq.s	.none
+		move.w	sr,-(sp)
+		move.w	#$2700,sr
+		move.w	#$0100,(z80_bus).l
+.wait:
+		btst	#0,(z80_bus).l
+		bne.s	.wait
+		move.w	#$8F02,4(a6)
+		moveq	#-1,d0
+		bsr.s	chrDma
+		move.w	#0,(z80_bus).l
+		move.w	(sp)+,sr
+.none:
+		movem.l	(sp)+,d0/d5
+		rts
+
+; ----------------------------------------------------------------
+; In VBlank (MD_Vint): as many queued MD tiles as there's time for
+; before the screen starts (the rest go in the next VBlank)
+; ----------------------------------------------------------------
+
+chrVblank:
+		move.w	chrDmaHead(a4),d0
+		cmp.w	chrDmaTail(a4),d0
+		beq.s	.none
+		bsr.w	ppuClock		; lines left in VBlank, less a margin
+		move.w	mdLines(a4),d0
+		subi.w	#224+2,d0
+		sub.w	d5,d0
+		bgt.s	.time
+.none:
+		rts
+.time:
+		lsl.w	#7,d0			; bytes: 128 a line (the VDP takes 166)
+
+; ----------------------------------------------------------------
+; Queued MD tiles -> VRAM by DMA, with the Z80 off the bus and
+; interrupts off
+;
+; d0.w - bytes there's time for (-1: all)
+; ----------------------------------------------------------------
+
+chrDma:
+		movem.l	d1-d4/a5,-(sp)
+		lea	(RAM_Fami_ChrDma).l,a5
+.entry:
+		move.w	chrDmaHead(a4),d1
+		cmp.w	chrDmaTail(a4),d1
+		beq.s	.done			; none left
+		move.w	6(a5,d1.w),d2		; words
+		tst.w	d0
+		bmi.s	.all
+		move.w	d0,d3			; words there's time for: whole tiles
+		lsr.w	#1,d3
+		andi.w	#$FFF0,d3
+		beq.s	.done
+		cmp.w	d2,d3
+		bcc.s	.all
+		move.w	d3,d2			; part of them, the rest next time
+		bsr.s	.dma
+		add.w	d2,d2
+		moveq	#0,d3
+		move.w	d2,d3
+		add.l	d3,(a5,d1.w)
+		add.w	d2,4(a5,d1.w)
+		lsr.w	#1,d2
+		sub.w	d2,6(a5,d1.w)
+		bra.s	.done
+.all:
+		bsr.s	.dma
+		addq.w	#8,d1
+		andi.w	#$3FF,d1
+		move.w	d1,chrDmaHead(a4)
+		tst.w	d0
+		bmi.s	.entry
+		add.w	d2,d2
+		sub.w	d2,d0
+		bgt.s	.entry
+.done:
+		movem.l	(sp)+,d1-d4/a5
+		rts
+
+	; d2 words from the entry at d1: length, source, VRAM write
+.dma:
+		move.w	#$9300,d3
+		move.b	d2,d3
+		move.w	d3,4(a6)
+		move.w	d2,d3
+		lsr.w	#8,d3
+		ori.w	#$9400,d3
+		move.w	d3,4(a6)
+		move.l	(a5,d1.w),d3
+		lsr.l	#1,d3
+		move.w	#$9500,d4
+		move.b	d3,d4
+		move.w	d4,4(a6)
+		lsr.l	#8,d3
+		move.w	#$9600,d4
+		move.b	d3,d4
+		move.w	d4,4(a6)
+		lsr.l	#8,d3
+		andi.w	#$7F,d3
+		ori.w	#$9700,d3
+		move.w	d3,4(a6)
+		move.w	4(a5,d1.w),d3
+		move.w	d3,d4
+		andi.w	#$3FFF,d3
+		ori.w	#$4000,d3
+		move.w	d3,4(a6)
+		rol.w	#2,d4
+		andi.w	#3,d4
+		ori.w	#$80,d4
+		move.w	d4,-(sp)		; (the word that starts it: from RAM)
+		move.w	(sp)+,4(a6)
 		rts

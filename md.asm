@@ -40,6 +40,8 @@ chrBankMask	set chrBankMask-1
 
 RAM_Fami_ROM	equ $FFFF0000		; PRG-ROM (not banked)
 RAM_Fami_WRAM	equ $FFFF0000		; PRG RAM, $6000-$7FFF (banked PRG: PRG_IMAGES)
+RAM_Fami_ChrIds	equ $FFFF2000		; MMC3: the IDs of the tiles in the pattern tables (chrUpdate)
+RAM_Fami_ChrDma	equ $FFFF2400		; MMC3: MD tiles for VRAM, queued for VBlank (chrUpdate, chrDma)
 RAM_Fami_Emu	equ $FFFF8000		; Emulator buffer
 RAM_Fami_RAM	equ $FFFF9000		; RAM size: $800
 RAM_Fami_PPU	equ $FFFFA000		; PPU size: $3EF8 (TODO: still uses negative variables)
@@ -151,6 +153,12 @@ cpuPrgImg	ds.l 1			; $8000-$FFFF: RAM_Fami_ROM, or a PRG_IMAGES image (a1)
 cpuWram		ds.w 1			; 1: PRG RAM at $6000-$7FFF (RAM_Fami_WRAM)
 mmc3Select	ds.w 1			; MMC3 (mapper 4): the last $8000 write
 mmc3Regs	ds.b 8			; and its bank registers R0-R7 (mmc3Write)
+rcCurTable	ds.l 1			; recompiled banked PRG: the bank at $8000's rcTable (prgSwitch)
+chrDmaHead	ds.w 1			; MMC3: the first MD tiles queued for VRAM (RAM_Fami_ChrDma)
+chrDmaTail	ds.w 1			; and where the next go
+nmiCredit	ds.w 1			; recompiled code: VBlanks not yet answered by an NMI (rcNmi)
+nmiWaitDue	ds.w 1			; and 1: one is due where the game waits for it (rcNmiWait)
+nmiHold		ds.w 1			; 1: the game took its last NMI waiting for it
 		finish
 sprTable2	equ vdpSprData2-vdpSprData
 
@@ -522,12 +530,29 @@ MD_Vint:
 		move.w	(sp)+,4(a6)
 .same_palette:
 		jsr	hsApply				; horizontal scroll
+		if (NES_MAPPER=4)&&(NES_CHR8<>0)
+		jsr	(chrVblank).l			; MMC3: tiles that changed (chrUpdate)
+		endif
 		bsr.w	apuUpdate			; needs the Z80 bus
 		move.w	#0,(z80_bus).l			; Release Z80
 		bsr.w	readInput
 
 		clr.w	vdpHintSp0(a4)
+		if RECOMP
+		move.w	#1,nmiWaitDue(a4)		; an NMI is due: at once, or when the
+		tst.w	ppuNmiFlag(a4)			; game next waits for it, if it does,
+		beq.s	.nmi_now			; up to a frame later (emu/recomp.asm)
+		addq.w	#1,nmiCredit(a4)		; (with NMIs off, none: the checks
+		tst.w	nmiHold(a4)			; just clear the flags)
+		beq.s	.nmi_now
+		cmpi.w	#2,nmiCredit(a4)
+		bcs.s	.nmi_set
+.nmi_now:
 		move.w	#1,FamiMdVint(a4)
+.nmi_set:
+		else
+		move.w	#1,FamiMdVint(a4)
+		endif
 		move.w	#1,FamiPPUVint(a4)
 
 	; The game's code didn't run meanwhile: its frame's clock (vNmi,
@@ -638,6 +663,16 @@ Fami_LoadRom:
 .clrwram:
 		move.l	d7,(a5)+
 		dbf	d1,.clrwram
+		if (NES_MAPPER=4)&&(NES_CHR8<>0)
+		lea	(CHR_ID).l,a5		; MMC3: the IDs of the tiles in the CHR
+		move.l	a6,-(sp)		; copied below (chrUpdate)
+		lea	(RAM_Fami_ChrIds).l,a6
+		move.w	#$400/4-1,d1
+.chr_ids:
+		move.l	(a5)+,(a6)+
+		dbf	d1,.chr_ids
+		movea.l	(sp)+,a6
+		endif
 		movea.l	a0,a4			; CHR-ROM: after PRG-ROM (as romGrabPrg
 		adda.l	#$10+NES_PRG16*$4000,a4	; leaves a4)
 		else
@@ -911,4 +946,21 @@ prgImage	set 0
 		binclude "out/nes_rom.bin",$10+(NES_PRG16-1)*$4000,$4000
 prgImage	set prgImage+1
 		endm
+		endif
+
+; ----------------------------------------------------------------
+; MMC3 games' CHR-ROM as MD tiles, from tools/nesinfo.py: for the
+; BG, then for sprites (opaque pixels +8), 2 bytes for each byte of
+; CHR-ROM. Their bank switches copy these to VRAM (chrUpdate), which
+; is much faster than converting the tiles. Then a word for each
+; tile, its ID: the number of the first tile like it.
+; ----------------------------------------------------------------
+
+		if (NES_MAPPER=4)&&(NES_CHR8<>0)
+		rompad	(*+$1FFFF)&$FFFE0000	; 128 KB aligned (a DMA can't cross 128 KB)
+CHR_MD:		binclude "out/chr_md.bin"
+CHR_ID		equ CHR_MD+NES_CHR8*$8000
+		else
+CHR_MD		equ 0
+CHR_ID		equ 0
 		endif
