@@ -27,7 +27,8 @@
 #   a6 vdp_data;  d4-d7, a5 are scratch
 #
 # Flags are only stored into d3 where a later instruction can read them
-# (liveness analysis). A flag test right after the instruction that set
+# (liveness analysis: across units, and through calls by summaries of the
+# routines called). A flag test right after the instruction that set
 # it uses the 68000's own condition codes. NMIs are checked on backward
 # jumps; indirect jumps (RTS, RTI, JMP (ind)) go through rcTable.
 #
@@ -116,6 +117,7 @@ class Insn:
 			self.arg = None
 		self.succ = []			# successor addresses, None = unknown
 		self.decided = None		# for branches: 'taken' / 'not' if the flags are known
+		self.table = None		# a JSR to a jump engine: the table after it
 
 	def text(self):
 		f = {'imm': '#$%02X', 'zp': '$%02X', 'zpx': '$%02X,X', 'zpy': '$%02X,Y', 'indx': '($%02X,X)',
@@ -252,7 +254,7 @@ def discover(prg, extra=()):
 		work = list(vectors) + list(extra)
 		while work:
 			pc = work.pop()
-			known = {}		# flag -> value, known along this straight run
+			known = {}		# flag -> (value, where it became known), along this straight run
 			while pc not in insns and prg.has(pc):
 				op = prg.byte(pc)
 				if op not in OPS:
@@ -266,7 +268,8 @@ def discover(prg, extra=()):
 					f = FLAG_OF[m]
 					want = {'BPL': 0, 'BMI': 1, 'BNE': 0, 'BEQ': 1, 'BCC': 0, 'BCS': 1, 'BVC': 0, 'BVS': 1}[m]
 					if f in known and pc not in forced:
-						i.decided = 'taken' if known[f] == want else 'not'
+						i.decided = 'taken' if known[f][0] == want else 'not'
+						i.known_from = known[f][1]
 					i.succ = ([i.arg] if i.decided != 'not' else []) + ([nxt] if i.decided != 'taken' else [])
 				elif m == 'JMP':
 					i.succ = [i.arg] if i.mode == 'abs' else [None]
@@ -276,6 +279,7 @@ def discover(prg, extra=()):
 						t = inline_table(prg, nxt)	# no return point: a table
 						tables.update(t)
 						work += t
+						i.table = t
 					else:
 						work.append(nxt)	# return point
 				elif m in ('RTS', 'RTI', 'BRK'):
@@ -287,22 +291,26 @@ def discover(prg, extra=()):
 				for s in i.succ:
 					if s is not None and s != nxt:
 						work.append(s)
-				# track flags known from immediates, for always-taken branches
+				# track flags known from immediates and branches, for
+				# branches always or never taken
 				if m in ('LDA', 'LDX', 'LDY') and i.mode == 'imm':
-					known = {N: i.arg >> 7, Z: int(i.arg == 0), **{k: v for k, v in known.items() if k in (C, V)}}
-				elif m == 'SEC': known[C] = 1
-				elif m == 'CLC': known[C] = 0
-				elif m == 'CLV': known[V] = 0
+					known = {N: (i.arg >> 7, pc), Z: (int(i.arg == 0), pc),
+						 **{k: v for k, v in known.items() if k in (C, V)}}
+				elif m == 'SEC': known[C] = (1, pc)
+				elif m == 'CLC': known[C] = (0, pc)
+				elif m == 'CLV': known[V] = (0, pc)
 				elif m in DEFS: known = {k: v for k, v in known.items() if not (DEFS[m] & k)}
 				if i.mode == 'rel' and i.decided is None:
-					known = {}
+					known = {**known, f: (1 - want, pc)}	# falling through: the flag is the other way
 				if nxt not in i.succ:
 					break
 				pc = nxt
-		# a decided branch is only safe if nothing else jumps to it
+		# a decided branch is only safe if nothing else jumps into the
+		# run from where its flag became known
 		targets = {s for i in insns.values() for s in i.succ if s is not None and s != i.pc + i.n}
-		targets |= {i.pc + 3 for i in insns.values() if i.m == 'JSR'}
-		bad = {i.pc for i in insns.values() if i.decided and i.pc in targets} - forced
+		targets |= {i.pc + 3 for i in insns.values() if i.m == 'JSR'} | set(extra) | set(tables) | set(vectors)
+		bad = {i.pc for i in insns.values() if i.decided and
+		       any(t in targets for t in range(i.known_from + 1, i.pc + 1))} - forced
 		if not bad:
 			return insns, vectors, tables
 		forced |= bad
@@ -489,6 +497,32 @@ def ranges(insns, entries):
 # Flag liveness
 # ----------------------------------------------------------------------
 
+def rts_walk(insns, f):
+	"""The RTSs a routine at f returns through: {pc: stack depths (bytes
+	pushed since f began) it's reached at}, the instructions on the way,
+	and whether the routine moves the stack (TSX, TXS). A JSR returns to
+	the instruction after it, or a jump engine's to its table's entries
+	(the engine pulls the return address the JSR pushed)."""
+	seen, work, found, unsure = set(), [(f, 0)], {}, False
+	while work:
+		pc, d = work.pop()
+		if pc not in insns or (pc, d) in seen or not -4 <= d <= 4:
+			continue
+		seen.add((pc, d))
+		i = insns[pc]
+		if i.m == 'RTS':
+			found.setdefault(pc, set()).add(d)
+			continue
+		d += {'PHA': 1, 'PHP': 1, 'PLA': -1, 'PLP': -1}.get(i.m, 0)
+		if i.m in ('TSX', 'TXS'):
+			unsure = True
+		if i.m == 'JSR':
+			work += [(t, d) for t in i.table] if i.table else [(pc + 3, d)]
+		else:
+			work += [(s, d) for s in i.succ if s is not None]
+	return found, {pc for pc, d in seen}, unsure
+
+
 def rts_returns(insns, tables=(), strict=False):
 	"""For each RTS, the return points of the JSRs that can reach it.
 	A JSR into RAM may call any jump table target. An RTS reached with
@@ -498,30 +532,15 @@ def rts_returns(insns, tables=(), strict=False):
 	happening. strict: leave out RTSs of routines that move the stack."""
 	calls = {}
 	for i in insns.values():
-		if i.m == 'JSR':
+		if i.m == 'JSR' and not i.table:
 			for f in [i.arg] if i.arg in insns else tables if i.arg < 0x800 else ():
 				calls.setdefault(f, set()).add(i.pc)
 	body, ends = {}, {}
 	unsure = set()
 	for f in calls:
-		seen, work, found = set(), [(f, 0)], {}
-		while work:
-			pc, d = work.pop()
-			if pc not in insns or (pc, d) in seen or not -4 <= d <= 4:
-				continue
-			seen.add((pc, d))
-			i = insns[pc]
-			if i.m == 'RTS':
-				found.setdefault(pc, set()).add(d)
-				continue
-			d += {'PHA': 1, 'PHP': 1, 'PLA': -1, 'PLP': -1}.get(i.m, 0)
-			if i.m in ('TSX', 'TXS'):
-				unsure.add(f)
-			if i.m == 'JSR':
-				work.append((pc + 3, d))	# the callee returns here
-			else:
-				work += [(s, d) for s in i.succ if s is not None]
-		body[f], ends[f] = {pc for pc, d in seen}, found
+		ends[f], body[f], u = rts_walk(insns, f)
+		if u:
+			unsure.add(f)
 	returns, bad = {}, set()
 	for f, sites in calls.items():
 		for pc, ds in ends[f].items():
@@ -539,42 +558,161 @@ def rts_returns(insns, tables=(), strict=False):
 	return returns
 
 
-def rts_reached(insns, f):
-	"""The RTSs a routine at f can return through (its own, or its
-	callers' if it drops their return address)."""
-	seen, work, found = set(), [f], set()
-	while work:
-		pc = work.pop()
-		if pc not in insns or pc in seen:
-			continue
-		seen.add(pc)
-		i = insns[pc]
-		if i.m == 'RTS':
-			found.add(pc)
-		elif i.m == 'JSR':
-			work.append(pc + 3)
-		else:
-			work += [s for s in i.succ if s is not None]
-	return found
+def copy_liveness(insns, body, ctx, live_in, sums):
+	"""Flags live after each instruction of a routine's copy (called with
+	the 68000's jsr, Gen.emit_routine): as liveness() found them, but its
+	RTSs only return to its own callers, where ctx is live. (Where the
+	copy leaves for the normal code, through rcDispatch, that code goes
+	the same way on from there, reading no flag the copy didn't keep.)"""
+	inn = {pc: 0 for pc in body}
+	out_of = {}
+	changed = True
+	while changed:
+		changed = False
+		for pc in sorted(body, reverse=True):
+			i = insns[pc]
+			if i.m == 'RTS':
+				out = new = ctx
+			elif i.m == 'JSR' and pc + 3 in body and i.arg in sums:
+				g, k = sums[i.arg]
+				out = new = g | (inn[pc + 3] & ~k)
+			elif i.m in ('JSR', 'PHP') or any(s is None or s not in body for s in i.succ):
+				out, new = i.live_out, live_in[pc]	# as the whole program sees it
+			else:
+				out = 0
+				for s in i.succ:
+					out |= inn[s]
+				new = USES.get(i.m, 0) | (out & ~DEFS.get(i.m, 0))
+			out_of[pc] = out
+			if new != inn[pc]:
+				inn[pc] = new
+				changed = True
+	return out_of
 
 
-def liveness(insns, returns=(), tables=(), rts_targets=(), ext=()):
+def mapper_write(i):
+	"""Can i write to $8000-$FFFF, a mapper's registers?"""
+	return i.m in ('STA', 'STX', 'STY', 'INC', 'DEC', 'ASL', 'LSR', 'ROL', 'ROR') and \
+	       i.mode in ('abs', 'absx', 'absy') and i.arg + (0 if i.mode == 'abs' else 255) >= 0x8000
+
+
+def clean_routines(insns, switching=(), ext_sum=()):
+	"""Routines (JSR targets) that only ever return to their caller, by
+	an RTS at the stack depth they began with: no stack tricks, computed
+	jumps, bank switches (switching), or other units' code but routines
+	summarized there (ext_sum), and the routines they call are like
+	them. Returns their instructions."""
+	cand = {}
+	for f in {i.arg for i in insns.values() if i.m == 'JSR' and not i.table and i.arg in insns}:
+		found, body, unsure = rts_walk(insns, f)
+		ok = not unsure and all(ds == {0} for ds in found.values())
+		for pc in body if ok else ():
+			i = insns[pc]
+			if pc in switching or i.m in ('RTI', 'BRK', 'TSX', 'TXS') or \
+			   (i.m == 'JSR' and not i.table and (pc + 3 not in insns or (i.arg not in insns and i.arg not in ext_sum))) or \
+			   (i.m == 'JSR' and i.table and any(t not in insns for t in i.table)) or \
+			   (i.m not in ('JSR', 'RTS') and any(s is None or s not in insns for s in i.succ)):
+				ok = False
+				break
+		if ok:
+			cand[f] = body
+	while True:
+		bad = {f for f, body in cand.items() if any(insns[pc].m == 'JSR' and not insns[pc].table and
+							     insns[pc].arg in insns and insns[pc].arg not in cand for pc in body)}
+		if not bad:
+			return cand
+		for f in bad:
+			del cand[f]
+
+
+def routine_kills(insns, clean, ext_sum=()):
+	"""The flags each clean routine writes on every way to its RTSs.
+	Starts from none and grows: each round is safe to stop at."""
+	kill = {f: 0 for f in clean}
+	changed = True
+	while changed:
+		changed = False
+		for f in clean:
+			d, work = {f: 0}, [f]	# flags written on every way to each instruction
+			while work:
+				pc = work.pop()
+				i, w = insns[pc], d[pc]
+				if i.m == 'RTS':
+					continue
+				if i.m == 'JSR' and i.table:		# a jump engine
+					w, nxt = w | N | Z | C, i.table
+				elif i.m == 'JSR':
+					w, nxt = w | (kill[i.arg] if i.arg in insns else ext_sum[i.arg][1]), [pc + 3]
+				else:
+					w, nxt = w | DEFS.get(i.m, 0), i.succ
+				for s in nxt:
+					v = d[s] & w if s in d else w
+					if v != d.get(s):
+						d[s] = v
+						work.append(s)
+			k = ALL
+			for pc in clean[f]:
+				if insns[pc].m == 'RTS' and pc in d:
+					k &= d[pc]
+			if k != kill[f]:
+				kill[f] = k
+				changed = True
+	return kill
+
+
+def liveness(insns, returns=(), tables=(), rts_targets=(), ext=(), others=(), ext_live=None, ext_ret=None,
+	     ext_sum=None, switching=()):
 	"""returns: where an RTS can go (JSR return points, RTS jump table
 	targets); an RTS's live flags are the union of those of the JSRs
 	that reach it and rts_targets (RTS jump tables, unknown entries), or
 	of all of them.
 	tables: jump table targets, where JMP (ptr) and JSRs into RAM go.
-	ext: routines another unit calls (banked PRG): what its code reads
-	after they return isn't known here, so their RTSs keep all flags.
+	ext: routines another unit calls (banked PRG). What its code reads
+	after they return is ext_ret[routine] (all flags if not given), and
+	an RTS only they reach (not the routines this unit calls, nor
+	others: its other entries) returns just there.
+	ext_live: flags live at other units' code this unit's code goes to
+	(all if not given).
+	A JSR to a routine that only returns to its caller (clean_routines)
+	goes by a summary of it: the flags it reads before writing them
+	(gen), and those it writes on every way back (kill). What's live
+	after this call then doesn't count for the routine's other calls,
+	as it would through its RTS. ext_sum: summaries of other units'
+	routines (switching: mapper writes, which make a routine unclean).
 	PHP pushes the flags that are live after the PLPs that pull them,
-	unless a PLA may pull them instead."""
+	unless a PLA may pull them instead.
+	Returns the flags live at each instruction, and the summaries."""
+	ext_live = ext_live or {}
+	ext_ret = ext_ret or {}
+	ext_sum = ext_sum or {}
+	clean = clean_routines(insns, switching, ext_sum)
+	kill = routine_kills(insns, clean, ext_sum)
+	local = {pc: 0 for pc in insns}		# live flags if RTSs returned nowhere
 	live_in = {pc: 0 for pc in insns}
 	returns = [r for r in returns if r in insns]
 	tables = [t for t in tables if t in insns]
 	rts = {pc: sorted((r | set(rts_targets)) & set(insns)) for pc, r in rts_returns(insns, tables, True).items()}
-	ext_rts = set()
+	# RTSs of code entered other than by a JSR (vectors, jump tables)
+	# return to wherever the code that went there was called from
+	inline = {t for i in insns.values() if i.table for t in i.table}
+	unknown = set()
+	for f in set(others) | (set(tables) - inline):
+		unknown |= set(rts_walk(insns, f)[0])
+	ext_out = {}			# RTS -> flags read where other units' calls return
 	for f in ext:
-		ext_rts |= rts_reached(insns, f)
+		found, _, unsure = rts_walk(insns, f)
+		for pc, ds in found.items():
+			if unsure or -2 in ds:		# (-2: where its caller's caller returns)
+				v = ALL
+			elif 0 in ds:			# other depths: as rts_returns
+				v = ext_ret.get(f, ALL)
+			elif 2 in ds:			# maybe a jump pushed before the RTS
+				unknown.add(pc)
+				continue
+			else:				# would return to garbage: not a routine
+				continue
+			ext_out[pc] = ext_out.get(pc, 0) | v
+	ext_only = set(ext_out) - unknown - set(rts_returns(insns, tables))
 	plp = [i for i in insns.values() if i.m in ('PLP', 'RTI')]
 	whole = set()			# PHPs whose byte may be pulled by PLA
 	for i in insns.values():
@@ -590,6 +728,44 @@ def liveness(insns, returns=(), tables=(), rts_targets=(), ext=()):
 					continue
 				seen.add(pc)
 				work += j.succ
+	def step(i, inn, whole_prog):
+		"""(live out, live in) of i, from the live-in flags inn of the
+		instructions after it. whole_prog False: RTSs return nowhere."""
+		pc = i.pc
+		if i.m == 'RTS':
+			if not whole_prog:
+				return 0, 0
+			rs = [] if pc in ext_only else returns if pc in unknown or pc not in rts else rts[pc]
+			out = ext_out.get(pc, 0)
+			for r in rs:
+				out |= live_in[r]
+			if not rs and pc not in ext_out:
+				out = ALL
+			return out, out
+		if i.m == 'JSR' and i.table:		# a jump engine: to its table's entries
+			out = 0
+			for t in i.table:
+				out |= inn[t] if t in insns else ALL
+			return out, out & ~(N | Z | C)
+		if i.m == 'JSR' and pc + 3 in insns and (i.arg in clean or (i.arg not in insns and i.arg in ext_sum)):
+			g, k = (local[i.arg], kill[i.arg]) if i.arg in clean else ext_sum[i.arg]
+			v = g | (inn[pc + 3] & ~k)
+			return v, v
+		if i.m == 'JSR' and not whole_prog:
+			return live_in[pc], live_in[pc]	# as the whole program sees it
+		out = 0
+		for s in i.succ:
+			if s is None and tables and (i.m == 'JSR' or (i.m == 'JMP' and i.mode == 'ind')):
+				out |= jumped
+			elif s is None:
+				out = ALL
+			else:
+				out |= inn[s] if s in insns else ext_live.get(s, ALL)
+		uses = USES.get(i.m, 0)
+		if i.m == 'PHP' and pc not in whole:
+			uses = pulled
+		return out, uses | (out & ~DEFS.get(i.m, 0))
+
 	changed = True
 	while changed:
 		changed = False
@@ -601,31 +777,18 @@ def liveness(insns, returns=(), tables=(), rts_targets=(), ext=()):
 			jumped |= live_in[t]
 		for pc in sorted(insns, reverse=True):
 			i = insns[pc]
-			out = 0
-			if i.m == 'RTS' and returns:
-				for r in rts.get(pc, returns):
-					out |= live_in[r]
-				if pc in ext_rts:
-					out = ALL
-			elif i.m == 'RTS' and pc in ext_rts:
-				out = ALL
-			else:
-				for s in i.succ:
-					if s is None and tables and (i.m == 'JSR' or (i.m == 'JMP' and i.mode == 'ind')):
-						out |= jumped
-					else:
-						out |= ALL if s is None or s not in insns else live_in[s]
+			out, new = step(i, live_in, True)
 			if getattr(i, 'live_out', None) != out:
 				changed = True
 			i.live_out = out
-			uses = USES.get(i.m, 0)
-			if i.m == 'PHP' and pc not in whole:
-				uses = pulled
-			new = uses | (out & ~DEFS.get(i.m, 0))
 			if new != live_in[pc]:
 				live_in[pc] = new
 				changed = True
-	return live_in
+			new = step(i, local, False)[1]
+			if new != local[pc]:
+				local[pc] = new
+				changed = True
+	return live_in, {f: (local[f], kill[f]) for f in clean}
 
 # ----------------------------------------------------------------------
 # Code generation
@@ -1810,6 +1973,21 @@ class Gen:
 		self.fast = {'pcs': set(pcs), 'prefix': 'R%04X' % f, 'routine': True, 'heavy': self.callable[f][1]}
 		self.xc, self.c_skipped = False, 0
 		self.out.append('')
+		# its own liveness: it returns only to its callers
+		ctx = 0
+		for i in self.insns.values():
+			if i.m == 'JSR' and i.arg == f and i.pc + 3 in self.insns:
+				ctx |= self.live_in[i.pc + 3]
+		saved = {pc: self.insns[pc].live_out for pc in pcs}
+		for pc, out in copy_liveness(self.insns, set(pcs), ctx, self.live_in, self.sums).items():
+			self.insns[pc].live_out = out
+		try:
+			self.emit_routine_body(pcs)
+		finally:
+			for pc, out in saved.items():
+				self.insns[pc].live_out = out
+
+	def emit_routine_body(self, pcs):
 		dk = None
 		for k, pc in enumerate(pcs):
 			i = self.insns[pc]
@@ -2007,7 +2185,7 @@ def analyze(prg, extra, entries=()):
 	extra = list(extra) + sorted({a for a in inline if prg.has(a)} - set(extra))
 	tables = sorted(found | inline)
 	return {'insns': insns, 'vectors': vectors, 'extra': extra, 'tables': tables, 'user': user,
-		'rts': {a for a in rts if prg.has(a)}, 'entries': set(entries)}
+		'rts': {a for a in rts if prg.has(a)}, 'entries': set(entries), 'banked': prg.banked}
 
 
 def outside(u, lo, hi):
@@ -2016,13 +2194,60 @@ def outside(u, lo, hi):
 	       {a for a in u['tables'] if lo <= a < hi}
 
 
-def generate(prg, u, ext_entries=(), ext_insns=()):
+def unit_liveness(u, ext_entries=(), facts=(None, None, None)):
+	"""liveness() of a unit's code. facts: cross_flags' for it."""
+	insns = u['insns']
+	switching = {i.pc for i in insns.values() if u['banked'] and mapper_write(i)}
+	return liveness(insns, {i.pc + 3 for i in insns.values() if i.m == 'JSR'} | set(u['extra']), u['tables'],
+			u['user'] + sorted(u['rts']), ext_entries, set(u['vectors']) | set(u['user']) | u['rts'],
+			*facts, switching)
+
+
+def cross_flags(us, lives):
+	"""Banked PRG: what each unit's flag liveness needs from the others'.
+	us[0] is the fixed bank's unit, us[1:] the banks'; lives their
+	liveness() results. Returns, per unit: the flags live where its code
+	goes into another unit's (ext_live), those live where other units'
+	calls of its routines return (ext_ret), and summaries of the other
+	units' routines it calls (ext_sum; the fixed bank's calls into the
+	banks go to whichever bank is there)."""
+	ext_live, ext_ret, ext_sum = [{} for _ in us], [{} for _ in us], [{} for _ in us]
+	def units(k, a):		# whose code unit k's code reaches at a
+		if k == 0:
+			return [j for j in range(1, len(us)) if a in us[j]['insns']] if a < 0xC000 else []
+		return [0] if a in us[0]['insns'] else []
+	for k, u in enumerate(us):
+		for i in u['insns'].values():
+			for s in i.succ:
+				if s is None or s in u['insns']:
+					continue
+				js = units(k, s)
+				v = 0
+				for j in js:
+					v |= lives[j][0][s]
+				ext_live[k][s] = v if js else ALL
+				r = i.pc + 3		# a jump returns where its routine's caller does
+				back = lives[k][0][r] if i.m == 'JSR' and not i.table and r in u['insns'] else ALL
+				for j in js:
+					ext_ret[j][s] = ext_ret[j].get(s, 0) | back
+				if i.m == 'JSR' and js and all(s in lives[j][1] for j in js):
+					g, kl = 0, ALL
+					for j in js:
+						g, kl = g | lives[j][1][s][0], kl & lives[j][1][s][1]
+					ext_sum[k][s] = (g, kl)
+		for t in u['tables']:
+			for j in units(k, t) if t not in u['insns'] else ():
+				ext_ret[j][t] = ALL
+	return ext_live, ext_ret, ext_sum
+
+
+def generate(prg, u, ext_entries=(), ext_insns=(), facts=(None, None, None)):
 	"""A unit's 68000 code. ext_entries: its code that other units' code
-	goes to; ext_insns: other units' code it can jump to directly."""
+	goes to; ext_insns: other units' code it can jump to directly; facts:
+	cross_flags' for it."""
 	insns, vectors, extra, tables = u['insns'], u['vectors'], u['extra'], u['tables']
-	liveness(insns, {i.pc + 3 for i in insns.values() if i.m == 'JSR'} | set(extra), tables,
-		 u['user'] + sorted(u['rts']), ext_entries)
 	g = Gen(prg, insns, ext_insns)
+	g.live_in, g.sums = unit_liveness(u, ext_entries, facts)
 	g.tables = tables
 	g.engines = {}
 	for i in insns.values():
@@ -2085,10 +2310,20 @@ def main():
 				break
 			back |= more
 		back = set().union(*(outside(ub, 0xC000, 0x10000) for ub in ubs))
-		g = generate(fixed, uf, back)
+		# flags live where one unit's code goes to another's: each unit's
+		# liveness with the others' from the last round, until it settles
+		us, ents = [uf] + ubs, [back] + [ub['entries'] for ub in ubs]
+		facts = [(None, None, None) for _ in us]
+		for _ in range(10):
+			lives = [unit_liveness(u, e, f) for u, e, f in zip(us, ents, facts)]
+			new = list(zip(*cross_flags(us, lives)))
+			if new == facts:
+				break
+			facts = new
+		g = generate(fixed, uf, back, (), facts[0])
 		out, units = list(g.out), [(uf, g)]
 		for n, (b, ub) in enumerate(zip(banks, ubs)):
-			gb = generate(b, ub, ub['entries'], uf['insns'])
+			gb = generate(b, ub, ub['entries'], uf['insns'], facts[n + 1])
 			out += [''] + prefixed(gb.out, 'B%d_' % n)
 			units.append((ub, gb))
 		out += ['', '; each bank\'s code, by the bank at $8000 (rcDispatch)', '\t\talign 4', 'rcBankTables:'] + \
