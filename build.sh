@@ -2,8 +2,7 @@
 # usage: ./build.sh [--recompile] [--fps] [nes_rom]    (default: roms/nestest.nes)
 #
 # --recompile translates the game's 6502 code to 68000 code at build
-# time (tools/recomp6502.py) instead of interpreting it. Much faster,
-# NROM/CNROM games only.
+# time (tools/recomp6502.py) instead of interpreting it. Much faster.
 # --fps adds a frames-per-second counter (needs --recompile); X, Y or
 # Z on a 6-button pad hides or shows it.
 set -e

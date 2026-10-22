@@ -120,8 +120,8 @@ handheld's differences.
 - Sound is approximate: no DMC (sample) channel, the PSG only plays 50% squares so pulse duty is
   approximated by volume, pulse notes below about 109 Hz play an octave up, and timing assumes
   an NTSC console
-- Recompiled Super Mario Bros. 2 slows to 40-55 game frames per second in the busiest parts of its
-  horizontally scrolling levels (such as 4-1 and 6-1). Interpreted, it runs at about a tenth of
+- Recompiled Super Mario Bros. 2 slows to 40-55 game frames per second in the busiest moments of
+  its horizontally scrolling levels (such as 4-1 and 6-1). Interpreted, it runs at about a tenth of
   full speed, and its story screen garbles some text lines: its menu code assumes it never runs
   late
 - Some games do not work

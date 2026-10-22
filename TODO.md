@@ -47,12 +47,16 @@ finished in #1 to #6.
   pointers outside versioned loops take a slow path (placing NES RAM next to
   the PRG copy would let one `(a0,d6.w)` read both); versioning loops that
   call routines; keeping hot zero-page variables in registers.
-- [ ] **Banked games' calls between banks.** The fixed bank's code calls a
-  bank's code, and returns into it, through `rcDispatch` (about 20 times a
-  frame in Super Mario Bros. 2), and the routines one bank calls in another
-  aren't called with the 68000's `jsr`. Direct calls, checking the bank at
-  $8000, would be faster. Super Mario Bros. 2 still runs at 40-55 frames a
-  second in the busiest parts of its horizontally scrolling levels.
+- [ ] **Banked games' calls into banks.** The fixed bank's code calls a
+  bank's code, and returns into it, through `rcDispatch` (a few times a
+  frame in Super Mario Bros. 2): which bank is at $8000 isn't known where
+  the fixed bank calls it. Super Mario Bros. 2 still slows to 40-55 frames
+  a second in the busiest moments of its horizontally scrolling levels;
+  what's left is spread out (the game's own code, sprite and sound
+  conversion, nametable writes). `zp,X` addresses that may wrap cost
+  12 cycles more than ones the index range proves don't: proving it for
+  indexes kept in RAM (Super Mario Bros. 2's object slot at $12) would
+  need to know nothing else writes there.
 - [ ] **Gameplay tests.** NES RAM is compared with Nestopia's only for the
   attract demo, up to the NES's first lag frame; gameplay checks are by eye.
   A test that replays input per game frame (not per video frame) could
