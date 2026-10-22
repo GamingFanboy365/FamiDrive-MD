@@ -575,6 +575,11 @@ def copy_liveness(insns, body, ctx, live_in, sums):
 			i = insns[pc]
 			if i.m == 'RTS':
 				out = new = ctx
+			elif i.m == 'JSR' and i.table and all(t in body for t in i.table):
+				out = 0				# a jump engine: to its table's entries
+				for t in i.table:
+					out |= inn[t]
+				new = out & ~(N | Z | C)
 			elif i.m == 'JSR' and pc + 3 in body and i.arg in sums:
 				g, k = sums[i.arg]
 				out = new = g | (inn[pc + 3] & ~k)
@@ -1423,23 +1428,18 @@ class Gen:
 			self.e(*setup)
 			if s != 'd7':
 				self.e('move.b %s,d7' % s)
+			# (addx and subx only clear Z: set it first if it's read)
 			if m == 'ADC':
 				self.check_carry()
 				if self.xc:			# carry already in X
-					if need:
-						self.e('ori #4,ccr', 'addx.b d7,d0', 'move sr,d3')
-					else:
-						self.e('addx.b d7,d0')
-				elif need:
-					self.e('ori.b #4,d3', 'move d3,ccr', 'addx.b d7,d0', 'move sr,d3')
+					self.e(*['ori #4,ccr'] * bool(need & Z), 'addx.b d7,d0', *['move sr,d3'] * bool(need))
 				else:
-					self.e('move d3,ccr', 'addx.b d7,d0')
+					self.e(*['ori.b #4,d3'] * bool(need & Z), 'move d3,ccr', 'addx.b d7,d0',
+					       *['move sr,d3'] * bool(need))
 			else:
+				self.e('eori.b #$11,d3', *['ori.b #4,d3'] * bool(need & Z), 'move d3,ccr', 'subx.b d7,d0')
 				if need:
-					self.e('eori.b #$11,d3', 'ori.b #4,d3', 'move d3,ccr', 'subx.b d7,d0',
-					       'move sr,d3', 'eori.b #$11,d3')
-				else:
-					self.e('eori.b #$11,d3', 'move d3,ccr', 'subx.b d7,d0')
+					self.e('move sr,d3', 'eori.b #$11,d3')
 		elif m in ('CMP', 'CPX', 'CPY'):
 			if need or direct:
 				r = {'CMP': 'd0', 'CPX': 'd1', 'CPY': 'd2'}[m]
@@ -1553,8 +1553,8 @@ class Gen:
 					hi = (p & 0xFF00) | ((p + 1) & 0xFF)	# 6502 page wrap bug
 					self.e('move.b $%04X(a2),d4' % (hi & 0x7FF), 'lsl.w #8,d4',
 					       'move.b $%04X(a2),d4' % (p & 0x7FF), 'jmp rcDispatch')
-		elif m == 'JSR' and not self.fast and i.arg in self.engines and (i.arg in self.insns or i.arg in self.ext) \
-		     and self.engine_table(i):
+		elif m == 'JSR' and not (self.fast and not self.fast.get('routine')) and i.arg in self.engines and \
+		     (i.arg in self.insns or i.arg in self.ext) and self.engine_table(i):
 			self.emit_engine_call(i)
 		elif m == 'JSR' and i.arg in self.callable:
 			if self.callable[i.arg][1]:
@@ -1579,7 +1579,9 @@ class Gen:
 			ret = i.pc + 2
 			self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
 			       'move.b #$%02X,(a2,d3.w)' % (ret & 0xFF), 'subq.b #1,d3', 'swap d3')
-			if i.arg >= 0x8000 and (not self.prg.banked or i.arg in self.insns or i.arg in self.ext):
+			if self.fast and self.fast.get('routine'):	# leaving a copy: drop the 68000's returns
+				self.e('move.w #$%04X,d4' % i.arg, 'jmp rcDispatch')
+			elif i.arg >= 0x8000 and (not self.prg.banked or i.arg in self.insns or i.arg in self.ext):
 				self.e('jmp %s' % lab(i.arg))
 			else:
 				self.e('move.w #$%04X,d4' % i.arg, 'jmp rcDispatch')
@@ -1623,7 +1625,7 @@ class Gen:
 		z1, z2 = self.engines[i.arg]
 		t = self.engine_table(i)
 		ret, tbl = i.pc + 2, i.pc + 3
-		g = 'Jg_%04X' % i.pc
+		g, jt = self.tag('Jg', i.pc), self.tag('Jt', i.pc)
 		self.e('cmpi.b #%d,d0' % len(t), 'bcc.w ' + g)	# not in the table: the engine
 		# the return address it pushed, and pulled again
 		self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
@@ -1632,14 +1634,18 @@ class Gen:
 		       'moveq #0,d6', 'move.b d0,d6', 'add.w d6,d6',	# ASL A, TAY
 		       'move.b d6,d2', 'addq.b #2,d2',			# two INY
 		       'lea $%04X(a1),a5' % (tbl & 0x7FFF),
-		       'move.b (a5,d6.w),$%02X(a2)' % z2, 'move.b 1(a5,d6.w),d0', 'move.b d0,$%02X(a2)' % (z2 + 1),
-		       'andi.b #$E2,d3', 'tst.b d0', 'move sr,d5', 'andi.w #$C,d5', 'or.b d5,d3',	# C from ASL: 0
-		       'add.w d6,d6', 'lea Jt_%04X(pc),a5' % i.pc, 'movea.l (a5,d6.w),a5', 'jmp (a5)')
+		       'move.b (a5,d6.w),$%02X(a2)' % z2, 'move.b 1(a5,d6.w),d0', 'move.b d0,$%02X(a2)' % (z2 + 1))
+		if i.live_out & (N | Z | C):		# (as the table's entries need them)
+			self.e('andi.b #$E2,d3', 'tst.b d0', 'move sr,d5', 'andi.w #$C,d5', 'or.b d5,d3')	# C from ASL: 0
+		self.e('add.w d6,d6', 'lea %s(pc),a5' % jt, 'movea.l (a5,d6.w),a5', 'jmp (a5)')
 		self.xc = False
-		self.stubs += ['Jt_%04X:' % i.pc] + ['\t\tdc.l %s' % self.lab(a) for a in t]
+		self.stubs += [jt + ':'] + ['\t\tdc.l %s' % self.lab(a) for a in t]
 		self.stubs += [g + ':', '\t\tswap d3', '\t\tmove.b #$%02X,(a2,d3.w)' % (ret >> 8), '\t\tsubq.b #1,d3',
-			       '\t\tmove.b #$%02X,(a2,d3.w)' % (ret & 0xFF), '\t\tsubq.b #1,d3', '\t\tswap d3',
-			       '\t\tjmp %s' % self.lab(i.arg)]
+			       '\t\tmove.b #$%02X,(a2,d3.w)' % (ret & 0xFF), '\t\tsubq.b #1,d3', '\t\tswap d3']
+		if self.fast:				# leaving a copy: drop the 68000's returns
+			self.stubs += ['\t\tmove.w #$%04X,d4' % i.arg, '\t\tjmp rcDispatch']
+		else:
+			self.stubs += ['\t\tjmp %s' % self.lab(i.arg)]
 
 	def rmw_generic(self, i, ops, need, kind):
 		"""Read-modify-write on an I/O or computed address."""
@@ -2033,21 +2039,25 @@ class Gen:
 				if d:
 					return None
 				continue
+			if i.m == 'JSR' and i.table:
+				heavy = True			# past the table: the engine, through rcDispatch
+				if i.arg in self.engines and self.engine_table(i) and all(t in self.insns for t in i.table):
+					work += [(t, d) for t in i.table]
+				continue
 			if i.m == 'JSR':
-				if i.arg in self.insns:
-					sub = self.routine_body(i.arg, memo)
-					if sub is None:
-						return None
+				sub = self.routine_body(i.arg, memo) if i.arg in self.insns else None
+				if sub:
 					heavy |= sub[1]
 					sw |= sub[2]
-				elif i.arg in self.ext_routines and not i.table:
+				elif i.arg in self.ext_routines:
 					h, s, _ = self.ext_routines[i.arg]
 					heavy |= h or s		# a switch goes on through rcDispatch
 					sw |= s
 				elif i.arg < 0x800:
 					heavy = True	# a jump table in RAM, through rcDispatch
 				else:
-					return None
+					heavy = True	# a routine with no copy: the normal code, through rcDispatch
+					continue
 				work.append((pc + 3, d))
 				continue
 			for t in i.succ:
