@@ -1915,12 +1915,13 @@ class Gen:
 		68000's jsr, or None. Its copy returns with rts, so every path
 		must reach RTS with the stack as it was, and the routines it
 		calls must be like it.
-		A light routine never touches the 6502 stack, needs no NMI check
-		and stays in translated code: its call doesn't push the return
-		address. A heavy one may do those things: its call pushes the
-		6502 return address like JSR does, and if it leaves its copy
-		through rcDispatch (an NMI, a computed jump), that drops the
-		68000 return addresses and the normal code takes over."""
+		A light routine needs no NMI check and stays in translated code:
+		its call doesn't push the return address. (Its own pushes and
+		pulls then go where the return address would be, as nothing can
+		look at the stack meanwhile.) A heavy one may do those things:
+		its call pushes the 6502 return address like JSR does, and if it
+		leaves its copy through rcDispatch (an NMI, a computed jump), that
+		drops the 68000 return addresses and the normal code takes over."""
 		if f in memo:
 			return memo[f]
 		memo[f] = None			# recursion: not callable
@@ -1938,7 +1939,6 @@ class Gen:
 			if self.switches(i):
 				heavy = True		# may go on in another bank, through rcDispatch
 			if i.m in ('PHA', 'PHP', 'PLA', 'PLP'):
-				heavy = True
 				d += 1 if i.m[1] == 'H' else -1
 				if d < 0:
 					return None
