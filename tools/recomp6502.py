@@ -840,6 +840,7 @@ class Gen:
 		self.fast = None
 		self.split_next = None		# flags a branch puts in d3 by way (split_plan)
 		self.ccr_d3 = None		# (pc, output length) where the CCR still holds d3's flags
+		self.fused_next = None		# an LSR A done with the LDA $4016 before it (pad_lsr)
 
 	def e(self, *lines):
 		for l in lines:
@@ -1344,6 +1345,10 @@ class Gen:
 		return run
 
 	def emit(self, i, nxt_i):
+		if self.fused_next == i.pc:
+			self.fused_next = self.direct_next = self.split_next = None
+			return
+		self.fused_next = None
 		m = i.m
 		run = self.inc_run(i)
 		if not run:
@@ -1397,6 +1402,22 @@ class Gen:
 				raise Unroll
 			self.e('move.w %s,d4' % r, 'moveq #5,d5', 'moveq #-1,d6', 'jsr rcDelay', 'clr.b %s' % r)
 			nz_done()
+		elif m == 'LDA' and self.pad_lsr(i, nxt_i):
+			# LDA $4016 / LSR A, a controller's next bit into the carry:
+			# the bit is shifted straight out of the data into X and C,
+			# and A is 0 (rcReadPad and the others read only bit 0)
+			self.e('moveq #0,d0', 'lsr cpuInputData+%d(a4)' % (2 * (i.arg - 0x4016)))
+			self.xc = True
+			need = DEFS['LSR'] & nxt_i.live_out
+			if need & C and self.carry_in_x(nxt_i):
+				need &= ~C			# carried in X instead
+				self.c_skipped = nxt_i.pc
+			if need:			# N 0, Z 1, X and C from the CCR
+				self.e(*['move sr,d5', 'andi.w #$11,d5'] * bool(need & C),
+				       'andi.b #$%02X,d3' % (~((8 if need & N else 0) | (4 if need & Z else 0) |
+							      (0x11 if need & C else 0)) & 0xFF),
+				       *['ori.b #4,d3'] * bool(need & Z), *['or.b d5,d3'] * bool(need & C))
+			self.fused_next = nxt_i.pc
 		elif m in ('LDA', 'LDX', 'LDY'):
 			r = {'LDA': 'd0', 'LDX': 'd1', 'LDY': 'd2'}[m]
 			setup, s = self.src(i, r)
@@ -1718,6 +1739,15 @@ class Gen:
 		if need:
 			(self.save_nzc if kind == 'shift' else self.save_nz)()
 		self.e('move.w (sp)+,d6', 'jsr rcWrite16', *self.after_switch(i))
+
+	def pad_lsr(self, i, l):
+		"""LDA $4016 (or $4017) and then LSR A, which no jump goes to, nor a
+		branch on its flags follows: emitted together (see emit)."""
+		if i.mode != 'abs' or i.arg not in (0x4016, 0x4017) or l is None or l.m != 'LSR' or \
+		   l.mode != 'acc' or l.pc in self.targets or self.fast and l.pc in self.fast.get('skip', ()):
+			return False
+		b = self.insns.get(l.pc + 1)
+		return not (b is not None and b.mode == 'rel' and b.decided is None and FLAG_OF[b.m] & (N | Z | C))
 
 	def live_at(self, pc):
 		"""Flags live where pc begins, in the liveness in force (a routine
