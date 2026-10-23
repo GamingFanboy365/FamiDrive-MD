@@ -44,27 +44,32 @@ rcStart:
 ; ----------------------------------------------------------------
 
 rcDispatch:
-		movea.l	(RAM_RcStack).l,sp
-		cmpi.w	#$8000,d4
-		bcs.s	.ram
+		movea.l	(RAM_RcStack).w,sp
 		if PRG_BANKED
-		andi.l	#$7FFF,d4		; offset in the image
-		move.l	d4,d5
-		lea	(rcTable).l,a5		; $C000-$FFFF: the fixed bank's code
-		bclr	#14,d5
-		bne.s	.fixed
+		moveq	#0,d5
+		move.w	d4,d5
+		bpl.s	.ram			; below $8000
+		lsl.w	#2,d5			; the offset in a 16 KB bank, x 4
+		bcs.s	.fixed			; (out went bit 14)
 		movea.l	rcCurTable(a4),a5	; $8000-$BFFF: the bank at $8000's
+		move.l	(a5,d5.l),d5
+		beq.s	.interpret
+		movea.l	d5,a5
+		jmp	(a5)
 .fixed:
-		lsl.l	#2,d5
+		lea	(rcTable).l,a5		; $C000-$FFFF: the fixed bank's code
 		move.l	(a5,d5.l),d5
 		beq.s	.interpret
 		movea.l	d5,a5
 		jmp	(a5)
 .interpret:
-		movea.l	a1,a0			; not translated: interpret it
+		andi.l	#$7FFF,d4		; not translated: interpret it, in
+		movea.l	a1,a0			; the image
 		adda.l	d4,a0
 		bra.s	rcInterp
 		else
+		cmpi.w	#$8000,d4
+		bcs.s	.ram
 		andi.l	#rcPrgMask,d4
 		lsl.l	#2,d4
 		lea	(rcTable).l,a5
