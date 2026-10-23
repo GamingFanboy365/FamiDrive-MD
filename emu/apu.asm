@@ -275,26 +275,23 @@ apuSequence:
 
 		move.b	apuRegs+$08(a5),d0	; triangle linear counter
 		move.b	apuTriLinear(a5),d1
-		move.b	apuTriReload(a5),d2
-		moveq	#4-1,d4
+		tst.b	apuTriReload(a5)
+		beq.s	.count4
+		move.b	d0,d1			; reloaded: on each clock while the
+		andi.b	#$7F,d1			; control flag is set, else on the
+		tst.b	d0			; first, then counted down
+		bmi.s	.linear
+		sf	apuTriReload(a5)
+		subq.b	#3,d1
+		bcc.s	.linear
+		moveq	#0,d1
+		bra.s	.linear
+.count4:
+		subq.b	#4,d1
+		bcc.s	.linear
+		moveq	#0,d1
 .linear:
-		tst.b	d2
-		beq.s	.count
-		move.b	d0,d1
-		andi.b	#$7F,d1
-		bra.s	.control
-.count:
-		tst.b	d1
-		beq.s	.control
-		subq.b	#1,d1
-.control:
-		tst.b	d0			; control flag keeps reloading
-		bmi.s	.keep
-		moveq	#0,d2
-.keep:
-		dbf	d4,.linear
 		move.b	d1,apuTriLinear(a5)
-		move.b	d2,apuTriReload(a5)
 
 	; two half frames: length counters
 		lea	apuCh1(a5),a0
@@ -343,6 +340,33 @@ apuLength2:
 ; a0 - channel state, d0 - its sweep register (EPPP NSSS)
 ; d2 - 1 for pulse 1 (it negates with one's complement)
 apuSweep2:
+		tst.b	d0
+		bpl.s	.divider_only		; disabled
+		moveq	#7,d1
+		and.b	d0,d1
+		bne.s	.sweep
+.divider_only:					; or no shift: the period stays
+		move.b	d0,d1
+		lsr.b	#4,d1
+		andi.b	#7,d1			; the divider's period
+		move.b	apuCh_SweepDiv(a0),d5
+		tst.b	apuCh_SweepLoad(a0)
+		beq.s	.clock1
+		sf	apuCh_SweepLoad(a0)	; reload flag: reloaded on the first
+		move.b	d1,d5
+		bra.s	.clock2
+.clock1:
+		subq.b	#1,d5			; at 0: reloaded, else counted down
+		bcc.s	.clock2
+		move.b	d1,d5
+.clock2:
+		subq.b	#1,d5
+		bcc.s	.div_done
+		move.b	d1,d5
+.div_done:
+		move.b	d5,apuCh_SweepDiv(a0)
+		rts
+.sweep:
 		move.w	apuCh_Period(a0),d4
 		move.b	apuCh_SweepDiv(a0),d5
 		move.b	apuCh_SweepLoad(a0),d6
@@ -391,6 +415,34 @@ apuSweep2:
 ; four quarter-frame clocks of an envelope
 ; a0 - channel state, d0 - its volume register (--LC VVVV)
 apuEnvelope4:
+		tst.b	apuCh_EnvStart(a0)
+		bne.s	.clocks			; restarting: clock by clock
+		move.b	apuCh_EnvDiv(a0),d2
+		subq.b	#4,d2			; the divider not at 0 on any clock:
+		bcs.s	.reloads		; just counted down
+		move.b	d2,apuCh_EnvDiv(a0)
+		rts
+.reloads:
+		moveq	#$0F,d1			; else apuEnvTbl has the divider after
+		and.b	d0,d1			; and the reloads, by the divider
+		addq.b	#4,d2			; (0-3) and the period
+		lsl.b	#4,d2
+		or.b	d1,d2
+		andi.w	#$3F,d2
+		add.w	d2,d2
+		move.b	apuEnvTbl(pc,d2.w),apuCh_EnvDiv(a0)
+		move.b	apuEnvTbl+1(pc,d2.w),d2
+		move.b	apuCh_EnvDecay(a0),d3
+		sub.b	d2,d3			; the decay level, down one a reload:
+		bcc.s	.decayed		; past 0, it loops from 15 or stays 0
+		andi.b	#$0F,d3
+		btst	#5,d0
+		bne.s	.decayed
+		moveq	#0,d3
+.decayed:
+		move.b	d3,apuCh_EnvDecay(a0)
+		rts
+.clocks:
 		move.b	d0,d1
 		andi.b	#$0F,d1			; period
 		move.b	apuCh_EnvStart(a0),d5
@@ -420,6 +472,19 @@ apuEnvelope4:
 		move.b	d2,apuCh_EnvDiv(a0)
 		move.b	d3,apuCh_EnvDecay(a0)
 		rts
+
+; four clocks of an envelope's divider that reaches 0 in them: by its
+; value (0-3) and period, the divider after them and the reloads
+apuEnvTbl:
+apuEnvD		set	0
+		rept	4
+apuEnvP		set	0
+		rept	16
+		dc.b	apuEnvP-((3-apuEnvD)-(3-apuEnvD)/(apuEnvP+1)*(apuEnvP+1)), 1+(3-apuEnvD)/(apuEnvP+1)
+apuEnvP		set	apuEnvP+1
+		endm
+apuEnvD		set	apuEnvD+1
+		endm
 
 ; In: a0 - channel state, d0 - sweep register, d2 - pulse 1 flag
 ; Out: d4 - period, d3 - sweep target period
