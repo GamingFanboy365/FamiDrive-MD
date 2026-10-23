@@ -31,8 +31,10 @@
 # Flags are only stored into d3 where a later instruction can read them
 # (liveness analysis: across units, and through calls by summaries of the
 # routines called). A flag test right after the instruction that set
-# it uses the 68000's own condition codes. NMIs are checked on backward
-# jumps; indirect jumps (RTS, RTI, JMP (ind)) go through rcTable.
+# it uses the 68000's own condition codes; where they're read after the
+# test too, each way out puts them in d3, as constants where the test
+# decides them (split_plan). NMIs are checked on backward jumps; indirect
+# jumps (RTS, RTI, JMP (ind)) go through rcTable.
 #
 # Hot code gets second copies: routines that return normally are called
 # with the 68000's jsr (routine_body), or put in place of the call when
@@ -52,6 +54,8 @@ N, Z, C, V = 1, 2, 4, 8
 FLAG_OF = {'BPL': N, 'BMI': N, 'BNE': Z, 'BEQ': Z, 'BCC': C, 'BCS': C, 'BVC': V, 'BVS': V}
 CC68 = {'BPL': 'pl', 'BMI': 'mi', 'BNE': 'ne', 'BEQ': 'eq', 'BCC': 'cc', 'BCS': 'cs', 'BVC': 'vc', 'BVS': 'vs'}
 INVERT = {'eq': 'ne', 'ne': 'eq', 'pl': 'mi', 'mi': 'pl', 'cc': 'cs', 'cs': 'cc', 'vc': 'vs', 'vs': 'vc'}
+# 68000 cycles of the lines Gen.split_fix makes
+FIX_CYCLES = {'move': 6, 'scc': 5, 'andi.w': 8, 'andi.b': 8, 'ori.b': 8, 'or.b': 4}
 
 # ----------------------------------------------------------------------
 # 6502 decoding
@@ -821,6 +825,7 @@ class Gen:
 		self.inline = set()		# small routines put in place of their calls (emit_inline)
 		self.out, self.stubs = [], []
 		self.fast = None
+		self.split_next = None		# flags a branch puts in d3 by way (split_plan)
 
 	def e(self, *lines):
 		for l in lines:
@@ -1334,9 +1339,15 @@ class Gen:
 		need = defs & live
 		# can the next instruction (a branch) test our flags directly?
 		direct = None
+		self.split_next = None
 		if (nxt_i is not None and nxt_i.mode == 'rel' and nxt_i.decided is None
-		    and FLAG_OF[nxt_i.m] & defs and not (defs & nxt_i.live_out)):
-			direct = nxt_i
+		    and FLAG_OF[nxt_i.m] & defs):
+			if not (defs & nxt_i.live_out):
+				direct = nxt_i
+			else:			# read after it: into d3 on the way out (split_plan)
+				self.split_next = self.split_plan(i, m, nxt_i, defs)
+				if self.split_next:
+					direct, need = nxt_i, 0
 		self.direct_next = None
 
 		def nz_done(kind='nz'):
@@ -1671,6 +1682,76 @@ class Gen:
 			(self.save_nzc if kind == 'shift' else self.save_nz)()
 		self.e('move.w (sp)+,d6', 'jsr rcWrite16', *self.after_switch(i))
 
+	def live_at(self, pc):
+		"""Flags live where pc begins, in the liveness in force (a routine
+		copy's own while one is emitted); for a JSR or PHP, maybe more."""
+		s = self.insns.get(pc)
+		if s is None:
+			return ALL
+		if s.m == 'PHP':
+			return self.live_in.get(pc, ALL)
+		if s.m == 'JSR':
+			return s.live_out
+		return USES.get(s.m, 0) | (s.live_out & ~DEFS.get(s.m, 0))
+
+	def split_plan(self, i, m, b, defs):
+		"""i's flags are read after the branch b that tests them: b tests
+		them in the CCR, and each way out that reads them puts them in d3
+		(split_fix). The way often decides them (after CMP, BEQ taken: N 0,
+		Z 1, C 1) or doesn't read them. For loads, logic ops, INX..., PLA,
+		compares and shifts of A; None where saving them before b, as
+		otherwise, costs less."""
+		if self.fast and i.pc in self.fast.get('skip', ()) or i.pc in self.delays or i.pc in self.delays2:
+			return None
+		kind = 'cmp' if m in ('CMP', 'CPX', 'CPY') else \
+		       'shift' if m in ('ASL', 'LSR', 'ROL', 'ROR') and i.mode == 'acc' else \
+		       'nz' if m in ('LDA', 'LDX', 'LDY', 'TAX', 'TAY', 'TXA', 'TYA', 'AND', 'ORA', 'EOR',
+				     'INX', 'INY', 'DEX', 'DEY', 'PLA') else None
+		if kind is None:
+			return None
+		f = FLAG_OF[b.m]
+		taken = 1 if b.m in ('BMI', 'BEQ', 'BCS', 'BVS') else 0
+		fix, cost = [], 0
+		for pc, v in ((b.arg, taken), (b.pc + 2, 1 - taken)):
+			known = {f: v}
+			if f in (N, Z) and v:		# zero: not negative, and the other way
+				known[Z if f == N else N] = 0
+			if kind == 'cmp' and f == Z and v:
+				known[C] = 1		# equal: no borrow
+			if kind == 'cmp' and f == C and not v:
+				known[Z] = 0		# below: not equal
+			if m == 'LSR':
+				known[N] = 0
+			lines = self.split_fix(kind, defs & self.live_at(pc), known)
+			fix.append(lines)
+			cost += sum(FIX_CYCLES[l.split()[0]] for l in lines) + (12 if lines and pc == b.arg else 0)
+		# otherwise: saved before b (CMP: by the slower ADDX form, with V
+		# kept if it's live), and b reloads them
+		now = 38 if kind != 'cmp' else 58 if i.live_out & V else 26
+		return {'b': b, 'fix': fix} if cost < 2 * now else None
+
+	@staticmethod
+	def split_fix(kind, need, known):
+		"""d3's flags in need, on a way out of a branch that tested them in
+		the CCR: those the way decides as constants, the others from the
+		CCR (after CMP, its C is the 6502's inverted)."""
+		ccr = {N: 8, Z: 4, V: 2, C: 0x11}
+		unk = need & ~sum(known)
+		if not need:
+			return []
+		sel = sum(ccr[g] for g in (N, Z, V, C) if unk & g and not (g == C and kind == 'cmp'))
+		borrow = kind == 'cmp' and unk & C	# carry clear: the 6502's C set
+		lines = ['move sr,d5'] * bool(sel) + ['scc d4'] * bool(borrow) + \
+			['andi.w #$%X,d5' % sel] * bool(sel) + ['andi.b #$11,d4'] * bool(borrow) + \
+			['or.b d4,d5'] * bool(sel and borrow)
+		lines.append('andi.b #$%02X,d3' % (~sum(ccr[g] for g in (N, Z, V, C) if need & g) & 0xFF))
+		const = sum(ccr[g] for g, x in known.items() if need & g and x)
+		if const:
+			lines.append('ori.b #$%02X,d3' % const)
+		if unk:
+			lines.append('or.b %s,d3' % ('d5' if sel else 'd4'))
+		return lines
+
 	def emit_branch(self, i, direct_kind):
 		cc = CC68[i.m]
 		if i.decided == 'taken':
@@ -1684,7 +1765,18 @@ class Gen:
 			cc = {'BVS': 'ne', 'BVC': 'eq'}[i.m]
 		elif direct_kind is None:
 			self.e('move d3,ccr')
-		self.branch(i, cc)
+		sp, self.split_next = self.split_next, None
+		if sp and sp['b'] is not i:
+			sp = None
+		if sp and sp['fix'][0]:			# the taken way puts the flags in d3 first
+			self.e('b%s.w %s' % (INVERT[cc], self.tag('Sp', i.pc)))
+			self.e(*sp['fix'][0])
+			self.goto(i, i.arg)
+			self.out.append('%s:' % self.tag('Sp', i.pc))
+		else:
+			self.branch(i, cc)
+		if sp:
+			self.e(*sp['fix'][1])
 		if i.pc in self.idle_exits:		# a frame done (FPS counter)
 			self.out += ['\t\tif FPS']
 			self.e('addq.w #1,fpsIdle(a4)')
@@ -1863,46 +1955,56 @@ class Gen:
 		return plan
 
 	def fill_plan(self, b):
-		"""STA base,X / DEX / BPL (or the INX, Y and BNE forms) with a
-		known start value fills memory: stores replace the loop where
-		code falls into it."""
+		"""STA base,X / DEX / BPL (or the INX, Y and BNE forms, or a run of
+		DEX for a stride of 2, 4...) with a known start value fills
+		memory: stores replace the loop where code falls into it."""
 		t = b.arg
-		s, d = self.insns.get(t), self.insns.get(b.pc - 1)
-		if not s or not d or s.pc + s.n != d.pc or s.m != 'STA' or b.pc not in self.counted:
+		s = self.insns.get(t)
+		if not s or s.m != 'STA' or s.mode not in ('zpx', 'absx', 'absy') or b.pc not in self.counted:
 			return None
-		if d.m not in ('INX', 'DEX', 'INY', 'DEY') or s.mode not in ('zpx', 'zpy', 'absx', 'absy') \
-		   or s.mode[-1] != d.m[2].lower():
+		steps, pc = [], s.pc + s.n
+		while pc < b.pc and pc in self.insns and self.insns[pc].m in ('INX', 'DEX', 'INY', 'DEY'):
+			steps.append(self.insns[pc])
+			pc += 1
+		d = steps[-1] if steps else None
+		if pc != b.pc or not d or any(x.m != d.m for x in steps) or s.mode[-1] != d.m[2].lower() \
+		   or b.m not in ('BNE', 'BPL'):
 			return None
-		v = self.entry_value(t, d.m[2])
-		if v is None:
+		y = self.entry_value(t, d.m[2])
+		if y is None:
 			return None
-		if d.m[0] == 'D' and b.m == 'BPL' and v <= 0x7F:
-			lo, hi, end = 0, v, 0xFF
-		elif d.m[0] == 'D' and b.m == 'BNE' and v:
-			lo, hi, end = 1, v, 0
-		elif d.m[0] == 'I' and b.m == 'BNE' and v:
-			lo, hi, end = v, 0xFF, 0
-		else:
+		ys = []
+		while True:
+			ys.append(y)
+			y = (y + len(steps) * (1 if d.m[0] == 'I' else -1)) & 0xFF
+			if (y == 0 if b.m == 'BNE' else y & 0x80) or len(ys) > 256:
+				break
+		addrs = sorted(s.arg + v for v in ys)
+		if len(ys) > 256 or addrs[-1] >= (0x100 if s.mode == 'zpx' else 0x800):
 			return None
-		lo += s.arg
-		hi += s.arg
-		if hi >= (0x100 if s.mode[:2] == 'zp' else 0x800):
-			return None
-		return {'t': t, 'b': b, 'lo': lo, 'hi': hi, 'reg': 'd1' if d.m[2] == 'X' else 'd2', 'end': end}
+		return {'t': t, 'b': b, 'addrs': addrs, 'reg': 'd1' if d.m[2] == 'X' else 'd2', 'end': y}
 
 	def emit_fill(self, plan):
-		lo, hi = plan['lo'], plan['hi']
-		self.out.append('\t\t\t\t\t\t; $%04X  fill $%04X-$%04X' % (plan['t'], lo, hi))
-		if hi - lo >= 3:			# A in all four bytes of d5
-			self.e('move.b d0,d5', 'lsl.w #8,d5', 'move.b d0,d5', 'move.w d5,d6', 'swap d5', 'move.w d6,d5')
-		a = lo
-		while a <= hi:
-			if a & 1 or a == hi:
-				self.e('move.b d0,$%04X(a2)' % a); a += 1
-			elif a + 3 <= hi:
-				self.e('move.l d5,$%04X(a2)' % a); a += 4
+		runs = []
+		for a in plan['addrs']:
+			if runs and runs[-1][1] + 1 == a:
+				runs[-1][1] = a
 			else:
-				self.e('move.w d5,$%04X(a2)' % a); a += 2
+				runs.append([a, a])
+		step = runs[1][0] - runs[0][0] if len(runs) > 1 else 1
+		self.out.append('\t\t\t\t\t\t; $%04X  fill $%04X-$%04X%s' % (plan['t'], runs[0][0], runs[-1][1],
+								     ' every %d' % step if step > 1 else ''))
+		if any(hi - lo >= 1 for lo, hi in runs):	# A in all four bytes of d5
+			self.e('move.b d0,d5', 'lsl.w #8,d5', 'move.b d0,d5', 'move.w d5,d6', 'swap d5', 'move.w d6,d5')
+		for lo, hi in runs:
+			a = lo
+			while a <= hi:
+				if a & 1 or a == hi:
+					self.e('move.b d0,$%04X(a2)' % a); a += 1
+				elif a + 3 <= hi:
+					self.e('move.l d5,$%04X(a2)' % a); a += 4
+				else:
+					self.e('move.w d5,$%04X(a2)' % a); a += 2
 		self.e('move.b #$%02X,%s' % (plan['end'], plan['reg']))
 		if plan['b'].live_out & (N | Z):
 			self.e('tst.b %s' % plan['reg'])
@@ -2173,7 +2275,7 @@ class Gen:
 		p = self.insns[prev]
 		pc = plan['t']
 		if p.pc + p.n == pc and pc in p.succ:
-			if 'lo' in plan:
+			if 'addrs' in plan:
 				self.emit_fill(plan)
 				self.versioned.append(pc)
 			elif self.emit_versioned(plan):
