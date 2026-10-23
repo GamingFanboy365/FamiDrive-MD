@@ -1500,7 +1500,8 @@ class Gen:
 			op = {'ASL': 'lsl', 'LSR': 'lsr', 'ROL': 'roxl', 'ROR': 'roxr'}[m]
 			if m in ('ROL', 'ROR'):
 				self.check_carry()
-			pre = ['move d3,ccr'] if m in ('ROL', 'ROR') and not self.xc else []
+			def pre():		# the carry into X (after the address: it may change X)
+				return ['move d3,ccr'] if m in ('ROL', 'ROR') and not self.xc else []
 			skip = bool(need & C) and self.carry_in_x(i)
 			if skip:
 				need &= ~C			# carried in X instead
@@ -1508,7 +1509,7 @@ class Gen:
 			else:
 				save = self.save_nzc
 			if i.mode == 'acc':
-				self.e(*pre)
+				self.e(*pre())
 				self.e('%s.b #1,d0' % op)
 				if direct:
 					self.direct_next = 'shift'
@@ -1519,7 +1520,7 @@ class Gen:
 				setup, d, post = self.dst(i)
 				if d is not None:
 					self.e(*setup)
-					self.e('move.b %s,d7' % d, *pre)
+					self.e('move.b %s,d7' % d, *pre())
 					self.e('%s.b #1,d7' % op)
 					if need:
 						save()
