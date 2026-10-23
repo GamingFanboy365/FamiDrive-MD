@@ -839,6 +839,7 @@ class Gen:
 		self.out, self.stubs = [], []
 		self.fast = None
 		self.split_next = None		# flags a branch puts in d3 by way (split_plan)
+		self.ccr_d3 = None		# (pc, output length) where the CCR still holds d3's flags
 
 	def e(self, *lines):
 		for l in lines:
@@ -1462,6 +1463,10 @@ class Gen:
 				if need:		# (X and C: the borrow, after sub)
 					self.e('move sr,d3', *['eori.b #$11,d3'] * (m == 'SBC'))
 				return
+			if i.cin and not need:		# SEC / ADC, CLC / SBC, no flags read: and the 1
+				op = 'add' if m == 'ADC' else 'sub'
+				self.e(('%si.b %s,d0' if s.startswith('#') else '%s.b %s,d0') % (op, s), '%sq.b #1,d0' % op)
+				return
 			if s != 'd7':
 				self.e('move.b %s,d7' % s)
 			if i.cin:			# SEC / ADC, CLC / SBC: X set (and Z, which addx and subx only clear)
@@ -1516,11 +1521,15 @@ class Gen:
 				elif s == 'd7':
 					self.e('tst.b d7')	# read by a handler, which can leave any flags
 				self.direct_next = 'bitv' if f == V else 'nz'
-			elif need:
-				self.e('move.b d7,d4', 'andi.b #$F1,d3',
-				       'lsl.b #1,d7', 'bcc.s *+6', 'ori.b #8,d3',
-				       'lsl.b #1,d7', 'bcc.s *+6', 'ori.b #2,d3',
-				       'and.b d0,d4', 'bne.s *+6', 'ori.b #4,d3')
+			elif need:			# the flags read: N bit 7, V bit 6, Z of A AND it
+				self.e('andi.b #$%02X,d3' % (~((8 if need & N else 0) | (2 if need & V else 0) |
+								(4 if need & Z else 0)) & 0xFF))
+				if need & N:
+					self.e('tst.b d7', 'bpl.s *+6', 'ori.b #8,d3')
+				if need & V:
+					self.e('btst #6,d7', 'beq.s *+6', 'ori.b #2,d3')
+				if need & Z:
+					self.e('and.b d0,d7', 'bne.s *+6', 'ori.b #4,d3')
 		elif m in ('ASL', 'LSR', 'ROL', 'ROR'):
 			op = {'ASL': 'lsl', 'LSR': 'lsr', 'ROL': 'roxl', 'ROR': 'roxr'}[m]
 			if m in ('ROL', 'ROR'):
@@ -1782,6 +1791,8 @@ class Gen:
 
 	def emit_branch(self, i, direct_kind):
 		cc = CC68[i.m]
+		if i.decided:
+			self.ccr_d3 = None
 		if i.decided == 'taken':
 			self.goto(i, i.arg)
 			return
@@ -1791,8 +1802,8 @@ class Gen:
 			cc = INVERT[cc]
 		elif direct_kind == 'bitv':
 			cc = {'BVS': 'ne', 'BVC': 'eq'}[i.m]
-		elif direct_kind is None:
-			self.e('move d3,ccr')
+		elif direct_kind is None and (self.ccr_d3 != (i.pc, len(self.out) - 1) or i.pc in self.targets):
+			self.e('move d3,ccr')		# (not right after a branch that loaded it)
 		sp, self.split_next = self.split_next, None
 		if sp and sp['b'] is not i:
 			sp = None
@@ -1805,6 +1816,7 @@ class Gen:
 			self.branch(i, cc)
 		if sp:
 			self.e(*sp['fix'][1])
+		self.ccr_d3 = (i.pc + 2, len(self.out)) if direct_kind is None else None
 		if i.pc in self.idle_exits:		# a frame done (FPS counter)
 			self.out += ['\t\tif FPS']
 			self.e('addq.w #1,fpsIdle(a4)')
@@ -2048,6 +2060,7 @@ class Gen:
 		base = outer['prefix'] if outer else ''
 		save = self.out, self.stubs, self.xc, self.c_skipped
 		self.out, self.stubs, self.xc, self.c_skipped = [], [], False, 0
+		self.ccr_d3 = None
 		f = b.pc + 2
 		exit = ['jmp %s' % self.lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']
 		try:
@@ -2091,6 +2104,7 @@ class Gen:
 		finally:
 			self.fast = outer
 			self.out, self.stubs, self.xc, self.c_skipped = save
+			self.ccr_d3 = None
 		if fast and any(',a5' in l or ('jsr' in l and 'rcNmi' not in l) for l in fast):
 			fast = None
 		return fast
