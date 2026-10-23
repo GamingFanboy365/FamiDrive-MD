@@ -862,7 +862,7 @@ class Gen:
 		if m in ('absx', 'absy'):
 			return a + 255 < 0x800 or (a >= 0x8000 and a + 255 <= 0xFFFF and not st) or self.wram(a, 255)
 		if m in ('zpx', 'zpy'):
-			return 'addi' not in ' '.join(self.zp_indexed(i)[0])
+			return not any(l.startswith('add') for l in self.zp_indexed(i)[0])
 		return False
 
 	def check_carry(self):
@@ -982,6 +982,8 @@ class Gen:
 			if a <= 0x7F:
 				return [], self.ix(a, r)
 			return ['lea $%02X(a2),a5' % a], '(a5,%s.w)' % r
+		if a <= 0x7F:				# (moveq clears d6's upper bits)
+			return ['moveq #%d,d6' % a, 'add.b %s,d6' % r], '(a2,d6.w)'
 		return ['move.w %s,d6' % r, 'addi.b #$%02X,d6' % a], '(a2,d6.w)'
 
 	def io_read(self, a):
