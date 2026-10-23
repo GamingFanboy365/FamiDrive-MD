@@ -1213,17 +1213,20 @@ chrUpdate:
 		dbne	d0,.scan
 		beq.s	.done
 		move.w	d6,d1			; no: a run of new ones from it,
-		sub.w	d0,d1			; tiles d1 to d2-1
-		subq.w	#1,d1
-		move.w	d1,d2
-.run:
+		sub.w	d0,d1			; tiles d1 to d2-1, with up to two
+		subq.w	#1,d1			; the same in a row in it (another
+.new:						; DMA costs more than them)
 		move.w	-2(a1),-2(a2)
-		addq.w	#1,d2
+		move.w	d6,d2
+		sub.w	d0,d2
+		moveq	#2,d5
+.next:
 		subq.w	#1,d0
 		bmi.s	.last
 		cmpm.w	(a1)+,(a2)+
-		bne.s	.run
-		bsr.s	.flush
+		bne.s	.new
+		dbf	d5,.next
+		bsr.s	.flush			; three the same: it ends before them
 		dbf	d0,.scan
 		bra.s	.done
 .last:
@@ -1265,17 +1268,44 @@ chrUpdate:
 		rts
 
 	; d2 words from a0+d3+d1 to VRAM d0+d1, into the queue
-	; (RAM_Fami_ChrDma, 128: source.l, VRAM.w, words.w)
+	; (RAM_Fami_ChrDma, 128 of 16 bytes: the DMA's VDP register words
+	; $93 $94 (words), $97 $96 $95 (source / 2), the VRAM write with
+	; DMA (two words), and the words)
 .queue:
 		adda.l	d3,a0
 		adda.w	d1,a0
 		add.w	d1,d0
+		move.w	d6,-(sp)
 		move.w	chrDmaTail(a4),d5
-		move.l	a0,(a5,d5.w)
-		move.w	d0,4(a5,d5.w)
-		move.w	d2,6(a5,d5.w)
-		addq.w	#8,d5
-		andi.w	#$3FF,d5
+		lea	(a5,d5.w),a1
+		move.w	#$9300,d6
+		move.b	d2,d6
+		move.w	d6,(a1)+
+		move.w	d2,d6
+		lsr.w	#8,d6
+		ori.w	#$9400,d6
+		move.w	d6,(a1)+
+		move.l	#$97009600,(a1)
+		move.w	#$9500,4(a1)
+		move.l	a0,d6
+		lsr.l	#1,d6
+		movep.w	d6,3(a1)		; bits 15-8 to $96, 7-0 to $95
+		swap	d6
+		move.b	d6,1(a1)		; 23-16 to $97
+		addq.w	#6,a1
+		move.w	d0,d6
+		andi.w	#$3FFF,d6
+		ori.w	#$4000,d6
+		move.w	d6,(a1)+
+		move.w	d0,d6
+		rol.w	#2,d6
+		andi.w	#3,d6
+		ori.w	#$80,d6
+		move.w	d6,(a1)+
+		move.w	d2,(a1)
+		move.w	(sp)+,d6
+		addi.w	#16,d5
+		andi.w	#$7FF,d5
 		cmp.w	chrDmaHead(a4),d5
 		bne.s	.queued
 		bsr.s	chrFlush		; full: copy the others now
@@ -1336,13 +1366,14 @@ chrVblank:
 ; ----------------------------------------------------------------
 
 chrDma:
-		movem.l	d1-d4/a5,-(sp)
+		movem.l	d1-d3/a0/a5,-(sp)
 		lea	(RAM_Fami_ChrDma).l,a5
 .entry:
 		move.w	chrDmaHead(a4),d1
 		cmp.w	chrDmaTail(a4),d1
 		beq.s	.done			; none left
-		move.w	6(a5,d1.w),d2		; words
+		lea	(a5,d1.w),a0
+		move.w	14(a0),d2		; words
 		tst.w	d0
 		bmi.s	.all
 		move.w	d0,d3			; words there's time for: whole tiles
@@ -1350,21 +1381,14 @@ chrDma:
 		andi.w	#$FFF0,d3
 		beq.s	.done
 		cmp.w	d2,d3
-		bcc.s	.all
-		move.w	d3,d2			; part of them, the rest next time
-		bsr.s	.dma
-		add.w	d2,d2
-		moveq	#0,d3
-		move.w	d2,d3
-		add.l	d3,(a5,d1.w)
-		add.w	d2,4(a5,d1.w)
-		lsr.w	#1,d2
-		sub.w	d2,6(a5,d1.w)
-		bra.s	.done
+		bcs.s	.part
 .all:
-		bsr.s	.dma
-		addq.w	#8,d1
-		andi.w	#$3FF,d1
+		move.l	(a0)+,4(a6)		; length,
+		move.l	(a0)+,4(a6)		; source,
+		move.l	(a0)+,4(a6)		; and the VRAM write with DMA: the
+		move.w	(a0),4(a6)		; word that starts it, from RAM
+		addi.w	#16,d1
+		andi.w	#$7FF,d1
 		move.w	d1,chrDmaHead(a4)
 		tst.w	d0
 		bmi.s	.entry
@@ -1372,39 +1396,46 @@ chrDma:
 		sub.w	d2,d0
 		bgt.s	.entry
 .done:
-		movem.l	(sp)+,d1-d4/a5
+		movem.l	(sp)+,d1-d3/a0/a5
 		rts
 
-	; d2 words from the entry at d1: length, source, VRAM write
-.dma:
-		move.w	#$9300,d3
-		move.b	d2,d3
-		move.w	d3,4(a6)
-		move.w	d2,d3
-		lsr.w	#8,d3
-		ori.w	#$9400,d3
-		move.w	d3,4(a6)
-		move.l	(a5,d1.w),d3
-		lsr.l	#1,d3
-		move.w	#$9500,d4
-		move.b	d3,d4
-		move.w	d4,4(a6)
-		lsr.l	#8,d3
-		move.w	#$9600,d4
-		move.b	d3,d4
-		move.w	d4,4(a6)
-		lsr.l	#8,d3
-		andi.w	#$7F,d3
-		ori.w	#$9700,d3
-		move.w	d3,4(a6)
-		move.w	4(a5,d1.w),d3
-		move.w	d3,d4
-		andi.w	#$3FFF,d3
-		ori.w	#$4000,d3
-		move.w	d3,4(a6)
-		rol.w	#2,d4
-		andi.w	#3,d4
-		ori.w	#$80,d4
-		move.w	d4,-(sp)		; (the word that starts it: from RAM)
-		move.w	(sp)+,4(a6)
-		rts
+	; d3 words of the entry at a0 now, the rest next time
+.part:
+		andi.l	#$FFFF,d3
+		move.w	#$9300,d1
+		move.b	d3,d1
+		move.w	d1,4(a6)
+		move.w	d3,d1
+		lsr.w	#8,d1
+		ori.w	#$9400,d1
+		move.w	d1,4(a6)
+		move.l	4(a0),4(a6)
+		move.l	8(a0),4(a6)
+		move.w	12(a0),4(a6)
+		sub.w	d3,d2			; the rest: fewer words,
+		move.w	d2,14(a0)
+		move.b	d2,1(a0)
+		lsr.w	#8,d2
+		move.b	d2,3(a0)
+		movep.l	3(a0),d1		; the source on (bits 31-24: $94's)
+		add.l	d3,d1
+		movep.w	d1,7(a0)
+		swap	d1
+		move.b	d1,5(a0)
+		move.w	12(a0),d2		; and VRAM on
+		ror.w	#2,d2
+		andi.w	#$C000,d2
+		move.w	10(a0),d1
+		andi.w	#$3FFF,d1
+		or.w	d2,d1
+		add.w	d3,d1
+		add.w	d3,d1
+		move.w	d1,d2
+		andi.w	#$3FFF,d1
+		ori.w	#$4000,d1
+		move.w	d1,10(a0)
+		rol.w	#2,d2
+		andi.w	#3,d2
+		ori.w	#$80,d2
+		move.w	d2,12(a0)
+		bra.w	.done

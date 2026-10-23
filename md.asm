@@ -41,7 +41,7 @@ chrBankMask	set chrBankMask-1
 RAM_Fami_ROM	equ $FFFF0000		; PRG-ROM (not banked)
 RAM_Fami_WRAM	equ $FFFF0000		; PRG RAM, $6000-$7FFF (banked PRG: PRG_IMAGES)
 RAM_Fami_ChrIds	equ $FFFF2000		; MMC3: the IDs of the tiles in the pattern tables (chrUpdate)
-RAM_Fami_ChrDma	equ $FFFF2400		; MMC3: MD tiles for VRAM, queued for VBlank (chrUpdate, chrDma)
+RAM_Fami_ChrDma	equ $FFFF2400		; MMC3: MD tiles for VRAM, queued for VBlank (chrUpdate, chrDma), 2 KB
 RAM_Fami_Emu	equ $FFFF8000		; Emulator buffer
 RAM_Fami_RAM	equ $FFFF9000		; RAM size: $800
 RAM_Fami_PPU	equ $FFFFA000		; PPU size: $3EF8 (TODO: still uses negative variables)
