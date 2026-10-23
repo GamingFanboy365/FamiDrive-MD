@@ -101,6 +101,13 @@ SIZE = {'imm': 2, 'zp': 2, 'zpx': 2, 'zpy': 2, 'indx': 2, 'indy': 2, 'rel': 2,
 # flags used / defined by each mnemonic
 USES = {'ADC': C, 'SBC': C, 'ROL': C, 'ROR': C, 'PHP': ALL, 'BRK': ALL}
 USES.update({b: f for b, f in FLAG_OF.items()})
+
+
+def uses(i):
+	"""Flags instruction i reads: ADC and SBC don't read a carry known
+	where they are (Insn.cin)."""
+	return USES.get(i.m, 0) & ~(C if i.cin else 0)
+
 DEFS = {m: N | Z for m in ('LDA', 'LDX', 'LDY', 'TAX', 'TAY', 'TXA', 'TYA', 'TSX', 'PLA',
 			   'INX', 'INY', 'DEX', 'DEY', 'INC', 'DEC', 'AND', 'ORA', 'EOR')}
 DEFS.update({'ADC': ALL, 'SBC': ALL, 'CMP': N | Z | C, 'CPX': N | Z | C, 'CPY': N | Z | C,
@@ -124,6 +131,7 @@ class Insn:
 			self.arg = None
 		self.succ = []			# successor addresses, None = unknown
 		self.decided = None		# for branches: 'taken' / 'not' if the flags are known
+		self.cin = None			# ADC/SBC: (carry in, where it became known) if known
 		self.table = None		# a JSR to a jump engine: the table after it
 
 	def text(self):
@@ -298,6 +306,8 @@ def discover(prg, extra=()):
 				for s in i.succ:
 					if s is not None and s != nxt:
 						work.append(s)
+				if m in ('ADC', 'SBC') and C in known:
+					i.cin = known[C]
 				# track flags known from immediates and branches, for
 				# branches always or never taken
 				if m in ('LDA', 'LDX', 'LDY') and i.mode == 'imm':
@@ -319,6 +329,9 @@ def discover(prg, extra=()):
 		bad = {i.pc for i in insns.values() if i.decided and
 		       any(t in targets for t in range(i.known_from + 1, i.pc + 1))} - forced
 		if not bad:
+			for i in insns.values():	# (and a carry in likewise)
+				if i.cin and any(t in targets for t in range(i.cin[1] + 1, i.pc + 1)):
+					i.cin = None
 			return insns, vectors, tables
 		forced |= bad
 
@@ -594,7 +607,7 @@ def copy_liveness(insns, body, ctx, live_in, sums):
 				out = 0
 				for s in i.succ:
 					out |= inn[s]
-				new = USES.get(i.m, 0) | (out & ~DEFS.get(i.m, 0))
+				new = uses(i) | (out & ~DEFS.get(i.m, 0))
 			out_of[pc] = out
 			if new != inn[pc]:
 				inn[pc] = new
@@ -775,12 +788,12 @@ def liveness(insns, returns=(), tables=(), rts_targets=(), ext=(), others=(), ex
 				out = ALL
 			else:
 				out |= inn[s] if s in insns else ext_live.get(s, ALL)
-		uses = USES.get(i.m, 0)
+		u = uses(i)
 		if i.m == 'PHP' and pc not in whole:
-			uses = 0
+			u = 0
 			for q in pulls[pc]:
-				uses |= getattr(insns[q], 'live_out', ALL)
-		return out, uses | (out & ~DEFS.get(i.m, 0))
+				u |= getattr(insns[q], 'live_out', ALL)
+		return out, u | (out & ~DEFS.get(i.m, 0))
 
 	changed = True
 	while changed:
@@ -1441,11 +1454,23 @@ class Gen:
 		elif m in ('ADC', 'SBC'):
 			setup, s = self.src(i)
 			self.e(*setup)
-			if s != 'd7':
-				self.e('move.b %s,d7' % s)
-			# (addx and subx only clear Z: set it first if it's read)
 			if m == 'ADC':
 				self.check_carry()
+			if i.cin and i.cin[0] == (m == 'SBC'):	# CLC / ADC, SEC / SBC: a plain add or subtract
+				op = 'add' if m == 'ADC' else 'sub'
+				self.e(('%si.b %s,d0' if s.startswith('#') else '%s.b %s,d0') % (op, s))
+				if need:		# (X and C: the borrow, after sub)
+					self.e('move sr,d3', *['eori.b #$11,d3'] * (m == 'SBC'))
+				return
+			if s != 'd7':
+				self.e('move.b %s,d7' % s)
+			if i.cin:			# SEC / ADC, CLC / SBC: X set (and Z, which addx and subx only clear)
+				self.e('move #$14,ccr', '%s.b d7,d0' % ('addx' if m == 'ADC' else 'subx'))
+				if need:
+					self.e('move sr,d3', *['eori.b #$11,d3'] * (m == 'SBC'))
+				return
+			# (addx and subx only clear Z: set it first if it's read)
+			if m == 'ADC':
 				if self.xc:			# carry already in X
 					self.e(*['ori #4,ccr'] * bool(need & Z), 'addx.b d7,d0', *['move sr,d3'] * bool(need))
 				else:
@@ -1695,7 +1720,7 @@ class Gen:
 			return self.live_in.get(pc, ALL)
 		if s.m == 'JSR':
 			return s.live_out
-		return USES.get(s.m, 0) | (s.live_out & ~DEFS.get(s.m, 0))
+		return uses(s) | (s.live_out & ~DEFS.get(s.m, 0))
 
 	def split_plan(self, i, m, b, defs):
 		"""i's flags are read after the branch b that tests them: b tests
