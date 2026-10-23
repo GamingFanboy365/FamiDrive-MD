@@ -701,41 +701,40 @@ APU_OAMDMA:
 		moveq	#$79,d0			; NES line L+1 is MD line L-8, +128
 		move.w	#$80,d1
 		moveq	#0,d2
-		moveq	#64-1,d5
-		if FPS
+		moveq	#$E7-$100,d5		; Y $E7 on: hidden
+	; unrolled: a hidden sprite (most of them, often) is a load, a
+	; compare and a branch
+oamSpr		set	0
+		rept	64
+		if (oamSpr==62)&&FPS
 		tst.w	fpsOn(a4)		; the counter takes the last two slots
-		beq.s	.all_64
-		moveq	#64-2-1,d5
-.all_64:
+		bne.w	.listed
 		endif
-.lp_sprnormal:
-		move.b	(a5)+,d2		; Y
-		cmpi.b	#$E7,d2
-		bcc.s	.hidden
+		move.b	oamSpr*4(a5),d2		; Y
+		cmp.b	d5,d2
+		bcc.s	+
 		move.w	d2,d7
 		add.w	d0,d7
 		move.w	d7,(a3)+
 		move.w	d6,(a3)+
 		addq.w	#1,d6
-		move.b	(a5)+,d2		; tile
+		move.b	oamSpr*4+1(a5),d2	; tile
 		move.w	d2,d7			; 8x16, an odd one: table 1 ($100
 		and.w	d4,d7			; on) and the even tile, + $FF
 		neg.b	d7
 		add.w	d2,d7
 		moveq	#0,d3
-		move.b	(a5)+,d3		; attributes
+		move.b	oamSpr*4+2(a5),d3	; attributes
 		add.w	d3,d3
 		add.w	(a6,d3.w),d7
 		move.w	d7,(a3)+
-		move.b	(a5)+,d2		; X
+		move.b	oamSpr*4+3(a5),d2	; X
 		move.w	d2,d7
 		add.w	d1,d7
 		move.w	d7,(a3)+
-		dbf	d5,.lp_sprnormal
-		bra.s	.listed
-.hidden:
-		addq.w	#3,a5
-		dbf	d5,.lp_sprnormal
++
+oamSpr		set	oamSpr+1
+		endm
 .listed:
 		lea	vdpSprData(a4),a6
 		adda.w	sprWrite(a4),a6
