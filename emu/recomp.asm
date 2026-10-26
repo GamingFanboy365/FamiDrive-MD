@@ -20,7 +20,7 @@ rcStart:
 		move.l	sp,(RAM_RcStack).l
 		move.w	#$4E75,(RAM_EmuLoop).l	; rts
 		lea	(RAM_RcRet).w,a5	; return caches: none kept (an RTS to
-		moveq	#128-1,d5		; $0000 would find rcDispatch)
+		move.w	#2*120-1,d5		; $0000 would find rcDispatch)
 .ret_cache:
 		clr.w	(a5)+
 		move.l	#rcDispatch,(a5)+
@@ -175,9 +175,11 @@ rcInterpStep:
 ; next time, unless that can change: below $8000, or for an RTS in the
 ; fixed bank's code (rcDispatchCF), $8000-$BFFF, whose code goes by
 ; the bank there then. (A bank's RTS returns to its own code there.)
+; A cache keeps the last two: an address and its code, twice; the new
+; one goes first, the first second.
 ;
 ; d4.w - 6502 address
-; a5 - its cache's entry + 2: the address before, the code at (a5)
+; a5 - its cache + 2: the first address before, its code at (a5)
 ; ----------------------------------------------------------------
 
 rcDispatchCF:
@@ -208,6 +210,8 @@ rcDispatchC:
 		move.l	(a5,d5.l),d5
 		beq.w	rcDispatch		; not translated
 		movea.l	d6,a5
+		move.w	-2(a5),4(a5)
+		move.l	(a5),6(a5)
 		move.w	d4,-2(a5)
 		move.l	d5,(a5)
 		movea.l	d5,a5

@@ -17,7 +17,7 @@
 ; by volume. DMC is not emulated.
 ; ----------------------------------------------------------------
 
-RAM_Fami_Apu	equ RAM_Fami_Emu+$C00	; cleared by emuStart
+RAM_Fami_Apu	equ RAM_Fami_Emu+$A00	; cleared by emuStart
 
 ; APU state, offsets from RAM_Fami_Apu
 apuRegs		equ $00			; $18 bytes: last value written to $4000-$4017

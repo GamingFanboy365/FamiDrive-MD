@@ -447,7 +447,7 @@ def plausible_code(prg, a, count=12):
 # ----------------------------------------------------------------------
 
 TOP = (0, 255)
-RET_CACHES = [0]			# return caches given out (RAM_RcRet: 128)
+RET_CACHES = [0]			# return caches given out (RAM_RcRet: 120)
 
 
 def join(a, b):
@@ -1787,11 +1787,11 @@ class Gen:
 			# usually it goes back to one of a few known callers
 			for r in self.returns.get(i.pc, ()):
 				self.e('cmpi.w #$%04X,d4' % r, 'bne.s *+8', 'jmp (%s).l' % lab(r))
-			if self.returns.get(i.pc) or (self.fast and not self.fast.get('routine')) or RET_CACHES[0] == 128:
+			if self.returns.get(i.pc) or (self.fast and not self.fast.get('routine')) or RET_CACHES[0] == 120:
 				self.e('jmp rcDispatch')
-			else:				# where it went last time (rcDispatchC)
-				self.e('lea (RAM_RcRet+%d).w,a5' % (6 * RET_CACHES[0]), 'cmp.w (a5)+,d4', 'bne.s *+6',
-				       'movea.l (a5),a5', 'jmp (a5)',
+			else:				# where it went the last two times (rcDispatchC)
+				self.e('lea (RAM_RcRet+%d).w,a5' % (12 * RET_CACHES[0]), 'cmp.w (a5)+,d4', 'bne.s *+6',
+				       'movea.l (a5),a5', 'jmp (a5)', 'cmp.w 4(a5),d4', 'bne.s *+8', 'movea.l 6(a5),a5', 'jmp (a5)',
 				       'jmp rcDispatchCF' if self.prg.banked and self.prg.unit == 'F' else 'jmp rcDispatchC')
 				RET_CACHES[0] += 1
 		elif m == 'RTI':
