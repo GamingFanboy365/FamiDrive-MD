@@ -553,18 +553,21 @@ def rts_walk(insns, f):
 	return found, {pc for pc, d in seen}, unsure
 
 
-def rts_returns(insns, tables=(), strict=False):
+def rts_returns(insns, tables=(), strict=False, ext_calls=None):
 	"""For each RTS, the return points of the JSRs that can reach it.
 	A JSR into RAM may call any jump table target. An RTS reached with
 	two more bytes pulled than pushed (a routine dropping its return
 	address) also goes where its caller returns; other depths would
 	return to a garbage address, so those paths are taken as never
-	happening. strict: leave out RTSs of routines that move the stack."""
+	happening. strict: leave out RTSs of routines that move the stack.
+	ext_calls: JSRs in other code to this code's routines, by routine."""
 	calls = {}
 	for i in insns.values():
 		if i.m == 'JSR' and not i.table:
 			for f in [i.arg] if i.arg in insns else tables if i.arg < 0x800 else ():
 				calls.setdefault(f, set()).add(i.pc)
+	for f, sites in (ext_calls or {}).items():
+		calls.setdefault(f, set()).update(sites)
 	body, ends = {}, {}
 	unsure = set()
 	for f in calls:
@@ -845,6 +848,7 @@ class Gen:
 		self.ext_routines = {}		# the fixed bank's routine copies a bank's code calls: (heavy, switches)
 		self.copies_for = ()		# (the fixed bank's: routines banks' code calls, to have copies of)
 		self.ext_ret = {}		# flags live where other units' calls return (cross_flags)
+		self.ext_calls = {}		# (a bank's: the fixed bank's JSRs to its routines)
 		self.inline = set()		# small routines put in place of their calls (emit_inline)
 		self.out, self.stubs = [], []
 		self.fast = None
@@ -1185,9 +1189,19 @@ class Gen:
 	# ---- control flow ---------------------------------------------------
 
 	def return_points(self):
-		"""For each RTS, the return points of the JSRs that can reach it.
-		Only a prediction: RTS still checks the address it pulled."""
-		return {pc: r for pc, r in rts_returns(self.insns, self.tables).items() if len(r) <= 4}
+		"""For each RTS, the return points of the JSRs that can reach it,
+		up to 4 in this code, then up to 2 in the fixed bank's code (from
+		a bank's). Only a prediction: RTS still checks the address it
+		pulled."""
+		mine = rts_returns(self.insns, self.tables)
+		every = rts_returns(self.insns, self.tables, ext_calls=self.ext_calls) if self.ext_calls else mine
+		found = {}
+		for pc, r in every.items():
+			own = mine.get(pc, set())
+			if len(own) <= 4:
+				ext = sorted(r - own)
+				found[pc] = sorted(own) + (ext if len(ext) <= 2 else [])
+		return found
 
 	def idle_loops(self):
 		"""Loops that wait for VBlank, for the FPS counter (emu/fps.asm):
@@ -1728,7 +1742,7 @@ class Gen:
 			       'move.b (a2,d3.w),-(sp)', 'swap d3', 'move.w (sp)+,d4', 'move.b d6,d4',
 			       'addq.w #1,d4')
 			# usually it goes back to one of a few known callers
-			for r in sorted(self.returns.get(i.pc, ()))[:4]:
+			for r in self.returns.get(i.pc, ()):
 				self.e('cmpi.w #$%04X,d4' % r, 'bne.s *+8', 'jmp (%s).l' % lab(r))
 			self.e('jmp rcDispatch')
 		elif m == 'RTI':
@@ -2641,17 +2655,20 @@ def cross_flags(us, lives):
 	return ext_live, ext_ret, ext_sum
 
 
-def generate(prg, u, ext_entries=(), ext_insns=(), facts=(None, None, None), copies_for=(), ext_routines=None):
+def generate(prg, u, ext_entries=(), ext_insns=(), facts=(None, None, None), copies_for=(), ext_routines=None,
+	     ext_calls=None):
 	"""A unit's 68000 code. ext_entries: its code that other units' code
 	goes to; ext_insns: other units' code it can jump to directly; facts:
 	cross_flags' for it. The fixed bank's: copies_for, the routines the
 	banks' code calls (copies of them, Gen.routine_body, if they can
 	have one). A bank's: ext_routines, those copies ((heavy, switches)
-	by address)."""
+	by address); ext_calls, the fixed bank's JSRs to its routines (where
+	their RTSs can return straight to)."""
 	insns, vectors, extra, tables = u['insns'], u['vectors'], u['extra'], u['tables']
 	g = Gen(prg, insns, ext_insns)
 	g.live_in, g.sums = unit_liveness(u, ext_entries, facts)
 	g.copies_for, g.ext_routines, g.ext_ret = copies_for, ext_routines or {}, facts[1] or {}
+	g.ext_calls = ext_calls or {}
 	g.tables = tables
 	g.engines = {}
 	for i in insns.values():
@@ -2730,7 +2747,11 @@ def main():
 		copies = {f: g.callable[f][1:] + (g.copy_label(f),) for f in calls if f in g.callable}
 		out, units = list(g.out), [(uf, g)]
 		for n, (b, ub) in enumerate(zip(banks, ubs)):
-			gb = generate(b, ub, ub['entries'], uf['insns'], facts[n + 1], (), copies)
+			ext_calls = {}		# (the fixed bank's code is always there to return to)
+			for i in uf['insns'].values():
+				if i.m == 'JSR' and not i.table and i.arg in ub['insns'] and i.pc + 3 in uf['insns']:
+					ext_calls.setdefault(i.arg, set()).add(i.pc)
+			gb = generate(b, ub, ub['entries'], uf['insns'], facts[n + 1], (), copies, ext_calls)
 			out += [''] + prefixed(gb.out, 'B%d_' % n)
 			units.append((ub, gb))
 		out += ['', '; each bank\'s code, by the bank at $8000 (rcDispatch)', '\t\talign 4', 'rcBankTables:'] + \
