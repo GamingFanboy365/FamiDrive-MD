@@ -1478,34 +1478,36 @@ class Gen:
 			self.e(*setup)
 			if m == 'ADC':
 				self.check_carry()
-			if i.cin and i.cin[0] == (m == 'SBC'):	# CLC / ADC, SEC / SBC: a plain add or subtract
-				op = 'add' if m == 'ADC' else 'sub'
-				self.e(('%si.b %s,d0' if s.startswith('#') else '%s.b %s,d0') % (op, s))
-				if need:		# (X and C: the borrow, after sub)
-					self.e('move sr,d3', *['eori.b #$11,d3'] * (m == 'SBC'))
-				return
-			if i.cin and not need:		# SEC / ADC, CLC / SBC, no flags read: and the 1
-				op = 'add' if m == 'ADC' else 'sub'
+			op = 'add' if m == 'ADC' else 'sub'
+			plain = i.cin and i.cin[0] == (m == 'SBC')	# CLC / ADC, SEC / SBC
+			if i.cin and not plain and not need:	# SEC / ADC, CLC / SBC, no flags read: and the 1
 				self.e(('%si.b %s,d0' if s.startswith('#') else '%s.b %s,d0') % (op, s), '%sq.b #1,d0' % op)
 				return
-			if s != 'd7':
-				self.e('move.b %s,d7' % s)
-			if i.cin:			# SEC / ADC, CLC / SBC: X set (and Z, which addx and subx only clear)
-				self.e('move #$14,ccr', '%s.b d7,d0' % ('addx' if m == 'ADC' else 'subx'))
-				if need:
-					self.e('move sr,d3', *['eori.b #$11,d3'] * (m == 'SBC'))
-				return
 			# (addx and subx only clear Z: set it first if it's read)
-			if m == 'ADC':
-				if self.xc:			# carry already in X
-					self.e(*['ori #4,ccr'] * bool(need & Z), 'addx.b d7,d0', *['move sr,d3'] * bool(need))
-				else:
-					self.e(*['ori.b #4,d3'] * bool(need & Z), 'move d3,ccr', 'addx.b d7,d0',
-					       *['move sr,d3'] * bool(need))
+			zero = bool(need & Z)
+			if plain:			# a plain add or subtract
+				self.e(('%si.b %s,d0' if s.startswith('#') else '%s.b %s,d0') % (op, s))
+				if m == 'ADC':
+					self.xc = True		# (X: the carry)
 			else:
-				self.e('eori.b #$11,d3', *['ori.b #4,d3'] * bool(need & Z), 'move d3,ccr', 'subx.b d7,d0')
-				if need:
-					self.e('move sr,d3', 'eori.b #$11,d3')
+				if s != 'd7':
+					self.e('move.b %s,d7' % s)
+				if i.cin:			# SEC / ADC, CLC / SBC: X set (and Z)
+					self.e('move #$14,ccr', '%sx.b d7,d0' % op)
+				elif m == 'ADC' and self.xc:	# carry already in X
+					self.e(*['ori #4,ccr'] * zero, 'addx.b d7,d0')
+				elif m == 'ADC':
+					self.e(*['ori.b #4,d3'] * zero, 'move d3,ccr', 'addx.b d7,d0')
+				else:
+					self.e('eori.b #$11,d3', *['ori.b #4,d3'] * zero, 'move d3,ccr', 'subx.b d7,d0')
+			# the flags are in the CCR (after SBC, C is the borrow): a branch
+			# right after them reads them there
+			if direct:
+				self.direct_next = op
+			elif need:
+				self.e('move sr,d3', *['eori.b #$11,d3'] * (m == 'SBC'))
+				if m == 'ADC' and nxt_i is not None and nxt_i.mode == 'rel' and nxt_i.decided is None:
+					self.direct_next = 'flags'	# also still in the CCR
 		elif m in ('CMP', 'CPX', 'CPY'):
 			if need or direct:
 				r = {'CMP': 'd0', 'CPX': 'd1', 'CPY': 'd2'}[m]
@@ -1828,8 +1830,8 @@ class Gen:
 			return
 		if i.decided == 'not':
 			return
-		if direct_kind == 'cmp' and i.m in ('BCC', 'BCS'):
-			cc = INVERT[cc]
+		if direct_kind in ('cmp', 'sub') and i.m in ('BCC', 'BCS'):
+			cc = INVERT[cc]			# (C: the borrow)
 		elif direct_kind == 'bitv':
 			cc = {'BVS': 'ne', 'BVC': 'eq'}[i.m]
 		elif direct_kind is None and (self.ccr_d3 != (i.pc, len(self.out) - 1) or i.pc in self.targets):
