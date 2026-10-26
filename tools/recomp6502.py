@@ -1534,7 +1534,8 @@ class Gen:
 			elif s != r:
 				self.e('move.b %s,%s' % (s, r))
 			nz_done()
-		elif m in ('STA', 'STX', 'STY') and self.mmc3_store(i, {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m]):
+		elif m in ('STA', 'STX', 'STY') and (self.mmc3_store(i, {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m]) or
+						     self.apu_store(i, {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m])):
 			pass
 		elif m in ('STA', 'STX', 'STY'):
 			r = {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m]
@@ -1898,6 +1899,23 @@ class Gen:
 				return False
 			return True
 		return False
+
+	def apu_store(self, i, r):
+		"""A store of r to an APU register ($4000-$401F), in place of
+		wrTo_APU and its table (emu/memory.asm): the register and its
+		written flag as apuStore does them, the pads latched as APU_Input
+		does, APU_OAMDMA called directly; nothing for $4018-$401F."""
+		if i.mode != 'abs' or not 0x4000 <= i.arg < 0x4020:
+			return False
+		n = i.arg & 0x1F
+		if n == 0x14:
+			self.e('move.b %s,d7' % r, 'jsr APU_OAMDMA')
+		elif n == 0x16:
+			zero = self.tag('Ap', i.pc)
+			self.e('tst.b %s' % r, 'beq.s ' + zero, 'move.l padState(a4),cpuInputData(a4)', zero + ':')
+		elif n < 0x18:
+			self.e('move.b %s,(RAM_Fami_Apu+apuRegs+$%02X).w' % (r, n), 'st (RAM_Fami_Apu+apuWrote+$%02X).w' % n)
+		return True
 
 	def mmc3_select(self, i):
 		"""What MMC3's $8000 holds at a store to $8001 (its range): what
