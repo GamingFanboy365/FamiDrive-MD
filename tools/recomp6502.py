@@ -26,7 +26,8 @@
 #   a0 PRG-ROM copy + $8000 (so (a0,d6.w) reads 6502 address d6 >= $8000)
 #   a1 PRG-ROM copy (banked PRG: the image of the bank at $8000)
 #   a2 NES RAM, a3 PPU buffer, a4 emulator vars
-#   a6 vdp_data;  d4-d7, a5 are scratch
+#   a6 vdp_data;  d4-d7, a5 are scratch (a5 can stay pointing into RAM
+#   from one instruction to the next: Gen.a5_ix)
 #
 # Flags are only stored into d3 where a later instruction can read them
 # (liveness analysis: across units, and through calls by summaries of the
@@ -56,6 +57,15 @@ CC68 = {'BPL': 'pl', 'BMI': 'mi', 'BNE': 'ne', 'BEQ': 'eq', 'BCC': 'cc', 'BCS': 
 INVERT = {'eq': 'ne', 'ne': 'eq', 'pl': 'mi', 'mi': 'pl', 'cc': 'cs', 'cs': 'cc', 'vc': 'vs', 'vs': 'vc'}
 # 68000 cycles of the lines Gen.split_fix makes
 FIX_CYCLES = {'move': 6, 'scc': 5, 'andi.w': 8, 'andi.b': 8, 'ori.b': 8, 'or.b': 4}
+# 68000 instructions that go on to the next line and leave a5 alone
+# when it isn't their destination (Gen.a5_ram)
+A5_KEEPS = {'move', 'moveq', 'movea', 'movep', 'lea', 'add', 'addq', 'addi', 'addx', 'adda',
+	    'sub', 'subq', 'subi', 'subx', 'suba', 'cmp', 'cmpi', 'cmpa', 'tst', 'and', 'andi',
+	    'or', 'ori', 'eor', 'eori', 'not', 'neg', 'negx', 'clr', 'ext', 'swap', 'lsl', 'lsr',
+	    'asl', 'asr', 'rol', 'ror', 'roxl', 'roxr', 'btst', 'bset', 'bclr', 'bchg'} | \
+	   {p + cc for p in 'bs' for cc in ('hi', 'ls', 'cc', 'cs', 'ne', 'eq', 'vc', 'vs',
+					    'pl', 'mi', 'ge', 'lt', 'gt', 'le')}
+INSN_LABEL = re.compile(r'([A-Za-z0-9_]+):\s+; \$([0-9A-F]{4})  ')	# an instruction's label line
 
 # ----------------------------------------------------------------------
 # 6502 decoding
@@ -877,7 +887,7 @@ class Gen:
 		if m in ('absx', 'absy'):
 			return a + 255 < 0x800 or (a >= 0x8000 and a + 255 <= 0xFFFF and not st) or self.wram(a, 255)
 		if m in ('zpx', 'zpy'):
-			return not any(l.startswith('add') for l in self.zp_indexed(i)[0])
+			return not self.zp_wraps(i)
 		return False
 
 	def check_carry(self):
@@ -970,7 +980,7 @@ class Gen:
 		if a + self.index_hi(i) < 0x800:
 			if a < 0x80:
 				return [], self.ix(a, r)
-			return ['lea $%04X(a2),a5' % a], '(a5,%s.w)' % r
+			return self.a5_ix(a, r, '$%04X' % a)
 		if self.fast and 'off' in self.fast and self.fast['off'][r]:
 			raise Unroll
 		return ['move.w %s,d6' % r, 'addi.w #$%04X,d6' % a, 'andi.w #$7FF,d6'], '(a2,d6.w)'
@@ -984,19 +994,65 @@ class Gen:
 			return '%d(%s,%s.w)' % (a, base, r)
 		return '$%02X(a2,%s.w)' % (a, r) if base == 'a2' else '(%s,%s.w)' % (base, r)
 
+	def a5_ix(self, a, r, text):
+		"""RAM at a, indexed by r, through a5: by the lea already in a5
+		if it points near enough, else by a lea of its own. Code that
+		goes on with the a5 of code before it gets in at its label (other
+		than by falling in) through a stub that sets a5 first."""
+		found = self.a5_ram()
+		if found is None or not -128 <= a - found[0] <= 127:
+			return ['lea %s(a2),a5' % text], '(a5,%s.w)' % r
+		b, labels = found
+		for k in labels:
+			name = INSN_LABEL.match(self.out[k]).group(1)
+			self.out[k] = self.out[k].replace(name + ':', name + '_a:', 1)
+			self.stubs += [name + ':', '\t\tlea $%04X(a2),a5' % b, '\t\tjmp %s_a' % name]
+		return [], '%d(a5,%s.w)' % (a - b, r)
+
+	def a5_ram(self):
+		"""Where in RAM a5 points here, if a lea $nnnn(a2),a5 before this,
+		in code that falls through, still holds: (the address, the
+		indices in self.out of the instructions' labels since, still to
+		be given stubs); else None. Branch targets stop it (a stub there
+		would slow down the branches)."""
+		labels = []
+		for k in range(len(self.out) - 1, max(len(self.out) - 64, 0) - 1, -1):
+			l = self.out[k]
+			t = l.split()
+			if not t or t[0].startswith(';'):
+				continue
+			if not l[0].isspace() or t[0].endswith(':'):
+				m = INSN_LABEL.match(l)
+				if not m or int(m.group(2), 16) in self.targets:
+					return None		# a join, or an internal label
+				if not m.group(1).endswith('_a'):	# (one with its stub already)
+					labels.append(k)
+				continue
+			op, arg = t[0].split('.')[0], t[1] if len(t) > 1 else ''
+			if op == 'lea' and arg.startswith('$') and arg.endswith('(a2),a5'):
+				return int(arg[1:-7], 16), labels
+			if op not in A5_KEEPS or arg.endswith('a5') or '(a5)+' in arg or '-(a5)' in arg:
+				return None
+		return None
+
+	def zp_wraps(self, i):
+		"""Can a zp,X / zp,Y address wrap within the zero page? Not if
+		the index register's range shows it can't."""
+		rng = self.ranges.get(i.pc)
+		hi = rng[1 if i.mode == 'zpx' else 2][1] if rng else 255
+		if self.fast and i.pc in self.fast.get('direct', ()):
+			hi = 0			# the loop's guard checked the range
+		return not (i.arg == 0 or i.arg + hi <= 0xFF)
+
 	def zp_indexed(self, i):
 		"""zp,X / zp,Y: the address wraps within the zero page, unless
 		the index register's range shows it can't."""
 		a = i.arg
 		r = 'd1' if i.mode == 'zpx' else 'd2'
-		rng = self.ranges.get(i.pc)
-		hi = rng[1 if i.mode == 'zpx' else 2][1] if rng else 255
-		if self.fast and i.pc in self.fast.get('direct', ()):
-			hi = 0			# the loop's guard checked the range
-		if a == 0 or a + hi <= 0xFF:
+		if not self.zp_wraps(i):
 			if a <= 0x7F:
 				return [], self.ix(a, r)
-			return ['lea $%02X(a2),a5' % a], '(a5,%s.w)' % r
+			return self.a5_ix(a, r, '$%02X' % a)
 		if a <= 0x7F:				# (moveq clears d6's upper bits)
 			return ['moveq #%d,d6' % a, 'add.b %s,d6' % r], '(a2,d6.w)'
 		return ['move.w %s,d6' % r, 'addi.b #$%02X,d6' % a], '(a2,d6.w)'
