@@ -19,6 +19,12 @@ rcWram		equ RAM_Fami_WRAM-RAM_Fami_Emu-$6000
 rcStart:
 		move.l	sp,(RAM_RcStack).l
 		move.w	#$4E75,(RAM_EmuLoop).l	; rts
+		lea	(RAM_RcRet).w,a5	; return caches: none kept (an RTS to
+		moveq	#128-1,d5		; $0000 would find rcDispatch)
+.ret_cache:
+		clr.w	(a5)+
+		move.l	#rcDispatch,(a5)+
+		dbf	d5,.ret_cache
 		if PRG_BANKED
 		move.l	a1,d4			; the code of the bank at $8000
 		subi.l	#PRG_IMAGES,d4
@@ -160,6 +166,50 @@ rcInterpStep:
 		else
 		lea	(RAM_Fami_ROM+$8000).l,a0
 		endif
+		movea.l	d5,a5
+		jmp	(a5)
+
+; ----------------------------------------------------------------
+; An RTS with a return cache (one tools/recomp6502.py can't guess the
+; returns of): as rcDispatch, keeping the code it finds there for the
+; next time, unless that can change: below $8000, or for an RTS in the
+; fixed bank's code (rcDispatchCF), $8000-$BFFF, whose code goes by
+; the bank there then. (A bank's RTS returns to its own code there.)
+;
+; d4.w - 6502 address
+; a5 - its cache's entry + 2: the address before, the code at (a5)
+; ----------------------------------------------------------------
+
+rcDispatchCF:
+		if PRG_BANKED
+		btst	#14,d4
+		beq.w	rcDispatch
+		endif
+rcDispatchC:
+		tst.w	d4
+		bpl.w	rcDispatch
+		move.l	a5,d6
+		movea.l	(RAM_RcStack).w,sp
+		moveq	#0,d5
+		move.w	d4,d5
+		if PRG_BANKED
+		lsl.w	#2,d5
+		bcs.s	.fixed
+		movea.l	rcCurTable(a4),a5
+		bra.s	.look
+.fixed:
+		lea	(rcTable).l,a5
+.look:
+		else
+		andi.w	#rcPrgMask,d5
+		lsl.l	#2,d5
+		lea	(rcTable).l,a5
+		endif
+		move.l	(a5,d5.l),d5
+		beq.w	rcDispatch		; not translated
+		movea.l	d6,a5
+		move.w	d4,-2(a5)
+		move.l	d5,(a5)
 		movea.l	d5,a5
 		jmp	(a5)
 
