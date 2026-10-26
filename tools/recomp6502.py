@@ -471,6 +471,10 @@ def ranges(insns, entries):
 	work = [e for e in entries if e in state]
 	order = sorted(insns)
 	prev = {order[k]: insns[order[k - 1]] for k in range(1, len(order))}
+	ways = {}				# how many instructions go to each one
+	for i in insns.values():
+		for s in i.succ:
+			ways[s] = ways.get(s, 0) + 1
 	while work:
 		pc = work.pop()
 		i = insns[pc]
@@ -488,6 +492,7 @@ def ranges(insns, entries):
 			v = st[REG[m[2]]]; d = 1 if m[0] == 'I' else -1
 			r = (m[2], (v[0] + d, v[1] + d) if 0 <= v[0] + d and v[1] + d <= 255 else TOP)
 		elif m == 'AND' and i.mode == 'imm': r = ('A', (0, min(st[0][1], a)))
+		elif m == 'ORA' and i.mode == 'imm': r = ('A', (max(st[0][0], a), min(255, st[0][1] + a)))
 		elif m == 'TSX': r = ('X', TOP)
 		elif m in ('ADC', 'SBC', 'ORA', 'EOR', 'AND', 'PLA') or (m in ('ASL', 'LSR', 'ROL', 'ROR') and i.mode == 'acc'):
 			r = ('A', TOP)
@@ -510,7 +515,14 @@ def ranges(insns, entries):
 						if cond and reg:
 							k = REG[reg]
 							lo, hi = cond if taken else ((128, 255) if i.m == 'BPL' else (0, 127))
-							out[k] = meet(out[k], lo, hi)
+							parts = [out[k]]
+							if p.m in ('INX', 'INY', 'DEX', 'DEY') and state[p.pc] and ways.get(pc) == 1 and \
+							   pc not in entries:	# (only from it: its range before, stepped)
+								parts = steps(state[p.pc][k], 1 if p.m[0] == 'I' else -1)
+							parts = [x for x in (meet(x, lo, hi) for x in parts) if x]
+							out[k] = None
+							for x in parts:
+								out[k] = join(out[k], x)
 					elif p.m in ('CPX', 'CPY', 'CMP') and p.mode == 'imm' and i.m in ('BCC', 'BCS'):
 						k = REG[{'CPX': 'X', 'CPY': 'Y', 'CMP': 'A'}[p.m]]
 						lt = (i.m == 'BCC') == taken	# register < operand
@@ -521,7 +533,17 @@ def ranges(insns, entries):
 			if new != state[s]:
 				state[s] = new
 				work.append(s)
+			elif m in ('INX', 'INY', 'DEX', 'DEY') and insns[s].mode == 'rel':
+				work.append(s)		# (its refinement reads this one's range)
 	return state
+
+
+def steps(v, d):
+	"""The values of a register in range v after INX/DEX (d 1/-1),
+	as up to two ranges: those that didn't wrap, and the one that did."""
+	if d < 0:
+		return ([(max(v[0], 1) - 1, v[1] - 1)] if v[1] >= 1 else []) + ([(255, 255)] if v[0] == 0 else [])
+	return ([(v[0] + 1, min(v[1], 254) + 1)] if v[0] <= 254 else []) + ([(0, 0)] if v[1] == 255 else [])
 
 # ----------------------------------------------------------------------
 # Flag liveness
