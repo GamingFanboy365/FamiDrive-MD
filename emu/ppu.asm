@@ -194,21 +194,23 @@ wrPPU_Scroll:
 ; ----------------------------------------------------------------
 
 ppuXChanged:
-		movem.l	d0/d5,-(sp)
-		move.w	d6,d0
 		move.w	ppuTX(a4),d4
 		neg.w	d4
 		cmp.w	vdpScrlX(a4),d4
-		beq.w	.done
+		bne.s	.changed
+.same:
+		rts
+.changed:
 		tst.w	ppuSp0State(a4)		; the game polled $2002 this frame,
 		bne.s	.split_ok
 		tst.w	ppuScrollSet(a4)	; or set the whole scroll already
-		beq.s	.top			; (both $2005 bytes): else from the top
+		beq.w	.top			; (both $2005 bytes): else from the top
 .split_ok:
 		tst.w	ppuMaskOn(a4)
-		beq.s	.top
-		tst.w	d0			; $2006 mid-screen: leave the scroll
-		beq.w	.done			; (games set it right after)
+		beq.w	.top
+		tst.w	d6			; $2006 mid-screen: leave the scroll
+		beq.s	.same			; (games set it right after)
+		movem.l	d0/d5,-(sp)
 		bsr.w	ppuLine
 		tst.w	d5			; past the bottom (a very slow frame)
 		bmi.s	.set
@@ -246,14 +248,17 @@ ppuXChanged:
 		move.w	d4,2(a5,d0.w)
 		addq.w	#1,hsCurN(a4)
 		bra.s	.done
-.top:
-		move.w	d4,hsTopCur(a4)
-		move.w	d4,hsTopCur+2(a4)
 .set:
 		move.w	d4,vdpScrlX(a4)
 		move.w	d4,vdpScrlX+2(a4)
 .done:
 		movem.l	(sp)+,d0/d5
+		rts
+.top:
+		move.w	d4,hsTopCur(a4)
+		move.w	d4,hsTopCur+2(a4)
+		move.w	d4,vdpScrlX(a4)
+		move.w	d4,vdpScrlX+2(a4)
 		rts
 
 ; ----------------------------------------------------------------
