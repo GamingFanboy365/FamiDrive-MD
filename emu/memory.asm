@@ -330,7 +330,9 @@ mapper2Write:
 ; both registers make one (the game writes them one at a time).
 ;
 ; Recompiled code calls the handlers of $8000, $8001 and $A000
-; directly (mmc3WrSelect, mmc3WrData, mmc3WrMirror, value in d7).
+; directly (mmc3WrSelect, mmc3WrData, mmc3WrMirror, value in d7), or
+; does their work itself where it knows enough (mmc3_store in
+; tools/recomp6502.py), with mmc3Pair for R6 and R7.
 ; --------------------------------------------------------
 
 mmc3Write:
@@ -461,26 +463,46 @@ prgSwitch:
 		bcs.s	.bank_ok
 		subi.w	#NES_PRG16,d5
 .bank_ok:
+		move.l	d5,d6			; image: bank * $8000
+		swap	d6
+		lsr.l	#1,d6
+		addi.l	#PRG_IMAGES,d6
+		cmpa.l	d6,a1			; there already (games often pick
+		beq.s	.done			; the bank they're in)
 		if RECOMP
-		move.w	d5,d6			; the bank's code (emu/recomp.asm)
-		lsl.w	#2,d6
+		lsl.w	#2,d5			; the bank's code (emu/recomp.asm)
 		lea	(rcBankTables).l,a5
-		move.l	(a5,d6.w),rcCurTable(a4)
+		move.l	(a5,d5.w),rcCurTable(a4)
 		endif
-		swap	d5			; image: bank * $8000
-		lsr.l	#1,d5
-		addi.l	#PRG_IMAGES,d5
-		move.l	a0,d6
-		sub.l	a1,d6
-		cmpi.l	#$8000,d6
+		move.l	a0,d5
+		sub.l	a1,d5
+		cmpi.l	#$8000,d5
 		bhi.s	.pc_elsewhere
-		movea.l	d5,a0
-		adda.l	d6,a0
+		movea.l	d6,a0
+		adda.l	d5,a0
 .pc_elsewhere:
-		movea.l	d5,a1
-		move.l	d5,cpuPrgImg(a4)
+		movea.l	d6,a1
+		move.l	d6,cpuPrgImg(a4)
+.done:
 		endif
 		rts
+
+		if RECOMP
+; Recompiled code that knows $8000 picked R6 or R7 (PRG mode 0) puts
+; the value there itself, then calls this: the pair, as mmc3WrData.
+mmc3Pair:
+		moveq	#0,d5
+		move.b	mmc3Regs+6(a4),d5
+		lsr.b	#1,d5
+		bcs.s	.done
+		move.b	mmc3Regs+7(a4),d6
+		lsr.b	#1,d6
+		bcc.s	.done
+		cmp.b	d5,d6
+		beq.s	prgSwitch
+.done:
+		rts
+		endif
 
 ; ====================================================================
 ; ----------------------------------------------------------------

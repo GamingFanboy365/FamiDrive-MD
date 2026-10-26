@@ -1533,6 +1533,8 @@ class Gen:
 			elif s != r:
 				self.e('move.b %s,%s' % (s, r))
 			nz_done()
+		elif m in ('STA', 'STX', 'STY') and self.mmc3_store(i, {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m]):
+			pass
 		elif m in ('STA', 'STX', 'STY'):
 			r = {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m]
 			setup, d, post = self.dst(i)
@@ -1847,6 +1849,67 @@ class Gen:
 			self.stubs += ['\t\tmove.w #$%04X,d4' % i.arg, '\t\tjmp rcDispatch']
 		else:
 			self.stubs += ['\t\tjmp %s' % self.lab(i.arg)]
+
+	def mmc3_store(self, i, r):
+		"""A store of r to MMC3's $8000 or $8001 that the code around it
+		says enough about, in place of mmc3WrSelect or mmc3WrData (emu/
+		memory.asm): $8000 when bit 7 (CHR mode) is known, the handler only
+		if that changes; $8001 right after a known value went to $8000,
+		R0-R5 (CHR) the handler only if the bank changes, R6 and R7 (PRG
+		mode 0) the value put there, then mmc3Pair."""
+		if not (self.prg.mapper == 4 and i.mode == 'abs' and i.arg >= 0x8000):
+			return False
+		rng = self.ranges.get(i.pc)
+		v = rng[{'STA': 0, 'STX': 1, 'STY': 2}[i.m]] if rng else TOP
+		if i.arg & 0xE001 == 0x8000:
+			if v[1] < 0x80:
+				cc = 'mi'			# CHR mode 0: was it 1?
+			elif v[0] >= 0x80:
+				cc = 'pl'
+			else:
+				return False
+			back, slow = self.tag('Mb', i.pc), self.tag('Ms', i.pc)
+			self.e('tst.b mmc3Select+1(a4)', 'b%s.w %s' % (cc, slow), 'move.b %s,mmc3Select+1(a4)' % r,
+			       back + ':')		# (a join: X too)
+			self.stubs += [slow + ':', '\t\tmove.b %s,d7' % r, '\t\tjsr mmc3WrSelect', '\t\tjmp ' + back]
+			return True
+		if i.arg & 0xE001 == 0x8001:
+			sel = self.mmc3_select(i)
+			if sel is None:
+				return False
+			lo, hi = sel
+			same = self.tag('Mb', i.pc)
+			if lo == hi and lo & 7 < 6:	# R0-R5
+				self.e('cmp.b mmc3Regs+%d(a4),%s' % (lo & 7, r), 'beq.s ' + same,
+				       'move.b %s,d7' % r, 'jsr mmc3WrData', same + ':')
+			elif lo >> 3 == hi >> 3 and hi & 7 < 6:	# one of R0-R5: the register from $8000
+				self.e('moveq #7,d5', 'and.b mmc3Select+1(a4),d5', 'lea mmc3Regs(a4),a5',
+				       'cmp.b (a5,d5.w),%s' % r, 'beq.s ' + same, 'move.b %s,d7' % r, 'jsr mmc3WrData', same + ':')
+			elif lo == hi and not lo & 0x40:	# R6, R7 in PRG mode 0
+				self.e('move.b %s,mmc3Regs+%d(a4)' % (r, lo & 7), 'jsr mmc3Pair', *self.after_switch(i))
+			else:
+				return False
+			return True
+		return False
+
+	def mmc3_select(self, i):
+		"""What MMC3's $8000 holds at a store to $8001 (its range): what
+		was stored there just before, in code that falls through with no
+		jump into it, no call and no other mapper write."""
+		pc = i.pc
+		for _ in range(8):
+			if pc in self.targets:
+				return None
+			p = self.fall_from.get(pc)
+			if p is None or p.mode == 'rel' or p.m in ('JSR', 'JMP', 'RTS', 'RTI', 'BRK'):
+				return None
+			if p.m in ('STA', 'STX', 'STY') and p.mode == 'abs' and p.arg >= 0x8000 and p.arg & 0xE001 == 0x8000:
+				rng = self.ranges.get(p.pc)
+				return rng[{'STA': 0, 'STX': 1, 'STY': 2}[p.m]] if rng else TOP
+			if mapper_write(p):
+				return None
+			pc = p.pc
+		return None
 
 	def rmw_generic(self, i, ops, need, kind):
 		"""Read-modify-write on an I/O or computed address."""
@@ -2523,6 +2586,7 @@ class Gen:
 		self.loopy = self.loop_edges()
 		self.paired = self.php_pairs()
 		self.pha_paired = self.pha_pairs()
+		self.fall_from = {i.pc + i.n: i for i in self.insns.values() if i.pc + i.n in i.succ}
 		self.idle_exits, self.idle_jmps = self.idle_loops()
 		self.idle_heads = {self.insns[b].arg for b in self.idle_exits}
 		memo = {}
