@@ -1755,24 +1755,37 @@ class Gen:
 
 	def emit_engine_call(self, i):
 		"""JSR to a jump engine (engine_pattern) with entry A of the table
-		after it: straight to the entry, leaving what the engine would."""
+		after it: straight to the entry, leaving what the engine would, from
+		a copy of the table in the 68000 code. (Not the return address it
+		pushes and pulls again, below the stack pointer: as with routines
+		called with the 68000's jsr, nothing is pushed.)"""
 		z1, z2 = self.engines[i.arg]
 		t = self.engine_table(i)
-		ret, tbl = i.pc + 2, i.pc + 3
-		g, jt = self.tag('Jg', i.pc), self.tag('Jt', i.pc)
+		ret = i.pc + 2
+		g, jw, jt = self.tag('Jg', i.pc), self.tag('Jw', i.pc), self.tag('Jt', i.pc)
 		self.e('cmpi.b #%d,d0' % len(t), 'bcc.w ' + g)	# not in the table: the engine
-		# the return address it pushed, and pulled again
-		self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
-		       'move.b #$%02X,(a2,d3.w)' % (ret & 0xFF), 'addq.b #1,d3', 'swap d3',
-		       'move.b #$%02X,$%02X(a2)' % (ret & 0xFF, z1), 'move.b #$%02X,$%02X(a2)' % (ret >> 8, z1 + 1),
-		       'moveq #0,d6', 'move.b d0,d6', 'add.w d6,d6',	# ASL A, TAY
+		# the return address it pulled, in zp1
+		if z1 & 1:
+			self.e('move.b #$%02X,$%02X(a2)' % (ret & 0xFF, z1), 'move.b #$%02X,$%02X(a2)' % (ret >> 8, z1 + 1))
+		else:
+			self.e('move.w #$%04X,$%02X(a2)' % ((ret & 0xFF) << 8 | ret >> 8, z1))
+		self.e('moveq #0,d6', 'move.b d0,d6', 'add.w d6,d6',	# ASL A, TAY
 		       'move.b d6,d2', 'addq.b #2,d2',			# two INY
-		       'lea $%04X(a1),a5' % (tbl & 0x7FFF),
-		       'move.b (a5,d6.w),$%02X(a2)' % z2, 'move.b 1(a5,d6.w),d0', 'move.b d0,$%02X(a2)' % (z2 + 1))
+		       'lea %s(pc),a5' % jw)
+		# the entry in zp2, and its high byte in A
+		if z2 & 1:
+			self.e('move.b (a5,d6.w),$%02X(a2)' % z2, 'move.b 1(a5,d6.w),d0', 'move.b d0,$%02X(a2)' % (z2 + 1))
+		else:
+			self.e('move.w (a5,d6.w),d5', 'move.w d5,$%02X(a2)' % z2, 'move.b d5,d0')
 		if i.live_out & (N | Z | C):		# (as the table's entries need them)
-			self.e('andi.b #$E2,d3', 'tst.b d0', 'move sr,d5', 'andi.w #$C,d5', 'or.b d5,d3')	# C from ASL: 0
-		self.e('add.w d6,d6', 'lea %s(pc),a5' % jt, 'movea.l (a5,d6.w),a5', 'jmp (a5)')
+			self.e('andi.b #$E2,d3', 'ori.b #8,d3')	# the high byte: N set, Z clear; C from ASL: 0
+		self.e('add.w d6,d6')
+		if len(t) <= 63:			# (the addresses right after the entries)
+			self.e('movea.l %d(a5,d6.w),a5' % (2 * len(t)), 'jmp (a5)')
+		else:
+			self.e('lea %s(pc),a5' % jt, 'movea.l (a5,d6.w),a5', 'jmp (a5)')
 		self.xc = False
+		self.stubs += [jw + ':'] + ['\t\tdc.b $%02X,$%02X' % (a & 0xFF, a >> 8) for a in t]
 		self.stubs += [jt + ':'] + ['\t\tdc.l %s' % self.lab(a) for a in t]
 		self.stubs += [g + ':', '\t\tswap d3', '\t\tmove.b #$%02X,(a2,d3.w)' % (ret >> 8), '\t\tsubq.b #1,d3',
 			       '\t\tmove.b #$%02X,(a2,d3.w)' % (ret & 0xFF), '\t\tsubq.b #1,d3', '\t\tswap d3']
