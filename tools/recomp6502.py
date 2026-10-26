@@ -1243,6 +1243,18 @@ class Gen:
 		CLI, SED or CLD on the way, and nothing else jumps into the code
 		between them. The PHP can push d3's flags as they are, and the
 		PLP take them back (I and D are as they were)."""
+		return self.stack_pairs('PHP', 'PLP')
+
+	def pha_pairs(self):
+		"""PHAs whose byte only a PLA pulls, and those PLAs, as php_pairs,
+		with no jump back on the way (an NMI check there can leave through
+		rcDispatch) and no bank switch: the byte can go on the 68000's
+		stack, which nothing between them changes. (The 6502's stack
+		isn't written: as with routines called with the 68000's jsr.)"""
+		return self.stack_pairs('PHA', 'PLA', lambda i: not self.switches(i) and
+					all(s is None or s > i.pc for s in i.succ))
+
+	def stack_pairs(self, push, pull, also=lambda i: True):
 		preds = {pc: set() for pc in self.insns}
 		for i in self.insns.values():
 			for s in i.succ:
@@ -1251,21 +1263,22 @@ class Gen:
 		outside = set(self.entries) | set(self.tables) | {i.pc + 3 for i in self.insns.values() if i.m == 'JSR'}
 		found = set()
 		for p in self.insns.values():
-			if p.m != 'PHP':
+			if p.m != push:
 				continue
 			walk, work, ok = set(), [p.pc + 1], True
 			while work and ok:
 				pc = work.pop()
 				i = self.insns.get(pc)
-				if i is None or len(walk) > 32 or i.m in ('PLA', 'PHA', 'PHP', 'JSR', 'RTS', 'RTI', 'BRK', 'TSX',
-									   'TXS', 'SEI', 'CLI', 'SED', 'CLD') or None in i.succ:
+				if i is None or len(walk) > 32 or i.m in ('PLA', 'PHA', 'PHP', 'PLP', 'JSR', 'RTS', 'RTI', 'BRK',
+									   'TSX', 'TXS', 'SEI', 'CLI', 'SED', 'CLD') and i.m != pull or \
+				   None in i.succ or not also(i):
 					ok = False
 				elif pc not in walk:
 					walk.add(pc)
-					if i.m != 'PLP':
+					if i.m != pull:
 						work += i.succ
 			if ok and walk and not (walk & outside) and all(preds[pc] <= walk | {p.pc} for pc in walk):
-				found |= {p.pc} | {pc for pc in walk if self.insns[pc].m == 'PLP'}
+				found |= {p.pc} | {pc for pc in walk if self.insns[pc].m == pull}
 		return found
 
 	def loop_edges(self):
@@ -1668,12 +1681,17 @@ class Gen:
 			self.e('move.w #%d,cpuModeDec(a4)' % (m == 'SED'))
 		elif m == 'NOP':
 			pass
+		elif m == 'PHA' and i.pc in self.pha_paired:	# only its PLA reads it
+			self.e('move.b d0,-(sp)')
 		elif m == 'PHA':
 			self.e('swap d3', 'move.b d0,(a2,d3.w)', 'subq.b #1,d3', 'swap d3')
 		elif m == 'PHP' and i.pc in self.paired:	# only its PLP reads it: d3's flags as they are
 			self.e('move.b d3,d5', 'swap d3', 'move.b d5,(a2,d3.w)', 'subq.b #1,d3', 'swap d3')
 		elif m == 'PHP':
 			self.e('jsr famiGetP', 'swap d3', 'move.b d5,(a2,d3.w)', 'subq.b #1,d3', 'swap d3')
+		elif m == 'PLA' and i.pc in self.pha_paired:
+			self.e('move.b (sp)+,d0')
+			nz_done()
 		elif m == 'PLA':
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d0', 'swap d3', 'tst.b d0')
 			nz_done()
@@ -2482,6 +2500,7 @@ class Gen:
 		self.counted = self.counted_loops()
 		self.loopy = self.loop_edges()
 		self.paired = self.php_pairs()
+		self.pha_paired = self.pha_pairs()
 		self.idle_exits, self.idle_jmps = self.idle_loops()
 		self.idle_heads = {self.insns[b].arg for b in self.idle_exits}
 		memo = {}
