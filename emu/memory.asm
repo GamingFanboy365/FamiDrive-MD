@@ -419,9 +419,9 @@ mmc3WrData:
 		jmp	(MD_ShowError).l
 
 ; --------------------------------------------------------
-; MMC3: a CHR bank register -> the MD tiles that show its bank
-; (chrUpdate), and chrSlotPtr, the bank each 1 KB of the pattern
-; tables shows. The copy of them (a3) is left as it was: chrStale
+; MMC3: a CHR bank register -> the MD tiles that show its bank, and
+; chrSlotPtr, the bank each 1 KB of the pattern tables shows
+; (chrUpdate). The copy of them (a3) is left as it was: chrStale
 ; has the 1 KB parts it's out of date for (chrSync). CHR mode 0:
 ; R0, R1 are 2 KB at $0000, $0800, R2-R5 1 KB at $1000-$1C00;
 ; mode 1 swaps the halves.
@@ -460,21 +460,13 @@ mmc3Chr:
 		lsl.l	#2,d0
 		movea.l	emuChrRom(a4),a0
 		adda.l	d0,a0
-		bsr.w	chrUpdate
-		move.w	d4,d5			; and the pattern tables show a0 there:
-		rol.w	#6,d5			; d5 = d4 / 1 KB (d4 is whole KB)
-		bset	d5,chrStale+1(a4)
-		lea	chrSlotPtr(a4),a5
-		lsl.w	#2,d5
-		move.l	a0,(a5,d5.w)
-		cmpi.w	#$400,d6		; 2 KB: the next 1 KB too
-		beq.s	.slots
+		bsr.w	chrUpdate		; 1 KB at a time
+		cmpi.w	#$400,d6
+		beq.s	.one_done
 		lea	$400(a0),a0
-		move.l	a0,4(a5,d5.w)
-		lsr.w	#2,d5
-		addq.w	#1,d5
-		bset	d5,chrStale+1(a4)
-.slots:
+		addi.w	#$400,d4
+		bsr.w	chrUpdate
+.one_done:
 		movem.l	(sp)+,d0/a0
 .done:
 		rts

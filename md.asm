@@ -40,8 +40,8 @@ chrBankMask	set chrBankMask-1
 
 RAM_Fami_ROM	equ $FFFF0000		; PRG-ROM (not banked)
 RAM_Fami_WRAM	equ $FFFF0000		; PRG RAM, $6000-$7FFF (banked PRG: PRG_IMAGES)
-RAM_Fami_ChrIds	equ $FFFF2000		; MMC3: the IDs of the tiles in the pattern tables (chrUpdate)
-RAM_Fami_ChrDma	equ $FFFF2400		; MMC3: MD tiles for VRAM, queued for VBlank (chrUpdate, chrDma), 2 KB
+RAM_Fami_ChrDma	equ $FFFF2000		; MMC3: MD tiles for VRAM, queued for VBlank (chrUpdate, chrDma), 2 KB
+RAM_Fami_ChrCache equ $FFFF2800		; MMC3: bank switches seen before, 32 lines of 512 bytes (chrUpdate)
 RAM_Fami_Emu	equ $FFFF8000		; Emulator buffer
 RAM_RcRet	equ RAM_Fami_Emu+$A50	; recompiled code: RTS return caches (rcDispatchC), 120 of 12 bytes
 RAM_Fami_RAM	equ $FFFF9000		; RAM size: $800
@@ -667,14 +667,12 @@ Fami_LoadRom:
 		move.l	d7,(a5)+
 		dbf	d1,.clrwram
 		if (NES_MAPPER=4)&&(NES_CHR8<>0)
-		lea	(CHR_ID).l,a5		; MMC3: the IDs of the tiles in the CHR
-		move.l	a6,-(sp)		; copied below (chrUpdate)
-		lea	(RAM_Fami_ChrIds).l,a6
-		move.w	#$400/4-1,d1
-.chr_ids:
-		move.l	(a5)+,(a6)+
-		dbf	d1,.chr_ids
-		movea.l	(sp)+,a6
+		lea	(RAM_Fami_ChrCache).l,a5 ; MMC3: no bank switches seen yet
+		moveq	#32-1,d1		; (chrUpdate)
+.chr_cache:
+		clr.l	(a5)
+		lea	512(a5),a5
+		dbf	d1,.chr_cache
 		endif
 		movea.l	a0,a4			; CHR-ROM: after PRG-ROM (as romGrabPrg
 		adda.l	#$10+NES_PRG16*$4000,a4	; leaves a4)
@@ -709,6 +707,15 @@ Fami_LoadRom:
 		move.w	#1,ppuChrRam(a3)
 		bra.s	.chr_done
 .chr_rom:
+		if (NES_MAPPER=4)&&(NES_CHR8<>0)
+		lea	chrSlotPtr(a3),a5	; MMC3: the CHR-ROM each 1 KB of the
+		move.l	a4,d7			; pattern tables shows (chrUpdate),
+		moveq	#8-1,d1			; the first 8 KB as copied below
+.chr_slots:
+		move.l	d7,(a5)+
+		addi.l	#$400,d7
+		dbf	d1,.chr_slots
+		endif
 		lea	(RAM_Fami_PPU).l,a5
 		move.l	#$7FF,d7
 .copy_chr:
