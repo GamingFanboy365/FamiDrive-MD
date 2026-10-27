@@ -208,10 +208,26 @@ rdPPU_Data:
 		move.w	ppuDataLast(a4),d7
 		move.w	ppuAddrBase(a4),d4
 		andi.w	#$3FFF,d4
+		cmpi.w	#$2000,d4
+		bcs.s	.pattern
+.copy:
 		move.b	(a3,d4.w),ppuDataLast+1(a4)
+.next:
 		move.w	ppuAddrIncr(a4),d4
 		add.w	d4,ppuAddrBase(a4)
 		rts
+.pattern:
+		move.w	d4,d5			; MMC3: a 1 KB the copy is out of
+		rol.w	#6,d5			; date for (chrStale; bits 2-0 =
+		btst	d5,chrStale+1(a4)	; d4 / 1 KB)? Then from its bank
+		beq.s	.copy
+		andi.w	#7,d5
+		lsl.w	#2,d5
+		lea	chrSlotPtr(a4),a5
+		movea.l	(a5,d5.w),a5
+		andi.w	#$3FF,d4
+		move.b	(a5,d4.w),ppuDataLast+1(a4)
+		bra.s	.next
 
 ; ====================================================================
 ; ----------------------------------------------------------------
@@ -396,16 +412,18 @@ mmc3WrData:
 		bne.s	.done
 		btst	#6,mmc3Select+1(a4)	; PRG mode 1: R6 at $C000
 		bne.s	.prg_mode_1
-		bsr	prgSwitch
+		bsr.w	prgSwitch
 		jmp	(RAM_EmuLoop).l
 .prg_mode_1:
 		lea	(errStrMmc3Prg).l,a0
 		jmp	(MD_ShowError).l
 
 ; --------------------------------------------------------
-; MMC3: a CHR bank register -> its bank in the copy of the pattern
-; tables (a3), and the MD tiles that show it (chrUpdate). CHR mode
-; 0: R0, R1 are 2 KB at $0000, $0800, R2-R5 1 KB at $1000-$1C00;
+; MMC3: a CHR bank register -> the MD tiles that show its bank
+; (chrUpdate), and chrSlotPtr, the bank each 1 KB of the pattern
+; tables shows. The copy of them (a3) is left as it was: chrStale
+; has the 1 KB parts it's out of date for (chrSync). CHR mode 0:
+; R0, R1 are 2 KB at $0000, $0800, R2-R5 1 KB at $1000-$1C00;
 ; mode 1 swaps the halves.
 ;
 ; d5.w - the register, 0-5
@@ -443,6 +461,20 @@ mmc3Chr:
 		movea.l	emuChrRom(a4),a0
 		adda.l	d0,a0
 		bsr.w	chrUpdate
+		move.w	d4,d5			; and the pattern tables show a0 there:
+		rol.w	#6,d5			; d5 = d4 / 1 KB (d4 is whole KB)
+		bset	d5,chrStale+1(a4)
+		lea	chrSlotPtr(a4),a5
+		lsl.w	#2,d5
+		move.l	a0,(a5,d5.w)
+		cmpi.w	#$400,d6		; 2 KB: the next 1 KB too
+		beq.s	.slots
+		lea	$400(a0),a0
+		move.l	a0,4(a5,d5.w)
+		lsr.w	#2,d5
+		addq.w	#1,d5
+		bset	d5,chrStale+1(a4)
+.slots:
 		movem.l	(sp)+,d0/a0
 .done:
 		rts
@@ -617,7 +649,7 @@ readInput:
 ; that has one (rows of a flipped sprite count from the bottom). A
 ; sprite with no opaque pixel never hits.
 ;
-; a3 - PPU buffer (pattern tables at the start)
+; a3 - PPU buffer (pattern tables at the start, see chrStale)
 ; ----------------------------------------------------------------
 
 sp0FirstRow:
@@ -641,6 +673,17 @@ sp0FirstRow:
 .addr:
 		movem.l	d0-d1/a0,-(sp)
 		lea	(a3,d4.w),a0
+		move.w	d4,d0			; MMC3: a 1 KB the copy is out of
+		rol.w	#6,d0			; date for (chrStale; bits 2-0 =
+		btst	d0,chrStale+1(a4)	; d4 / 1 KB)? Then from its bank
+		beq.s	.copy
+		andi.w	#7,d0
+		lsl.w	#2,d0
+		lea	chrSlotPtr(a4),a0
+		movea.l	(a0,d0.w),a0
+		andi.w	#$3FF,d4
+		adda.w	d4,a0
+.copy:
 		moveq	#0,d0			; row
 .row:
 		move.w	d0,d1			; row -> byte: rows 8-15 are the next tile

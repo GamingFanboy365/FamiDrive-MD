@@ -160,6 +160,8 @@ chrDmaTail	ds.w 1			; and where the next go
 nmiCredit	ds.w 1			; recompiled code: VBlanks not yet answered by an NMI (rcNmi)
 nmiWaitDue	ds.w 1			; and 1: one is due where the game waits for it (rcNmiWait)
 nmiHold		ds.w 1			; 1: the game took its last NMI waiting for it
+chrSlotPtr	ds.l 8			; MMC3: the CHR-ROM data each 1 KB of the pattern tables shows,
+chrStale	ds.w 1			; and those a3's copy is out of date for (bits 0-7, chrSync)
 		finish
 sprTable2	equ vdpSprData2-vdpSprData
 

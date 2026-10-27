@@ -1038,7 +1038,7 @@ ppuRedrawPlanes:
 		rts
 
 ; ----------------------------------------------------------------
-; Pattern tables (the copy in a3) -> MD tiles. MD tiles $000-$0FF
+; Pattern tables (the copy in a3, chrSync) -> MD tiles. MD tiles $000-$0FF
 ; hold the BG table (the one $2000 bit 4 picks), and for sprites,
 ; $100-$1FF table 0 and $200-$2FF table 1, with their opaque pixels'
 ; colors +8 (the sprite palettes, see ppuSetColor). Both tables are
@@ -1089,6 +1089,7 @@ chrToBg:
 		move.b	ppuChrBank+1(a4),d5	; the BG's: bit 7
 		eor.b	d7,d5
 		bmi.s	.not_bg
+		bsr.w	chrSync
 		lea	(a3,d4.w),a5
 		andi.w	#$FFF,d4		; VRAM: tile * 32
 		add.w	d4,d4
@@ -1103,6 +1104,7 @@ chrToBg:
 ; Into the sprite set for their table
 chrToSprites:
 		movem.l	d4/d6-d7/a5,-(sp)
+		bsr.w	chrSync
 		lea	(a3,d4.w),a5
 		add.w	d4,d4			; VRAM: $2000 + tile * 32
 		addi.w	#$2000,d4
@@ -1172,10 +1174,49 @@ chrConvert:
 		rts
 
 ; ----------------------------------------------------------------
-; New CHR-ROM data for part of the pattern tables (MMC3): the tiles
-; that differ from those there now go into the copy (a3), and their
-; MD tiles, made as the ROM was built (CHR_MD in md.asm), into a
-; queue for VRAM. MD_Vint copies those by DMA in VBlank (chrVblank),
+; MMC3: the copy of the pattern tables (a3) up to date, before it's
+; read whole: chrUpdate leaves it as it was, chrSlotPtr has the
+; CHR-ROM data each 1 KB of the tables shows now, and chrStale those
+; the copy is out of date for (bit 0: $0000-$03FF, and so on).
+; ----------------------------------------------------------------
+
+chrSync:
+		tst.w	chrStale(a4)
+		bne.s	.stale
+		rts
+.stale:
+		movem.l	d0-d1/a0-a1/a5,-(sp)
+		move.w	chrStale(a4),d1
+		clr.w	chrStale(a4)
+		lea	chrSlotPtr(a4),a5
+		movea.l	a3,a1
+.slot:
+		lsr.w	#1,d1
+		bcs.s	.stale_kb
+		lea	$400(a1),a1		; up to date
+		bra.s	.next
+.stale_kb:
+		movea.l	(a5),a0
+		moveq	#$400/16-1,d0
+.copy:
+		move.l	(a0)+,(a1)+
+		move.l	(a0)+,(a1)+
+		move.l	(a0)+,(a1)+
+		move.l	(a0)+,(a1)+
+		dbf	d0,.copy
+.next:
+		addq.w	#4,a5
+		tst.w	d1
+		bne.s	.slot
+		movem.l	(sp)+,d0-d1/a0-a1/a5
+		rts
+
+; ----------------------------------------------------------------
+; New CHR-ROM data for part of the pattern tables (MMC3): the MD
+; tiles of those of its tiles that differ from the ones there now,
+; made as the ROM was built (CHR_MD in md.asm), into a queue for
+; VRAM (the copy of the tables in a3 stays as it was: mmc3Chr,
+; chrSync). MD_Vint copies those by DMA in VBlank (chrVblank),
 ; when the VDP takes them ten times as fast as while it draws.
 ; A game that switches banks to animate tiles changes few of them
 ; (Super Mario Bros. 2: 20 to 40 of a 2 KB bank's 128). Tiles are
@@ -1240,23 +1281,11 @@ chrUpdate:
 		movem.l	(sp)+,d0-d3/d5-d7/a1-a2/a5
 		rts
 
-	; tiles d1 to d2-1: into the copy, and their MD tiles queued
+	; tiles d1 to d2-1: their MD tiles queued
 .flush:
 		movem.l	d0/a0-a1,-(sp)
 		sub.w	d1,d2			; d2: tiles
-		lsl.w	#4,d1			; d1: the first's offset
-		adda.w	d1,a0
-		lea	(a3,d4.w),a1
-		adda.w	d1,a1
-		move.w	d2,d0
-		subq.w	#1,d0
-.copy:
-		move.l	(a0)+,(a1)+
-		move.l	(a0)+,(a1)+
-		move.l	(a0)+,(a1)+
-		move.l	(a0)+,(a1)+
-		dbf	d0,.copy
-		add.w	d1,d1			; MD tiles: twice the size
+		lsl.w	#5,d1			; d1: the first's offset in MD tiles
 		lsl.w	#4,d2			; words: 16 a tile
 		tst.w	d7
 		bmi.s	.sprites
