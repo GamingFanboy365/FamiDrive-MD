@@ -120,10 +120,12 @@ handheld's differences.
 - Sound is approximate: no DMC (sample) channel, the PSG only plays 50% squares so pulse duty is
   approximated by volume, pulse notes below about 109 Hz play an octave up, and timing assumes
   an NTSC console
-- Recompiled Super Mario Bros. 2 slows to about 50-58 game frames per second in the busiest moments
-  of its horizontally scrolling levels (such as 6-1). Interpreted, it runs at about a tenth of
-  full speed, and its story screen garbles some text lines: its menu code assumes it never runs
-  late
+- Recompiled Super Mario Bros. 2 runs at 60 game frames per second in most of its levels, but slows
+  in the busiest moments of some (measured in Genesis Plus GX, as a Mega Drive and changed to act
+  like an AtGames handheld, whose frames are shorter): World 4-1, with several Flurries on screen,
+  to about 54-56 on a Mega Drive and 50-56 on the handheld, and on the handheld 2-1, 5-1 and 6-1
+  to about 56-59. Interpreted, it runs at about a tenth of full speed, and its story screen
+  garbles some text lines: its menu code assumes it never runs late
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its

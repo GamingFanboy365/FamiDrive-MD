@@ -50,15 +50,17 @@ finished in #1 to #6.
 - [ ] **Banked games' calls into banks.** The fixed bank's code calls a
   bank's code, and returns into it, through `rcDispatch` (a few times a
   frame in Super Mario Bros. 2): which bank is at $8000 isn't known where
-  the fixed bank calls it. Super Mario Bros. 2 still slows to about 50-58
-  frames a second in the busiest moments of its horizontally scrolling
-  levels; what's left is spread out: calls that keep the 6502's return
-  address (its object handlers, reached through its jump engine, leave
-  with PLA PLA RTS, so they get no copies), nametable writes, reading the
-  pads, the sound and sprite conversion. `zp,X` addresses that may wrap
-  cost 8 cycles more than ones the index range proves don't: proving it
-  for indexes kept in RAM (Super Mario Bros. 2's object slot at $12) would
-  need to know nothing else writes there (it doesn't hold: `ROR $12`).
+  the fixed bank calls it. Super Mario Bros. 2 still slows in the busiest
+  moments of some levels (World 4-1 to about 54-56 frames a second on a
+  Mega Drive, 50-56 on an AtGames handheld); what's left is spread out:
+  calls that keep the 6502's return address (its object handlers, reached
+  through its jump engine, leave with PLA PLA RTS, so they get no copies),
+  nametable writes, reading the pads, the sound, sprite conversion and
+  copying the tiles that CHR bank switches change to VRAM. `zp,X`
+  addresses that may wrap cost 8 cycles more than ones the index range
+  proves don't: proving it for indexes kept in RAM (Super Mario Bros. 2's
+  object slot at $12) would need to know nothing else writes there (it
+  doesn't hold: `ROR $12`).
 - [ ] **Gameplay tests.** NES RAM is compared with Nestopia's only for the
   attract demo, up to the NES's first lag frame; gameplay checks are by eye.
   A test that replays input per game frame (not per video frame) could
