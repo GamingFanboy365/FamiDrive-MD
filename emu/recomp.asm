@@ -7,12 +7,36 @@
 ; keeps the interpreter's registers (see emuLoop) and calls the
 ; same memory, PPU and APU handlers. Those end with
 ; "jmp (RAM_EmuLoop).l", so rcStart turns RAM_EmuLoop into an rts.
+;
+; Banked PRG (PRG_BANKED): each bank's code has its own rcTable,
+; for $8000-$BFFF while it's at $8000 (rcCurTable, set by
+; prgSwitch); the fixed bank's rcTable is for $C000-$FFFF.
+; Translated code reads and writes PRG RAM at rcWram+addr(a4).
 ; ----------------------------------------------------------------
+
+rcWram		equ RAM_Fami_WRAM-RAM_Fami_Emu-$6000
 
 rcStart:
 		move.l	sp,(RAM_RcStack).l
 		move.w	#$4E75,(RAM_EmuLoop).l	; rts
+		lea	(RAM_RcRet).w,a5	; return caches: none kept (an RTS to
+		move.w	#2*120-1,d5		; $0000 would find rcDispatch)
+.ret_cache:
+		clr.w	(a5)+
+		move.l	#rcDispatch,(a5)+
+		dbf	d5,.ret_cache
+		if PRG_BANKED
+		move.l	a1,d4			; the code of the bank at $8000
+		subi.l	#PRG_IMAGES,d4
+		lsr.l	#8,d4			; image / $8000 * 4
+		lsr.l	#5,d4
+		lea	(rcBankTables).l,a5
+		move.l	(a5,d4.w),rcCurTable(a4)
+		movea.l	a1,a0			; translated code reads PRG through a0
+		adda.l	#$8000,a0
+		else
 		lea	(RAM_Fami_ROM+$8000).l,a0	; translated code reads PRG through a0
+		endif
 		move.w	#rcVecReset,d4		; falls into rcDispatch
 
 ; ----------------------------------------------------------------
@@ -26,7 +50,30 @@ rcStart:
 ; ----------------------------------------------------------------
 
 rcDispatch:
-		movea.l	(RAM_RcStack).l,sp
+		movea.l	(RAM_RcStack).w,sp
+		if PRG_BANKED
+		moveq	#0,d5
+		move.w	d4,d5
+		bpl.s	.ram			; below $8000
+		lsl.w	#2,d5			; the offset in a 16 KB bank, x 4
+		bcs.s	.fixed			; (out went bit 14)
+		movea.l	rcCurTable(a4),a5	; $8000-$BFFF: the bank at $8000's
+		move.l	(a5,d5.l),d5
+		beq.s	.interpret
+		movea.l	d5,a5
+		jmp	(a5)
+.fixed:
+		lea	(rcTable).l,a5		; $C000-$FFFF: the fixed bank's code
+		move.l	(a5,d5.l),d5
+		beq.s	.interpret
+		movea.l	d5,a5
+		jmp	(a5)
+.interpret:
+		andi.l	#$7FFF,d4		; not translated: interpret it, in
+		movea.l	a1,a0			; the image
+		adda.l	d4,a0
+		bra.s	rcInterp
+		else
 		cmpi.w	#$8000,d4
 		bcs.s	.ram
 		andi.l	#rcPrgMask,d4
@@ -41,6 +88,7 @@ rcDispatch:
 		movea.l	a1,a0
 		adda.l	d4,a0
 		bra.s	rcInterp
+		endif
 
 	; code in RAM: a JMP written there (a common way to make a jump
 	; table) goes straight to its target, anything else is interpreted
@@ -77,9 +125,19 @@ rcInterpStep:
 		tst.w	FamiMdVint(a4)
 		bne.s	.vblank
 		move.l	d4,d5			; translated?
+		if PRG_BANKED
+		lea	(rcTable).l,a5		; $C000-$FFFF: the fixed bank's code
+		btst	#14,d5
+		bne.s	.fixed
+		movea.l	rcCurTable(a4),a5	; $8000-$BFFF: the bank at $8000's
+.fixed:
+		andi.l	#$3FFF,d5
+		lsl.l	#2,d5
+		else
 		andi.l	#rcPrgMask,d5
 		lsl.l	#2,d5
 		lea	(rcTable).l,a5
+		endif
 		move.l	(a5,d5.l),d5
 		bne.s	.translated
 .step:
@@ -102,15 +160,81 @@ rcInterpStep:
 
 .translated:
 		move.w	#$4E75,(RAM_EmuLoop).l
+		if PRG_BANKED
+		movea.l	a1,a0
+		adda.l	#$8000,a0
+		else
 		lea	(RAM_Fami_ROM+$8000).l,a0
+		endif
 		movea.l	d5,a5
 		jmp	(a5)
 
 ; ----------------------------------------------------------------
-; VBlank check, called on backward jumps when FamiMdVint is set
+; An RTS with a return cache (one tools/recomp6502.py can't guess the
+; returns of): as rcDispatch, keeping the code it finds there for the
+; next time, unless that can change: below $8000, or for an RTS in the
+; fixed bank's code (rcDispatchCF), $8000-$BFFF, whose code goes by
+; the bank there then. (A bank's RTS returns to its own code there.)
+; A cache keeps the last two: an address and its code, twice; the new
+; one goes first, the first second.
+;
+; d4.w - 6502 address
+; a5 - its cache + 2: the first address before, its code at (a5)
+; ----------------------------------------------------------------
+
+rcDispatchCF:
+		if PRG_BANKED
+		btst	#14,d4
+		beq.w	rcDispatch
+		endif
+rcDispatchC:
+		tst.w	d4
+		bpl.w	rcDispatch
+		move.l	a5,d6
+		movea.l	(RAM_RcStack).w,sp
+		moveq	#0,d5
+		move.w	d4,d5
+		if PRG_BANKED
+		lsl.w	#2,d5
+		bcs.s	.fixed
+		movea.l	rcCurTable(a4),a5
+		bra.s	.look
+.fixed:
+		lea	(rcTable).l,a5
+.look:
+		else
+		andi.w	#rcPrgMask,d5
+		lsl.l	#2,d5
+		lea	(rcTable).l,a5
+		endif
+		move.l	(a5,d5.l),d5
+		beq.w	rcDispatch		; not translated
+		movea.l	d6,a5
+		move.w	-2(a5),4(a5)
+		move.l	(a5),6(a5)
+		move.w	d4,-2(a5)
+		move.l	d5,(a5)
+		movea.l	d5,a5
+		jmp	(a5)
+
+; ----------------------------------------------------------------
+; NMI checks, on backward jumps
 ;
 ; d4.w - 6502 address the code continues at
 ; Returns if no NMI is taken, else jumps to the NMI handler.
+;
+; Each VBlank makes an NMI due (nmiCredit, MD_Vint). In a loop that
+; waits for VBlank (one tools/recomp6502.py recognises) it's taken
+; as soon as it's due: rcNmiWait (nmiWaitDue), or rcNmiIdle.
+; Elsewhere (rcNmi, FamiMdVint) it comes at once, as on a NES, or,
+; if the game took its last NMI waiting for it (nmiHold), when the
+; game waits again, up to a frame later. A game whose frame needs a
+; bit more than an MD frame then takes a bit more than one, instead
+; of two: an NMI in the middle of its frame would make it wait for
+; the next VBlank after finishing. NMIs keep VBlank's pace (music
+; doesn't slow down): one a frame late (nmiCredit 2) comes wherever
+; the game is, and the next ones come at once until the game takes
+; one waiting again.
 ;
 ; rcNmiIdle is the check in a JMP-to-itself loop, where a game that
 ; runs in its NMI handler waits: each NMI taken there is a frame
@@ -120,18 +244,29 @@ rcInterpStep:
 rcNmiIdle:
 		if FPS
 		tst.w	cpuFamiVint(a4)
-		bne.s	rcNmi
+		bne.s	rcNmiWait
 		tst.w	ppuNmiFlag(a4)
-		beq.s	rcNmi
+		beq.s	rcNmiWait
 		addq.w	#1,fpsIdle(a4)
 		endif
+rcNmiWait:
+		moveq	#1,d5			; (nmiHold, if it's taken)
+		bra.s	rcNmiDue
 rcNmi:
+		moveq	#0,d5
+rcNmiDue:
 		clr.w	FamiMdVint(a4)
+		clr.w	nmiWaitDue(a4)
 		move.w	#$80,ppuStatus(a4)
 		tst.w	cpuFamiVint(a4)		; already in the NMI handler: the
 		bne.s	.late			; next NMI when it returns (rcRti)
 		tst.w	ppuNmiFlag(a4)
 		beq.s	.none
+		move.w	d5,nmiHold(a4)
+		subq.w	#1,nmiCredit(a4)	; (one for each VBlank)
+		bpl.s	.take
+		clr.w	nmiCredit(a4)
+.take:
 		addq.l	#4,sp			; not returning
 		move.w	#1,cpuFamiVint(a4)
 		jsr	ppuFrameStart
@@ -154,7 +289,9 @@ rcNmi:
 		bra	rcDispatch
 .late:
 		move.w	#1,vbLate(a4)
+		rts
 .none:
+		clr.w	nmiCredit(a4)		; NMIs off: none due
 		rts
 
 ; ----------------------------------------------------------------
@@ -162,15 +299,24 @@ rcNmi:
 ;
 ; A game whose frame outlasts an MD frame would otherwise wait for
 ; the VBlank after next: each frame would take two. Its next NMI
-; comes as soon as the handler returns instead.
+; comes as soon as the handler returns instead (vbLate: a VBlank
+; came while it ran), or when the game next waits for it (one due).
 ; ----------------------------------------------------------------
 
 rcRti:
 		clr.w	cpuFamiVint(a4)
+		tst.w	nmiCredit(a4)
+		beq.s	.none_due
+		move.w	#1,nmiWaitDue(a4)
+		cmpi.w	#2,nmiCredit(a4)	; a frame late: wherever the game is
+		bcc.s	.now
+.none_due:
 		tst.w	vbLate(a4)
 		beq.s	.on_time
+.now:
 		clr.w	vbLate(a4)
 		move.w	#1,FamiMdVint(a4)
+		move.w	#1,nmiWaitDue(a4)
 .on_time:
 		bra	rcDispatch
 
@@ -193,6 +339,14 @@ rcRead16:
 		move.b	(a0,d6.w),d7		; a0 = PRG copy + $8000
 		rts
 .io:
+		if PRG_BANKED
+		cmpi.w	#$6000,d6		; PRG RAM (always there: md.asm)
+		bcs.s	.regs
+		lea	(RAM_Fami_WRAM-$6000).l,a5
+		move.b	(a5,d6.w),d7
+		rts
+.regs:
+		endif
 		move.w	d6,d4
 		andi.w	#$FF,d4
 		lsr.w	#8,d6
@@ -205,6 +359,16 @@ rcWrite16:
 		move.b	d7,(a2,d6.w)
 		rts
 .not_ram:
+		if PRG_BANKED
+		cmpi.w	#$6000,d6		; PRG RAM (always there: md.asm)
+		bcs.s	.regs
+		tst.w	d6
+		bmi.s	.regs
+		lea	(RAM_Fami_WRAM-$6000).l,a5
+		move.b	d7,(a5,d6.w)
+		rts
+.regs:
+		endif
 		move.w	d6,d4
 		andi.w	#$FF,d4
 		lsr.w	#8,d6
@@ -230,7 +394,11 @@ rcReadPad:
 .other:
 		move.w	d4,d6
 		addi.w	#$4016,d6
+		if PRG_BANKED
+		bra.w	rcRead16		; (past the PRG RAM code)
+		else
 		bra.s	rcRead16
+		endif
 
 ; ----------------------------------------------------------------
 ; A delay loop: DEX or DEY, then BNE back to it, or two of them nested

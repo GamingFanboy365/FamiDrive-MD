@@ -14,6 +14,12 @@ README.md describes the features, the build and the source layout; TODO.md lists
   `struct`/`finish` macros in `system/macros.asm` end the phase before restoring the address.
 - `md.asm` and `build.bat` have CRLF line endings, `emu/*.asm` and `system/macros.asm` LF.
   Keep each file's endings.
+- Give branches and calls to labels further on an explicit size when they're far (`bsr.w`,
+  `jsr (label).l` past $8000). AS takes them as short in its first pass, and if the code then
+  grows, a short forward branch it checks with first-pass addresses fails ("jump distance too
+  big" on a `.s` branch that isn't far, or "addressing mode not allowed" on a `(pc,dN)` jump
+  table). Build all three variants (plain, `--recompile`, `--recompile --fps`) after changing
+  code: they lay it out differently.
 
 ## Never commit
 

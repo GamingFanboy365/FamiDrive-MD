@@ -20,7 +20,7 @@
 ; it takes the last two NES sprite slots.
 ; ----------------------------------------------------------------
 
-fpsTiles	equ $201			; digit tiles, after the blank tile $200
+fpsTiles	equ $301			; digit tiles, after the NES tile sets ($000-$2FF)
 fpsSprite	equ 62				; first sprite slot used
 fpsX		equ $80+256-8-16		; MD sprite coordinates
 fpsY		equ $80+8

@@ -9,7 +9,8 @@ Nemul, originally made by Mairtrus. Credit to Mairtrus for the original work.
 
 - Runs on real hardware (the original Nemul did not)
 - Passes nestest's tests for all official 6502 opcodes
-- Mappers 0 (NROM) and 3 (CNROM), with CHR-ROM or CHR-RAM
+- Mappers 0 (NROM), 2 (UxROM), 3 (CNROM) and 4 (MMC3, the way Super Mario Bros. 2 uses it), with
+  CHR-ROM or CHR-RAM, and PRG RAM at $6000-$7FFF for mappers 2 and 4
 - Working vertical scrolling using both scroll layers (the NES map height differs from the MD's)
 - Horizontal scroll changes partway down the screen (such as a still status bar above a scrolling
   level) use the MD's line scroll
@@ -33,7 +34,12 @@ The build uses the [AS macro assembler](http://john.ccac.rwth-aachen.de:8000/as/
 while the game runs. Games that use a lot of CPU run many times faster: Pinball's gameplay goes
 from about 3.5 to about 55 game frames per second, as fast as on a NES (which also drops frames
 when the game is busy). Super Mario Bros., Balloon Fight, Ice Climber and Excitebike run at full
-speed (60) while you play.
+speed (60) while you play. Games with banked PRG-ROM (mappers 2 and 4) are translated a bank at a
+time: Super Mario Bros. 2 goes from about 6 to 60 game frames per second in most of its levels.
+
+When a game's frame needs a little more time than an MD frame, its next NMI waits until the game
+is ready for it (up to a frame), so the game runs a little slower instead of at half speed. NMIs
+still come once per VBlank on average, so music keeps its tempo.
 
 The translated code goes to `out/recomp.asm`. It is the game's code in another form, so like the
 built ROM it stays out of git and shouldn't be published. Code the recompiler can't find ahead of
@@ -55,11 +61,14 @@ hide or show it. Builds without `--fps` don't contain it.
 ### Supported NES ROMs
 
 - iNES format (`.nes`)
-- Mapper 0 (NROM) or mapper 3 (CNROM)
-- 16 KB or 32 KB of PRG-ROM
+- Mapper 0 (NROM), 2 (UxROM), 3 (CNROM) or 4 (MMC3)
+- 16 KB or 32 KB of PRG-ROM, or with mappers 2 and 4, 32 KB to 512 KB
 - CHR-ROM or CHR-RAM
 
-Anything else shows an error screen saying what isn't supported.
+Anything else shows an error screen saying what isn't supported. MMC3 games work if they switch
+PRG-ROM at $8000-$BFFF in 16 KB pairs and don't use its scanline interrupt, as Super Mario Bros. 2
+does. Games that switch its 8 KB banks one at a time, or time a split screen with the interrupt
+(Super Mario Bros. 3's status bar), don't work yet.
 
 ### Checks
 
@@ -85,6 +94,7 @@ handheld's differences.
 | `emu/recomp.asm` | Support code for recompiled games (dispatch, NMI, interpreter fallback) |
 | `emu/fps.asm` | FPS counter (`--fps` builds) |
 | `tools/recomp6502.py` | The 6502-to-68000 recompiler |
+| `tools/nesinfo.py` | Reads the NES ROM's header as it's built (md.asm lays out banked PRG-ROM from it), and for MMC3 games turns the CHR-ROM into MD tiles, which bank switches copy |
 | `tools/hwtest/` | A test ROM that shows what a console does differently from a Mega Drive in what FamiDrive depends on (see its README) |
 | `tools/test/` | Checks that FamiDrive still works on an AtGames handheld (`run.sh`, see Checks above) |
 | `system/md/error.asm` | Error screen |
@@ -110,7 +120,12 @@ handheld's differences.
 - Sound is approximate: no DMC (sample) channel, the PSG only plays 50% squares so pulse duty is
   approximated by volume, pulse notes below about 109 Hz play an octave up, and timing assumes
   an NTSC console
-- 8x16 sprites show the wrong tiles (NES 8x16 sprites work differently from the MD's)
+- Recompiled Super Mario Bros. 2 runs at 60 game frames per second in most of its levels, but slows
+  in the busiest moments of some (measured in Genesis Plus GX, as a Mega Drive and changed to act
+  like an AtGames handheld, whose frames are shorter): World 4-1, with several Flurries on screen,
+  to about 54-56 on a Mega Drive and 50-56 on the handheld, and on the handheld 2-1, 5-1 and 6-1
+  to about 56-59. Interpreted, it runs at about a tenth of full speed, and its story screen
+  garbles some text lines: its menu code assumes it never runs late
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its
