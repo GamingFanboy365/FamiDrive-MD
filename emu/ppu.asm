@@ -1212,32 +1212,46 @@ chrSync:
 		rts
 
 ; ----------------------------------------------------------------
-; New CHR-ROM data for 1 KB of the pattern tables (MMC3): the MD
-; tiles of those of its tiles that differ from the ones there now,
+; New CHR-ROM data for 1 KB of the pattern tables, or 2 KB where 2 KB
+; in a row are there now (MMC3): the MD tiles of those of its tiles
+; that differ from the ones there now,
 ; made as the ROM was built (CHR_MD in md.asm), into a queue for
 ; VRAM. MD_Vint copies those by DMA in VBlank (chrVblank), when the
 ; VDP takes them ten times as fast as while it draws. A game that
 ; switches banks to animate tiles changes few of them (Super Mario
 ; Bros. 2: 20 to 40 of a 2 KB bank's 128), and makes the same
 ; switches again and again: what one put in the queue is kept, in a
-; line of RAM_Fami_ChrCache for its new data (by its 1 KB, of 32),
-; and copied from there when it comes again. Tiles are told apart
+; line of RAM_Fami_ChrCache for its new data (by its first 1 KB, of
+; 32), and copied from there when it comes again. Tiles are told apart
 ; by their IDs (CHR_ID, made with the ROM). chrSlotPtr has the data
 ; each 1 KB of the tables shows; the copy in a3 stays as it was
 ; (chrSync).
 ;
-; a0 - the new data, d4.w - where it goes ($0000-$1C00, whole KB)
+; a0 - the new data, d4.w - where it goes ($0000-$1C00, whole KB),
+; d6.w - bytes ($400, $800)
 ; ----------------------------------------------------------------
 
 chrUpdate:
 		movem.l	d0-d3/d5-d7/a1-a3/a5,-(sp)
-		move.w	d4,d5			; its 1 KB (d4 / $400): a2, the data
-		rol.w	#6,d5			; there now, and the new from here
-		bset	d5,chrStale+1(a4)	; on (and the copy in a3 is out of
-		lsl.w	#2,d5			; date there)
-		lea	chrSlotPtr(a4),a1
+		move.w	d4,d5			; its 1 KB (d4 / $400), and for 2 KB
+		rol.w	#6,d5			; the next: a2, the data there now,
+		bset	d5,chrStale+1(a4)	; and the new from here on (and the
+		lea	chrSlotPtr(a4),a1	; copy in a3 is out of date there)
+		cmpi.w	#$400,d6
+		beq.s	.one
+		addq.w	#1,d5
+		bset	d5,chrStale+1(a4)
+		lsl.w	#2,d5
+		lea	$400(a0),a2
+		move.l	a2,(a1,d5.w)
+		subq.w	#4,d5
+		bra.s	.slot
+.one:
+		lsl.w	#2,d5
+.slot:
 		movea.l	(a1,d5.w),a2
 		move.l	a0,(a1,d5.w)
+		lsr.w	#4,d6			; d6: tiles
 		moveq	#-1,d7			; d7: VRAM for the first in the BG
 		move.w	d4,d2			; set, if it's the BG's table
 		lsr.w	#5,d2			; (their table ($1000) -> bit 7,
@@ -1252,14 +1266,18 @@ chrUpdate:
 		sub.l	emuChrRom(a4),d3	; CHR-ROM
 		move.l	d3,d1			; its line in the cache, for this
 		lsr.l	#1,d1			; switch: the new data, the old,
-		andi.w	#$3E00,d1		; and where (bit 0: the BG set too)
-		lea	(RAM_Fami_ChrCache).l,a3
+		andi.w	#$3E00,d1		; and where (bit 0: the BG set too,
+		lea	(RAM_Fami_ChrCache).l,a3 ; bit 1: 2 KB)
 		adda.w	d1,a3
 		move.w	d4,d1
 		tst.w	d7
 		bmi.s	.key
 		addq.w	#1,d1
 .key:
+		cmpi.w	#64,d6
+		beq.s	.key_kb
+		addq.w	#2,d1
+.key_kb:
 		cmpa.l	(a3),a0
 		bne.s	.miss
 		cmpa.l	4(a3),a2
@@ -1306,15 +1324,17 @@ chrUpdate:
 		adda.l	d2,a1
 		add.l	d3,d3			; d3: the new MD tiles, from CHR_MD
 		lea	(RAM_Fami_ChrDma).l,a5
-		moveq	#64-1,d0
+		move.w	d6,d0
+		subq.w	#1,d0
 .scan:
 		cmpm.w	(a1)+,(a2)+		; the same tile?
 		dbne	d0,.scan
 		beq.s	.kept
-		moveq	#64-1,d1		; no: a run of new ones from it,
+		move.w	d6,d1			; no: a run of new ones from it,
 		sub.w	d0,d1			; tiles d1 to d2-1, with up to two
-.new:						; the same in a row in it (another
-		moveq	#64,d2			; DMA costs more than them)
+		subq.w	#1,d1			; the same in a row in it (another
+.new:						; DMA costs more than them)
+		move.w	d6,d2
 		sub.w	d0,d2
 		moveq	#2,d5
 .next:
@@ -1370,6 +1390,7 @@ chrUpdate:
 		adda.l	d3,a0
 		adda.w	d1,a0
 		add.w	d1,d0
+		move.l	d6,-(sp)
 		move.w	chrDmaTail(a4),d5
 		lea	(a5,d5.w),a1
 		move.w	#$9300,d6
@@ -1410,6 +1431,7 @@ chrUpdate:
 		move.l	(a1)+,(a3)+
 		move.l	(a1)+,(a3)+
 .not_kept:
+		move.l	(sp)+,d6
 		addi.w	#16,d5
 		andi.w	#$7FF,d5
 		cmp.w	chrDmaHead(a4),d5

@@ -431,7 +431,9 @@ mmc3WrData:
 
 mmc3Chr:
 		tst.w	ppuChrRam(a4)		; CHR-RAM: the registers do nothing
-		bne.s	.done
+		beq.s	.chr_rom
+		rts
+.chr_rom:
 		movem.l	d0/a0,-(sp)
 		lea	mmc3Regs(a4),a5
 		moveq	#0,d0
@@ -460,15 +462,23 @@ mmc3Chr:
 		lsl.l	#2,d0
 		movea.l	emuChrRom(a4),a0
 		adda.l	d0,a0
-		bsr.w	chrUpdate		; 1 KB at a time
-		cmpi.w	#$400,d6
-		beq.s	.one_done
+		cmpi.w	#$400,d6		; 2 KB: as one if the data there now
+		beq.s	.update			; is 2 KB in a row too, else 1 KB at
+		move.w	d4,d5			; a time
+		rol.w	#6,d5
+		lsl.w	#2,d5
+		lea	chrSlotPtr(a4),a5
+		move.l	(a5,d5.w),d0
+		addi.l	#$400,d0
+		cmp.l	4(a5,d5.w),d0
+		beq.s	.update
+		move.w	#$400,d6
+		bsr.w	chrUpdate
 		lea	$400(a0),a0
 		addi.w	#$400,d4
+.update:
 		bsr.w	chrUpdate
-.one_done:
 		movem.l	(sp)+,d0/a0
-.done:
 		rts
 
 ; --------------------------------------------------------
