@@ -549,6 +549,8 @@ mos_ASL_abs:
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
 		move.b	d4,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwASL
+		bcc.w	rmwASL
 		move.b	(a2,d6.w),d7
 		lsl.b	#1,d7
 		move	sr,d5
@@ -565,6 +567,8 @@ mos_ASL_absx:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		add.w	d1,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwASL
+		bcc.w	rmwASL
 		move.b	(a2,d6.w),d7
 		lsl.b	#1,d7
 		move	sr,d5
@@ -1044,6 +1048,8 @@ mos_DEC_abs:
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
 		move.b	d4,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwDEC
+		bcc.w	rmwDEC
 		subq.b	#1,(a2,d6.w)
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1058,6 +1064,8 @@ mos_DEC_absx:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		add.w	d1,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwDEC
+		bcc.w	rmwDEC
 		subq.b	#1,(a2,d6.w)
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1233,6 +1241,8 @@ mos_INC_abs:
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
 		move.b	d4,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwINC
+		bcc.w	rmwINC
 		addq.b	#1,(a2,d6.w)
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1247,6 +1257,8 @@ mos_INC_absx:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		add.w	d1,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwINC
+		bcc.w	rmwINC
 		addq.b	#1,(a2,d6.w)
 		move	sr,d5
 		andi.w	#$C,d5
@@ -1628,6 +1640,8 @@ mos_LSR_abs:
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
 		move.b	d4,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwLSR
+		bcc.w	rmwLSR
 		move.b	(a2,d6.w),d7
 		lsr.b	#1,d7
 		move	sr,d5
@@ -1644,6 +1658,8 @@ mos_LSR_absx:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		add.w	d1,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwLSR
+		bcc.w	rmwLSR
 		move.b	(a2,d6.w),d7
 		lsr.b	#1,d7
 		move	sr,d5
@@ -1808,6 +1824,70 @@ mos_PHP:
 ; d3 must not be swapped when calling these.
 ; ----------------------------------------------------------------
 
+; ----------------------------------------------------------------
+; Read-modify-write instructions (ASL, LSR, ROL, ROR, INC, DEC, abs and
+; abs,X) on an address past the 2 KB of RAM, $0800 on (its mirrors, PRG
+; RAM, the PPU's, APU's and mapper's registers): the byte through
+; addr_Read, and back through addr_Write, as LDA and STA do
+;
+; d6.w - the address
+; ----------------------------------------------------------------
+
+	; d7: the byte at d6.w
+rmwRead:
+		move.w	d6,d4			; d4: its low byte, d6: its high one
+		andi.w	#$FF,d4
+		lsr.w	#8,d6
+		bra.w	addr_Read
+
+rmwASL:
+		move.w	d6,-(sp)		; (the address, for rmwWrite)
+		bsr.s	rmwRead
+		lsl.b	#1,d7
+		bra.s	rmwShift
+rmwLSR:
+		move.w	d6,-(sp)
+		bsr.s	rmwRead
+		lsr.b	#1,d7
+		bra.s	rmwShift
+rmwROL:
+		move.w	d6,-(sp)
+		bsr.s	rmwRead
+		move	d3,sr
+		roxl.b	#1,d7
+		bra.s	rmwShift
+rmwROR:
+		move.w	d6,-(sp)
+		bsr.s	rmwRead
+		move	d3,sr
+		roxr.b	#1,d7
+rmwShift:
+		move	sr,d5
+		andi.w	#$1D,d5
+		andi.b	#$E2,d3
+		or.w	d5,d3
+		bra.s	rmwWrite
+rmwINC:
+		move.w	d6,-(sp)
+		bsr.s	rmwRead
+		addq.b	#1,d7
+		bra.s	rmwStep
+rmwDEC:
+		move.w	d6,-(sp)
+		bsr.s	rmwRead
+		subq.b	#1,d7
+rmwStep:
+		move	sr,d5
+		andi.w	#$C,d5
+		andi.b	#$F3,d3
+		or.w	d5,d3
+rmwWrite:
+		move.w	(sp)+,d6
+		move.w	d6,d4
+		andi.w	#$FF,d4
+		lsr.w	#8,d6
+		bra.w	addr_Write
+
 ; Build P in d5 (bits 5 and 4 set; clear bit 4 for NMI/IRQ)
 ; Uses: d5, a5
 famiGetP:
@@ -1930,6 +2010,8 @@ mos_ROL_abs:
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
 		move.b	d4,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwROL
+		bcc.w	rmwROL
 		move.b	(a2,d6.w),d7
 		move	d3,sr
 		roxl.b	#1,d7
@@ -1947,6 +2029,8 @@ mos_ROL_absx:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		add.w	d1,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwROL
+		bcc.w	rmwROL
 		move.b	(a2,d6.w),d7
 		move	d3,sr
 		roxl.b	#1,d7
@@ -2002,6 +2086,8 @@ mos_ROR_abs:
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
 		move.b	d4,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwROR
+		bcc.w	rmwROR
 		move.b	(a2,d6.w),d7
 		move	d3,sr
 		roxr.b	#1,d7
@@ -2019,6 +2105,8 @@ mos_ROR_absx:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		add.w	d1,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwROR
+		bcc.w	rmwROR
 		move.b	(a2,d6.w),d7
 		move	d3,sr
 		roxr.b	#1,d7
