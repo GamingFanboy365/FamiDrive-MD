@@ -171,6 +171,12 @@ class Prg:
 			sys.exit('recomp6502: mapper %d is not supported' % self.mapper)
 		self.banked = self.mapper in (2, 4)
 		prg = rom[16:16 + rom[4] * 0x4000]
+		# MMC3 in PRG mode 1 or with its scanline IRQ on (as Super Mario
+		# Bros. 3; tools/nesinfo.py looks for the same): the interpreter's
+		if self.mapper == 4 and (any(m.group(1)[0] & 0x40 for m in re.finditer(
+		   rb'[\xA9\xA2\xA0](.)[\x8D\x8E\x8C]\x00\x80', prg, re.S)) or re.search(rb'[\x8D\x8E\x8C]\x01\xE0', prg)):
+			sys.exit('recomp6502: this game uses the MMC3 in PRG mode 1 or its scanline IRQ, '
+				 'which recompiled code doesn\'t support yet: build it without --recompile')
 		self.banks = len(prg) // 0x4000
 		self.unit = unit
 		self.fixed = prg[-0x4000:]

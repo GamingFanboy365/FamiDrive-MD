@@ -18,11 +18,13 @@ FPS		equ 0			; 1: FPS counter (build.sh --fps, needs RECOMP)
 		include	"system/md/map.asm"	; Genesis hardware map
 		include	"out/nes_info.asm"	; the NES ROM's mapper and PRG size (tools/nesinfo.py)
 PRG_BANKED	equ (NES_MAPPER=2)||(NES_MAPPER=4)	; PRG-ROM in 16 KB banks: PRG_IMAGES
+PRG_MODE1	equ (NES_MAPPER=4)&&(NES_MMC3_PRG1<>0)	; MMC3 in PRG mode 1, 8 KB banks: PRG_FRAMES
 prgBankMask	set 1			; its banks, rounded up to a power of 2, -1
 		while prgBankMask<NES_PRG16
 prgBankMask	set prgBankMask*2
 		endm
 prgBankMask	set prgBankMask-1
+prgBank8Mask	equ prgBankMask*2+1	; and its 8 KB banks'
 chrBankMask	set 1			; its CHR-ROM's 1 KB banks, rounded up likewise
 		while chrBankMask<NES_CHR8*8
 chrBankMask	set chrBankMask*2
@@ -162,6 +164,7 @@ nmiWaitDue	ds.w 1			; and 1: one is due where the game waits for it (rcNmiWait)
 nmiHold		ds.w 1			; 1: the game took its last NMI waiting for it
 chrSlotPtr	ds.l 8			; MMC3: the CHR-ROM data each 1 KB of the pattern tables shows,
 chrStale	ds.w 1			; and those a3's copy is out of date for (bits 0-7, chrSync)
+prgFrameC	ds.l 1			; MMC3 PRG mode 1: the frame of R6's bank, at $C000 (PRG_FRAMES)
 		finish
 sprTable2	equ vdpSprData2-vdpSprData
 
@@ -656,7 +659,12 @@ Fami_LoadRom:
 
 		lea	(RAM_Fami_Emu).l,a3
 		if PRG_BANKED
+		if PRG_MODE1
+		move.l	#PRG_FRAMES+$8000,cpuPrgImg(a3)	; bank 1 at $A000 (R7) and 0
+		move.l	#PRG_FRAMES,prgFrameC(a3)	; at $C000 (R6) to begin with
+		else
 		move.l	#PRG_IMAGES,cpuPrgImg(a3) ; bank 0 at $8000 to begin with
+		endif
 		move.l	#$00020405,mmc3Regs(a3)	; MMC3: as the CHR copied below (the
 		move.l	#$06070001,mmc3Regs+4(a3) ; first 8 KB) and PRG image 0
 		move.w	#1,cpuWram(a3)
@@ -905,8 +913,12 @@ doVint:
 		lsl.w	#8,d6
 		move.b	(a0),d6
 		and.w	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l	a1,a0
 		add.w	d6,a0
+		endif
 		jmp	emuVint
 
 		include	"emu/memory.asm"	; CPU memory map
@@ -947,7 +959,24 @@ ROM_FILE:	binclude "out/nes_rom.bin"	; copied here by build.sh
 ; images are 32 KB aligned: a0's low 15 bits are the PC's (mos_JSR).
 ; ----------------------------------------------------------------
 
-		if PRG_BANKED
+		if PRG_MODE1
+; MMC3 in PRG mode 1 (PRG_MODE1): R7's 8 KB bank at $A000 and R6's at
+; $C000 switch apart, with the second to last bank at $8000 and the
+; last at $E000. A 32 KB frame for each bank, of the fixed banks and
+; the bank at both $A000 and $C000: the CPU runs code and reads PRG
+; through R7's (a1), but at $C000-$DFFF R6's (prgFrameC, prgPc). They
+; are 32 KB aligned too.
+		align $8000
+PRG_FRAMES:
+prgImage	set 0
+		rept NES_PRG16*2
+		binclude "out/nes_rom.bin",$10+(NES_PRG16*2-2)*$2000,$2000
+		binclude "out/nes_rom.bin",$10+prgImage*$2000,$2000
+		binclude "out/nes_rom.bin",$10+prgImage*$2000,$2000
+		binclude "out/nes_rom.bin",$10+(NES_PRG16*2-1)*$2000,$2000
+prgImage	set prgImage+1
+		endm
+		elseif PRG_BANKED
 		align $8000
 PRG_IMAGES:
 prgImage	set 0

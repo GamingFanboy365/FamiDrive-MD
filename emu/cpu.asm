@@ -717,8 +717,12 @@ mos_BRK:
 		lsl.w	#8,d6
 		move.b	(a5),d6
 		and.w	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l	a1,a0
 		add.l	d6,a0
+		endif
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 
@@ -1293,8 +1297,12 @@ mos_JMP_abs:
 		lsl.w	#8,d6
 		move.b	(a0),d6
 		and.l	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l a1,a0
 		add.l 	d6,a0
+		endif
 		jmp	(RAM_EmuLoop).l
 
 ; ----------------------------------------------------------------
@@ -1320,8 +1328,12 @@ mos_JMP_ind:
 		jmp	(RAM_EmuLoop).l
 .to_rom:
 		and.l	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l a1,a0
 		add.l 	d6,a0
+		endif
 		jmp	(RAM_EmuLoop).l
 
 ; ----------------------------------------------------------------
@@ -1347,8 +1359,12 @@ mos_JSR:
 		swap	d3
 		
 		and.l	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l a1,a0
 		add.l 	d6,a0
+		endif
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 ; $A9 - LDA #$xx
@@ -1888,6 +1904,21 @@ rmwWrite:
 		lsr.w	#8,d6
 		bra.w	addr_Write
 
+		if PRG_MODE1
+; MMC3 PRG mode 1 (PRG_MODE1, PRG_FRAMES): a0 for the code at $8000 +
+; d6.w ($0000-$7FFF), in R6's frame for $C000-$DFFF, else in R7's (a1)
+prgPc:
+		movea.l	a1,a0
+		btst	#14,d6			; $C000-$DFFF: bits 14, 13 = 1, 0
+		beq.s	.frame
+		btst	#13,d6
+		bne.s	.frame
+		movea.l	prgFrameC(a4),a0
+.frame:
+		adda.w	d6,a0
+		rts
+		endif
+
 ; Build P in d5 (bits 5 and 4 set; clear bit 4 for NMI/IRQ)
 ; Uses: d5, a5
 famiGetP:
@@ -2140,8 +2171,12 @@ mos_RTI:
 		swap	d3
 		bsr	famiSetP
 		and.l	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l a1,a0
 		add.l 	d6,a0
+		endif
 
 		move.l	#emuLoop,(RAM_EmuLoop+2).l
 		move.w	#0,cpuFamiVint(a4)
@@ -2166,8 +2201,12 @@ mos_RTI:
 		swap	d3
 		bsr	famiSetP
 		and.l	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l a1,a0
 		add.l 	d6,a0
+		endif
 		jmp	(RAM_EmuLoop).l
 
 ; ----------------------------------------------------------------
@@ -2186,8 +2225,12 @@ mos_RTS:
 		swap	d3
 		addq.w	#1,d6
 		and.l	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l a1,a0
 		add.l 	d6,a0
+		endif
 		jmp	(RAM_EmuLoop).l
 ; ----------------------------------------------------------------
 

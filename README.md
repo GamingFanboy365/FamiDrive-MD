@@ -67,8 +67,9 @@ hide or show it. Builds without `--fps` don't contain it.
 
 Anything else shows an error screen saying what isn't supported. MMC3 games work if they switch
 PRG-ROM at $8000-$BFFF in 16 KB pairs and don't use its scanline interrupt, as Super Mario Bros. 2
-does. Games that switch its 8 KB banks one at a time, or time a split screen with the interrupt
-(Super Mario Bros. 3's status bar), don't work yet.
+does. Games that put it in PRG mode 1, switching 8 KB banks at $A000 and $C000 one at a time (as
+Super Mario Bros. 3 does), run only interpreted for now, far below full speed, and its interrupt
+isn't emulated yet: Super Mario Bros. 3 gets to its world map, with its status bar garbled.
 
 ### Checks
 

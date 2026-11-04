@@ -40,6 +40,16 @@ rdFrom_PRG:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		andi.w	#$7FFF,d6
+		if PRG_MODE1
+		btst	#14,d6			; MMC3 PRG mode 1: $C000-$DFFF in R6's
+		beq.s	.frame			; frame (prgPc)
+		btst	#13,d6
+		bne.s	.frame
+		movea.l	prgFrameC(a4),a5
+		move.b	(a5,d6.w),d7
+		rts
+.frame:
+		endif
 		move.b	(a1,d6.w),d7
 		rts
 ; ----------------------------------------------------------------
@@ -401,6 +411,9 @@ mmc3WrData:
 		jmp	(RAM_EmuLoop).l
 .prg:
 		move.b	d7,(a5,d5.w)
+		if PRG_MODE1
+		bra.w	mmc3Prg1
+		else
 		moveq	#0,d5
 		move.b	6(a5),d5		; R6, R7: PRG
 		lsr.b	#1,d5
@@ -417,6 +430,7 @@ mmc3WrData:
 .prg_mode_1:
 		lea	(errStrMmc3Prg).l,a0
 		jmp	(MD_ShowError).l
+		endif
 
 ; --------------------------------------------------------
 ; MMC3: a CHR bank register -> the MD tiles that show its bank, and
@@ -481,6 +495,48 @@ mmc3Chr:
 		movem.l	(sp)+,d0/a0
 		rts
 
+		if PRG_MODE1
+; --------------------------------------------------------
+; MMC3 in PRG mode 1 (PRG_MODE1): R6 (d5 = 6) picks the 8 KB bank at
+; $C000, R7 the one at $A000 (PRG_FRAMES: the frame of R7's bank is
+; a1, R6's prgFrameC). Code running there goes on in the new bank.
+;
+; d7.b - the bank
+; --------------------------------------------------------
+
+mmc3Prg1:
+		moveq	#0,d6
+		move.b	d7,d6
+		andi.w	#prgBank8Mask,d6
+		swap	d6
+		lsr.l	#1,d6			; * 32 KB
+		addi.l	#PRG_FRAMES,d6
+		move.l	a0,d4			; the code's place in its frame: if it
+		andi.l	#$7FFF,d4		; runs there, a0 moves to the new one
+		cmpi.w	#7,d5
+		beq.s	.r7
+		move.l	d6,prgFrameC(a4)	; R6, at $C000: bits 14, 13 = 1, 0
+		btst	#14,d4
+		beq.s	.done
+		btst	#13,d4
+		bne.s	.done
+		bra.s	.move
+.r7:
+		movea.l	d6,a1			; R7, at $A000: 0, 1
+		move.l	d6,cpuPrgImg(a4)
+		btst	#14,d4
+		bne.s	.done
+		btst	#13,d4
+		beq.s	.done
+.move:
+		cmpa.l	#$400000,a0		; (not code in RAM)
+		bcc.s	.done
+		movea.l	d6,a0
+		adda.w	d4,a0
+.done:
+		jmp	(RAM_EmuLoop).l
+		endif
+
 ; --------------------------------------------------------
 ; Banked PRG (PRG_BANKED): switch the 16 KB bank at $8000.
 ; a1 moves to the bank's image in PRG_IMAGES, and so does the PC
@@ -491,7 +547,7 @@ mmc3Chr:
 ; --------------------------------------------------------
 
 prgSwitch:
-		if PRG_BANKED
+		if PRG_BANKED&&(PRG_MODE1=0)		; (PRG mode 1: mmc3WrData)
 		andi.l	#prgBankMask,d5
 		cmpi.w	#NES_PRG16,d5
 		bcs.s	.bank_ok
