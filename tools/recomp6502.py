@@ -1144,9 +1144,9 @@ class Gen:
 		back to the normal copy (which reloads the pointer) instead."""
 		setup, ea, post = d
 		ptr = self.fast['ptr']
-		if ea is None or ea.startswith('('):
+		if ea is None or ea.startswith('(') or '(a5,' in ea:
 			if ea != '(a2,d6.w)':
-				return d		# a5 or a call: version_plan gives up
+				return d		# a5 or a call: copy_of gives up on the copy
 		if ea == '(a2,d6.w)':
 			reg, vals = 'd6', ptr
 		else:
