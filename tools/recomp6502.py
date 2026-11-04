@@ -2537,8 +2537,8 @@ class Gen:
 			if i.mode == 'rel':
 				self.emit_branch(i, dk)
 				dk = None
-			else:
-				self.emit(i, self.insns.get(pc + i.n))
+			else:			# (the next instruction if it comes next, as in run)
+				self.emit(i, self.insns.get(pc + i.n) if pcs[k + 1:k + 2] == [pc + i.n] else None)
 				dk = self.direct_next
 				if DEFS.get(i.m, 0) & C and i.m not in ('ASL', 'LSR', 'ROL', 'ROR', 'ADC'):
 					self.xc = False
@@ -2648,7 +2648,10 @@ class Gen:
 		direct_kind = None
 		for k, pc in enumerate(pcs):
 			i = self.insns[pc]
-			nxt = self.insns.get(pc + i.n) if i.mode != 'rel' else None
+			# the next instruction, if it comes next here (not when one
+			# starts inside this one: code that jumps there decodes its
+			# bytes another way)
+			nxt = self.insns.get(pc + i.n) if i.mode != 'rel' and pcs[k + 1:k + 2] == [pc + i.n] else None
 			if pc in self.targets:
 				self.xc = False
 			if pc in plans and k and direct_kind is None:
