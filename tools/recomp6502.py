@@ -3070,7 +3070,9 @@ def main():
 		# from where the fixed bank's code goes there (wherever the
 		# bank's bytes look like code: which bank is there isn't known
 		# here). The banks' code goes back to the fixed bank's, which is
-		# looked at again for any of it that its own search missed.
+		# looked at again with those as entries: for any of it that its
+		# own search missed, and so nothing assumes, where the banks' code
+		# comes in, what only its own code going there would make so.
 		fixed = Prg(rom, 'F')
 		banks = [Prg(rom, n) for n in range(fixed.banks)]
 		fixed.peers = banks[:-1]	# (the last one is at $C000)
@@ -3082,7 +3084,7 @@ def main():
 			into = outside(uf, 0x8000, 0xC000)
 			ubs = [analyze(b, [], [a for a in sorted(into) if plausible_code(b, a)] if b in fixed.peers else [])
 			       for b in banks]
-			more = set().union(*(outside(ub, 0xC000, 0x10000) for ub in ubs)) - back - set(uf['insns'])
+			more = set().union(*(outside(ub, 0xC000, 0x10000) for ub in ubs)) - back
 			if not more:
 				break
 			back |= more
