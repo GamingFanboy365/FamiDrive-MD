@@ -508,6 +508,9 @@ mmc3Prg1:
 		moveq	#0,d6
 		move.b	d7,d6
 		andi.w	#prgBank8Mask,d6
+		if RECOMP
+		jsr	(rcPrgSlot).l		; its code there (emu/recomp.asm)
+		endif
 		swap	d6
 		lsr.l	#1,d6			; * 32 KB
 		addi.l	#PRG_FRAMES,d6
@@ -522,6 +525,19 @@ mmc3Prg1:
 		bne.s	.done
 		bra.s	.move
 .r7:
+		if RECOMP
+		move.l	a0,d4			; translated code: a0 = a1+$8000,
+		sub.l	a1,d4			; which goes with a1
+		cmpi.l	#$8000,d4
+		bne.s	.r7_pc
+		movea.l	d6,a1
+		move.l	d6,cpuPrgImg(a4)
+		lea	(a1,d4.l),a0
+		jmp	(RAM_EmuLoop).l
+.r7_pc:
+		move.l	a0,d4
+		andi.l	#$7FFF,d4
+		endif
 		movea.l	d6,a1			; R7, at $A000: 0, 1
 		move.l	d6,cpuPrgImg(a4)
 		btst	#14,d4

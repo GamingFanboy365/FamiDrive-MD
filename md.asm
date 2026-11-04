@@ -156,7 +156,7 @@ cpuPrgImg	ds.l 1			; $8000-$FFFF: RAM_Fami_ROM, or a PRG_IMAGES image (a1)
 cpuWram		ds.w 1			; 1: PRG RAM at $6000-$7FFF (RAM_Fami_WRAM)
 mmc3Select	ds.w 1			; MMC3 (mapper 4): the last $8000 write
 mmc3Regs	ds.b 8			; and its bank registers R0-R7 (mmc3Write)
-rcCurTable	ds.l 1			; recompiled banked PRG: the bank at $8000's rcTable (prgSwitch)
+rcCurTable	ds.l 1			; recompiled banked PRG: the bank at $8000's rcTable (prgSwitch, rcPrgSlot)
 chrDmaHead	ds.w 1			; MMC3: the first MD tiles queued for VRAM (RAM_Fami_ChrDma)
 chrDmaTail	ds.w 1			; and where the next go
 nmiCredit	ds.w 1			; recompiled code: VBlanks not yet answered by an NMI (rcNmi)
@@ -165,6 +165,8 @@ nmiHold		ds.w 1			; 1: the game took its last NMI waiting for it
 chrSlotPtr	ds.l 8			; MMC3: the CHR-ROM data each 1 KB of the pattern tables shows,
 chrStale	ds.w 1			; and those a3's copy is out of date for (bits 0-7, chrSync)
 prgFrameC	ds.l 1			; MMC3 PRG mode 1: the frame of R6's bank, at $C000 (PRG_FRAMES)
+rcCurTableC	ds.l 1			; and recompiled: the code of R6's bank, at $C000 (rcCurTable: R7's)
+rcFrameC	ds.l 1			; and prgFrameC+$8000, to read $C000-$DFFF through (emu/recomp.asm)
 		finish
 sprTable2	equ vdpSprData2-vdpSprData
 

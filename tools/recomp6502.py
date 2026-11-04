@@ -17,6 +17,13 @@
 # switch banks that its own is still there). PRG RAM ($6000-$7FFF) is
 # read and written directly.
 #
+# MMC3 in PRG mode 1 (8 KB banks at $A000 and $C000 that switch apart,
+# the last two at $8000 and $E000) is translated likewise (mode1): the
+# fixed banks' code once, and each bank's at the slot its own JSRs and
+# JMPs point at (slot_homes), with labels A<n>_... and C<n>_...; a
+# bank's code goes to the other slot's through rcDispatch, as the fixed
+# code goes to both.
+#
 # The output is included by md.asm when building with RECOMP=1 (see
 # build.sh --recompile). It uses the interpreter's register layout so
 # the PPU, APU and input code is shared:
@@ -24,7 +31,8 @@
 #   d0 A, d1 X, d2 Y (bytes, upper bits kept zero)
 #   d3 6502 stack pointer (high word) | flags as a 68k CCR (low byte)
 #   a0 PRG-ROM copy + $8000 (so (a0,d6.w) reads 6502 address d6 >= $8000)
-#   a1 PRG-ROM copy (banked PRG: the image of the bank at $8000)
+#   a1 PRG-ROM copy (banked PRG: the image of the bank at $8000; MMC3
+#      PRG mode 1: R7's frame, and $C000-$DFFF is read through R6's)
 #   a2 NES RAM, a3 PPU buffer, a4 emulator vars
 #   a6 vdp_data;  d4-d7, a5 are scratch (a5 can stay pointing into RAM
 #   from one instruction to the next: Gen.a5_ix)
@@ -47,6 +55,7 @@
 # it, keep it in out/ like the built ROM.
 # ======================================================================
 
+import functools
 import re
 import sys
 
@@ -151,6 +160,14 @@ class Insn:
 		return (self.m + ' ' + (f % self.arg if '%' in f else f)).strip()
 
 
+@functools.lru_cache(maxsize=4)
+def mmc3_mode1(prg):
+	"""Does the code put the MMC3 in PRG mode 1: an immediate value with
+	bit 6 set stored to $8000 (LDA/LDX/LDY #, STA/STX/STY)? As
+	NES_MMC3_PRG1 from tools/nesinfo.py, which looks for the same."""
+	return any(m.group(1)[0] & 0x40 for m in re.finditer(rb'[\xA9\xA2\xA0](.)[\x8D\x8E\x8C]\x00\x80', prg, re.S))
+
+
 class Prg:
 	"""PRG-ROM as one translation unit's code sees it.
 	NROM and CNROM (unit None): all of $8000-$FFFF, one unit.
@@ -159,7 +176,13 @@ class Prg:
 	n at $8000 is unit n, which sees the fixed bank too (its code calls
 	and reads it). The fixed bank's code can't know which bank is at
 	$8000: those addresses are other units' (bank units go by the bank
-	at $8000 when they're called, rcDispatch)."""
+	at $8000 when they're called, rcDispatch).
+	MMC3 in PRG mode 1 (mode1, as Super Mario Bros. 3: R7's 8 KB bank at
+	$A000 and R6's at $C000 switch apart, the second to last bank is at
+	$8000 and the last at $E000, see PRG_FRAMES in md.asm): the fixed
+	banks are unit 'F', and each bank b at $A000 and at $C000 is unit
+	('A', b) and ('C', b). Each sees the fixed banks, but not the other
+	slot: like the fixed code's, its calls there go by the bank there."""
 	def __init__(self, rom, unit=None):
 		if rom[:4] != b'NES\x1a':
 			sys.exit('recomp6502: not an iNES file')
@@ -171,14 +194,24 @@ class Prg:
 			sys.exit('recomp6502: mapper %d is not supported' % self.mapper)
 		self.banked = self.mapper in (2, 4)
 		prg = rom[16:16 + rom[4] * 0x4000]
-		# MMC3 in PRG mode 1 or with its scanline IRQ on (as Super Mario
-		# Bros. 3; tools/nesinfo.py looks for the same): the interpreter's
-		if self.mapper == 4 and (any(m.group(1)[0] & 0x40 for m in re.finditer(
-		   rb'[\xA9\xA2\xA0](.)[\x8D\x8E\x8C]\x00\x80', prg, re.S)) or re.search(rb'[\x8D\x8E\x8C]\x01\xE0', prg)):
-			sys.exit('recomp6502: this game uses the MMC3 in PRG mode 1 or its scanline IRQ, '
-				 'which recompiled code doesn\'t support yet: build it without --recompile')
+		self.mode1 = self.mapper == 4 and mmc3_mode1(prg)
 		self.banks = len(prg) // 0x4000
+		self.banks8 = len(prg) // 0x2000
 		self.unit = unit
+		if self.mode1:
+			self.fixed = prg[-0x4000:]	# $8000-$9FFF, then $E000-$FFFF
+			if unit in (None, 'F'):
+				self.data, self.slot = self.fixed, 'F'
+				self.regions = [(0x8000, 0x9FFF), (0xE000, 0xFFFF)]
+			else:
+				self.slot, b = unit
+				self.data = prg[b * 0x2000:(b + 1) * 0x2000]
+				lo = 0xA000 if self.slot == 'A' else 0xC000
+				self.regions = [(lo, lo + 0x1FFF)]
+			self.lo, self.hi = self.regions[0][0], self.regions[-1][1]
+			self.mask = len(self.data) - 1
+			self.peers = []
+			return
 		self.fixed = prg[-0x4000:]
 		if not self.banked or unit is None:	# (banked: only the header is read)
 			self.data, self.lo = prg, 0x8000	# (16 KB is at $8000 and $C000)
@@ -188,12 +221,31 @@ class Prg:
 			self.data, self.lo = prg[unit * 0x4000:(unit + 1) * 0x4000], 0x8000
 		self.mask = len(self.data) - 1
 		self.hi = 0xFFFF if not self.banked or unit == 'F' else 0xBFFF
+		self.regions = [(self.lo, self.hi)]
+		self.slot = 'F' if not self.banked or unit in (None, 'F') else 'B'
 		self.peers = []			# other units, for plausible_code
+
+	def region(self, a):
+		"""Which code is at a ($8000-$FFFF): 'F', the fixed code's, or
+		'B' (the bank at $8000), 'A' or 'C' (MMC3 PRG mode 1: the bank
+		at $A000 or at $C000)."""
+		if self.mode1:
+			return 'F' if a < 0xA000 or a >= 0xE000 else 'A' if a < 0xC000 else 'C'
+		return 'F' if not self.banked or a >= 0xC000 else 'B'
 
 	def byte(self, a):
 		"""The byte at a, if this unit can know it."""
 		if a < 0x8000:
 			return None
+		if self.mode1:
+			if a > 0xFFFF:
+				return None
+			if a < 0xA000:
+				return self.fixed[a - 0x8000]
+			if a >= 0xE000:
+				return self.fixed[a - 0xC000]
+			lo = self.regions[0][0]
+			return self.data[a - lo] if self.slot != 'F' and lo <= a < lo + 0x2000 else None
 		if not self.banked:
 			return self.data[a & self.mask]
 		if a > 0xFFFF:
@@ -207,7 +259,7 @@ class Prg:
 
 	def has(self, a):
 		"""Is a in this unit's own code?"""
-		return self.lo <= a <= self.hi
+		return any(lo <= a <= hi for lo, hi in self.regions)
 
 	def const(self, a):
 		"""Is a's byte the same whatever bank is at $8000, while this
@@ -447,6 +499,52 @@ def plausible_code(prg, a, count=12):
 			return True		# a table follows
 		a += SIZE[mode]
 	return True
+
+
+def sane_address(a):
+	"""Could code use absolute address a: RAM, the PPU's and APU's
+	registers, PRG RAM or PRG-ROM (not mirrors or open bus)?"""
+	return a < 0x800 or 0x2000 <= a <= 0x2007 or 0x4000 <= a <= 0x4017 or a >= 0x6000
+
+
+def code_at(prg, a, count=10):
+	"""A stricter plausible_code, for code going into a slot that holds
+	one of many banks (MMC3 PRG mode 1): legal instructions, no BRK or
+	RTI, and absolute addresses code uses."""
+	for _ in range(count):
+		op = prg.byte(a)
+		if op not in OPS or op in (0x00, 0x40):	# (BRK, RTI)
+			return False
+		m, mode = OPS[op]
+		if SIZE[mode] == 3 and not (prg.const(a + 1) and prg.const(a + 2) and sane_address(prg.word(a + 1))):
+			return False
+		if m in ('RTS', 'RTI', 'JMP'):
+			return True
+		a += SIZE[mode]
+	return True
+
+
+def slot_homes(rom):
+	"""MMC3 PRG mode 1: the slot each bank's code runs in ('A': $A000,
+	'C': $C000), or None for a bank with no sign of code. (Not the last
+	two, always at $8000 and $E000.) A bank's JSRs and JMPs into its own
+	slot go to its code, those into the other slot to another bank's:
+	there its bytes are as likely data. A slot scores the JSRs and JMPs
+	into it whose target looks like code here (code_at), less those
+	whose target doesn't."""
+	homes = {}
+	for b in range(rom[4] * 2 - 2):
+		score = {}
+		for s in 'AC':
+			u = Prg(rom, (s, b))
+			score[s] = 0
+			for k in range(len(u.data) - 2):
+				t = u.data[k + 1] | u.data[k + 2] << 8
+				if u.data[k] in (0x20, 0x4C) and u.has(t):
+					score[s] += 1 if code_at(u, t) else -1
+		best = max('AC', key=lambda s: score[s])
+		homes[b] = best if score[best] > 0 else None
+	return homes
 
 # ----------------------------------------------------------------------
 # Value ranges of A, X and Y (to prove zp,X / zp,Y can't wrap)
@@ -962,8 +1060,9 @@ class Gen:
 				return [], '$%04X(a2)' % (a & 0x7FF)
 			if self.prg.const(a):
 				return [], '#$%02X' % self.prg.byte(a)	# this PRG never changes
-			if a >= 0x8000:
-				return [], '$%04X(a1)' % (a & 0x7FFF)	# the bank at $8000 now
+			if a >= 0x8000:			# the bank there now
+				setup, base = self.prg_frame(a, a)
+				return setup, '$%04X(%s)' % (a & 0x7FFF, base)
 			if self.wram(a):
 				return [], 'rcWram+$%04X(a4)' % a
 			return self.io_read(a)
@@ -971,8 +1070,9 @@ class Gen:
 			r = 'd1' if m == 'absx' else 'd2'
 			if a + 255 < 0x2000:
 				return self.ram_indexed(i, r)
-			if a >= 0x8000 and a + self.index_hi(i) <= 0xFFFF:
-				return ['lea $%04X(a1),a5' % (a & 0x7FFF)], '(a5,%s.w)' % r
+			f = self.prg_frame(a, a + self.index_hi(i)) if a >= 0x8000 and a + self.index_hi(i) <= 0xFFFF else None
+			if f:
+				return f[0] + ['lea $%04X(%s),a5' % (a & 0x7FFF, f[1])], '(a5,%s.w)' % r
 			if self.wram(a, self.index_hi(i)):
 				return ['lea rcWram+$%04X(a4),a5' % a], '(a5,%s.w)' % r
 			if a in (0x4016, 0x4017):	# a controller port, by the index
@@ -994,8 +1094,13 @@ class Gen:
 					       '\t\tjmp ' + rd, ri + ':']
 			self.stubs += ['\t\tjsr rcRead16'] + \
 				      (['\t\tmove.b d7,%s' % r] if r != 'd7' else []) + ['\t\tjmp ' + rd]
-			return self.indy_addr(a) + ['bpl.w ' + rn, 'move.b (a0,d6.w),%s' % r,
-						    rd + ':'], r
+			prg = ['bpl.w ' + rn]
+			if self.prg.mode1:		# $C000-$DFFF: R6's bank (rcFrameC)
+				rp, rc = self.tag('Rp', i.pc), self.tag('Rc', i.pc)
+				prg += ['cmpi.w #$C000,d6', 'bcs.s ' + rp, 'cmpi.w #$E000,d6', 'bcs.w ' + rc, rp + ':']
+				self.stubs += [rc + ':', '\t\tmovea.l rcFrameC(a4),a5', '\t\tmove.b (a5,d6.w),%s' % r,
+					       '\t\tjmp ' + rd]
+			return self.indy_addr(a) + prg + ['move.b (a0,d6.w),%s' % r, rd + ':'], r
 		if m == 'indx':
 			return self.indx_addr(a) + ['jsr rcRead16'], 'd7'
 		raise ValueError(m)
@@ -1132,8 +1237,29 @@ class Gen:
 		if not self.switches(i):
 			return []
 		k = self.tag('Sw', i.pc)
-		return ['cmpa.l #PRG_IMAGES+$%X,a1' % (self.prg.unit * 0x8000), 'beq.s ' + k,
-			'move.w #$%04X,d4' % ((i.pc + i.n) & 0xFFFF), 'jmp rcDispatch', k + ':']
+		return self.own_bank(k) + ['move.w #$%04X,d4' % ((i.pc + i.n) & 0xFFFF), 'jmp rcDispatch', k + ':']
+
+	def own_bank(self, k):
+		"""Lines that go to k if this bank is still where its code runs
+		(the bank at $8000; MMC3 PRG mode 1: R7's at $A000, R6's at $C000)."""
+		if not self.prg.mode1:
+			return ['cmpa.l #PRG_IMAGES+$%X,a1' % (self.prg.unit * 0x8000), 'beq.s ' + k]
+		frame = 'PRG_FRAMES+$%X' % (self.prg.unit[1] * 0x8000)
+		if self.prg.slot == 'A':
+			return ['cmpa.l #%s,a1' % frame, 'beq.s ' + k]
+		return ['cmpi.l #%s,prgFrameC(a4)' % frame, 'beq.s ' + k]
+
+	def prg_frame(self, lo, hi):
+		"""Setup and the address register to read PRG at lo to hi through,
+		where it isn't constant here: a1, the image of the bank at $8000.
+		MMC3 PRG mode 1: a1 is R7's frame (PRG_FRAMES), right but at $C000-
+		$DFFF, and R6's (prgFrameC) is right but at $A000-$BFFF: None if
+		lo to hi is in both."""
+		if not self.prg.mode1 or not (lo <= 0xDFFF and hi >= 0xC000):
+			return [], 'a1'
+		if lo <= 0xBFFF and hi >= 0xA000:
+			return None
+		return ['movea.l prgFrameC(a4),a5'], 'a5'
 
 	def dst(self, i):
 		"""Setup and a 68k destination EA, or None for a generic write
@@ -1740,8 +1866,9 @@ class Gen:
 				if self.prg.const(p) and self.prg.const(hi):
 					self.goto(i, self.prg.byte(p) | self.prg.byte(hi) << 8)
 				elif p >= 0x8000:
-					self.e('move.b $%04X(a1),d4' % (hi & 0x7FFF), 'lsl.w #8,d4',
-					       'move.b $%04X(a1),d4' % (p & 0x7FFF), 'jmp rcDispatch')
+					setup, base = self.prg_frame(min(p, hi), max(p, hi))
+					self.e(*setup, 'move.b $%04X(%s),d4' % (hi & 0x7FFF, base), 'lsl.w #8,d4',
+					       'move.b $%04X(%s),d4' % (p & 0x7FFF, base), 'jmp rcDispatch')
 				else:
 					hi = (p & 0xFF00) | ((p + 1) & 0xFF)	# 6502 page wrap bug
 					self.e('move.b $%04X(a2),d4' % (hi & 0x7FF), 'lsl.w #8,d4',
@@ -1767,8 +1894,7 @@ class Gen:
 			self.e('jsr ' + label)		# the fixed bank's copy
 			if sw:				# it may have switched this bank out
 				k = self.tag('Sw', i.pc)
-				self.e('cmpa.l #PRG_IMAGES+$%X,a1' % (self.prg.unit * 0x8000), 'beq.s ' + k,
-				       'move.w #$%04X,d4' % ((i.pc + 3) & 0xFFFF), 'jmp rcDispatch')
+				self.e(*self.own_bank(k), 'move.w #$%04X,d4' % ((i.pc + 3) & 0xFFFF), 'jmp rcDispatch')
 				self.out.append(k + ':')
 		elif m == 'JSR':
 			ret = i.pc + 2
@@ -1799,7 +1925,7 @@ class Gen:
 			else:				# where it went the last two times (rcDispatchC)
 				self.e('lea (RAM_RcRet+%d).w,a5' % (12 * RET_CACHES[0]), 'cmp.w (a5)+,d4', 'bne.s *+6',
 				       'movea.l (a5),a5', 'jmp (a5)', 'cmp.w 4(a5),d4', 'bne.s *+8', 'movea.l 6(a5),a5', 'jmp (a5)',
-				       'jmp rcDispatchCF' if self.prg.banked and self.prg.unit == 'F' else 'jmp rcDispatchC')
+				       'jmp ' + self.dispatch_c())
 				RET_CACHES[0] += 1
 		elif m == 'RTI':
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d5', 'addq.b #1,d3',
@@ -1816,6 +1942,18 @@ class Gen:
 			pass				# emitted with the previous instruction or below
 		else:
 			raise ValueError(m)
+
+	def dispatch_c(self):
+		"""The rcDispatchC (emu/recomp.asm) of this unit's RTSs: one that
+		doesn't keep returns to a switched bank's code but its own (the
+		bank at $8000's for the fixed bank's code; MMC3 PRG mode 1: the
+		$A000 and $C000 banks' for the fixed code's, the other slot's for
+		a bank's)."""
+		if not self.prg.banked:
+			return 'rcDispatchC'
+		if not self.prg.mode1:
+			return 'rcDispatchCF' if self.prg.unit == 'F' else 'rcDispatchC'
+		return {'F': 'rcDispatchCF', 'A': 'rcDispatchCA', 'C': 'rcDispatchCC'}[self.prg.slot]
 
 	def engine_table(self, i):
 		"""Targets of the address table after a JSR to a jump engine,
@@ -1899,7 +2037,7 @@ class Gen:
 			elif lo >> 3 == hi >> 3 and hi & 7 < 6:	# one of R0-R5: the register from $8000
 				self.e('moveq #7,d5', 'and.b mmc3Select+1(a4),d5', 'lea mmc3Regs(a4),a5',
 				       'cmp.b (a5,d5.w),%s' % r, 'beq.s ' + same, 'move.b %s,d7' % r, 'jsr mmc3WrData', same + ':')
-			elif lo == hi and not lo & 0x40:	# R6, R7 in PRG mode 0
+			elif lo == hi and not lo & 0x40 and not self.prg.mode1:	# R6, R7 in PRG mode 0
 				self.e('move.b %s,mmc3Regs+%d(a4)' % (r, lo & 7), 'jsr mmc3Pair', *self.after_switch(i))
 			else:
 				return False
@@ -2391,8 +2529,13 @@ class Gen:
 			g += ['\t\tcmpi.w #$6000,d6', '\t\tbcs.w %s' % slow,
 			      '\t\tcmpi.w #$7F01,d6', '\t\tbcs.s %sVW_%04X' % (v, t)]
 		g += ['\t\tcmpi.w #$8000,d6', '\t\tbcs.w %s' % slow,
-		      '\t\tcmpi.w #$FF01,d6', '\t\tbcc.w %s' % slow,	# PRG, +255 stays below $10000
-		      '\t\tlea (a0,d6.w),a5', '\t\tbra.s %sF_%04X' % (v, t)]
+		      '\t\tcmpi.w #$FF01,d6', '\t\tbcc.w %s' % slow]	# PRG, +255 stays below $10000
+		if self.prg.mode1:		# R7's frame (a0) but at $C000-$DFFF: R6's
+			ok = '%sVP_%04X' % (v, t)
+			g += ['\t\tcmpi.w #$BF01,d6', '\t\tbcs.s ' + ok, '\t\tcmpi.w #$E000,d6', '\t\tbcc.s ' + ok,
+			      '\t\tcmpi.w #$C000,d6', '\t\tbcs.w %s' % slow, '\t\tcmpi.w #$DF01,d6', '\t\tbcc.w %s' % slow,
+			      '\t\tmovea.l rcFrameC(a4),a5', '\t\tadda.w d6,a5', '\t\tbra.s %sF_%04X' % (v, t), ok + ':']
+		g += ['\t\tlea (a0,d6.w),a5', '\t\tbra.s %sF_%04X' % (v, t)]
 		if self.prg.banked:
 			g += ['%sVW_%04X:' % (v, t), '\t\tlea (RAM_Fami_WRAM-$6000).l,a5', '\t\tadda.w d6,a5',
 			      '\t\tbra.s %sF_%04X' % (v, t)]
@@ -2692,10 +2835,11 @@ class Gen:
 		# dispatch table: PRG offset -> code
 		self.out += ['', '\t\talign 4', 'rcTable:']
 		size = len(self.prg.data)
+		addrs = [a for lo, hi in self.prg.regions for a in range(lo, hi + 1)] if self.prg.banked else \
+			[0x10000 - size + o for o in range(size)]	# (MMC3 PRG mode 1's fixed code: $8000, $E000)
 		for off in range(0, size, 8):
 			row = []
-			for o in range(off, off + 8):
-				a = (self.prg.lo if self.prg.banked else 0x10000 - size) + o
+			for a in addrs[off:off + 8]:
 				row.append(lab(a) if a in self.insns else '0')
 			self.out.append('\t\tdc.l ' + ','.join(row))
 		if vectors:
@@ -2738,7 +2882,8 @@ def analyze(prg, extra, entries=()):
 	extra = list(extra) + sorted({a for a in inline if prg.has(a)} - set(extra))
 	tables = sorted(found | inline)
 	return {'insns': insns, 'vectors': vectors, 'extra': extra, 'tables': tables, 'user': user,
-		'rts': {a for a in rts if prg.has(a)}, 'entries': set(entries), 'banked': prg.banked}
+		'rts': {a for a in rts if prg.has(a)}, 'entries': set(entries), 'banked': prg.banked,
+		'slot': prg.slot, 'region': prg.region}
 
 
 def outside(u, lo, hi):
@@ -2763,12 +2908,15 @@ def cross_flags(us, lives):
 	goes into another unit's (ext_live), those live where other units'
 	calls of its routines return (ext_ret), and summaries of the other
 	units' routines it calls (ext_sum; the fixed bank's calls into the
-	banks go to whichever bank is there)."""
+	banks go to whichever bank is there). MMC3 PRG mode 1: us[0] is the
+	fixed banks' unit, the others the slots' banks'; each unit's code
+	goes to its own at its own slot, else to any bank's there."""
 	ext_live, ext_ret, ext_sum = [{} for _ in us], [{} for _ in us], [{} for _ in us]
 	def units(k, a):		# whose code unit k's code reaches at a
-		if k == 0:
-			return [j for j in range(1, len(us)) if a in us[j]['insns']] if a < 0xC000 else []
-		return [0] if a in us[0]['insns'] else []
+		r = us[k]['region'](a)
+		if r == us[k]['slot']:
+			return []		# (its own)
+		return [j for j in range(len(us)) if us[j]['slot'] == r and a in us[j]['insns']]
 	for k, u in enumerate(us):
 		for i in u['insns'].values():
 			for s in i.succ:
@@ -2833,6 +2981,73 @@ def prefixed(out, pre):
 	return [tok.sub(lambda m: pre + m.group(0) if m.group(0) in names else m.group(0), l) for l in out]
 
 
+def mode1(rom, extra):
+	"""MMC3 in PRG mode 1: the fixed banks' code, and each bank's at its
+	slot (slot_homes) from where other units' code goes there: the fixed
+	code's and the other slot's banks' (wherever the bank's bytes look
+	like code, code_at: which bank is there isn't known here), until no
+	unit's code goes anywhere new. Returns the output and the units."""
+	homes = slot_homes(rom)
+	fixed = Prg(rom, 'F')
+	slots = [Prg(rom, (s, b)) for s in 'AC' for b in sorted(homes) if homes[b] == s]
+	fixed.peers = slots
+	for b in slots:
+		b.peers = [fixed] + [p for p in slots if p.slot != b.slot]
+	win = {'F': ((0x8000, 0xA000), (0xE000, 0x10000)), 'A': ((0xA000, 0xC000),), 'C': ((0xC000, 0xE000),)}
+	into = {s: set() for s in 'FAC'}
+	while True:
+		uf = analyze(fixed, extra, into['F'])
+		us = [uf] + [analyze(b, [], [a for a in sorted(into[b.slot]) if code_at(b, a)]) for b in slots]
+		new = {s: set() for s in 'FAC'}
+		for u in us:
+			for s in 'FAC':
+				for lo, hi in win[s] if s != u['slot'] else ():
+					new[s] |= outside(u, lo, hi)
+		if all(new[s] <= into[s] for s in 'FAC'):
+			break
+		for s in 'FAC':
+			into[s] |= new[s]
+	# flags live where one unit's code goes to another's (as for banks
+	# at $8000, main)
+	ents = [into['F']] + [u['entries'] for u in us[1:]]
+	facts = [(None, None, None) for _ in us]
+	for _ in range(10):
+		lives = [unit_liveness(u, e, f) for u, e, f in zip(us, ents, facts)]
+		new = list(zip(*cross_flags(us, lives)))
+		if new == facts:
+			break
+		facts = new
+	# the banks' code calls the fixed banks' routines' copies
+	calls = {i.arg for u in us[1:] for i in u['insns'].values()
+		 if i.m == 'JSR' and not i.table and i.arg >= 0x8000 and fixed.region(i.arg) == 'F'}
+	g = generate(fixed, uf, into['F'], (), facts[0], calls)
+	copies = {f: g.callable[f][1:] + (g.copy_label(f),) for f in calls if f in g.callable}
+	out, units = list(g.out), [(uf, g)]
+	for b, u, fb in zip(slots, us[1:], facts[1:]):
+		if not u['insns']:
+			continue
+		ext_calls = {}		# (the fixed code is always there to return to)
+		for i in uf['insns'].values():
+			if i.m == 'JSR' and not i.table and i.arg in u['insns'] and i.pc + 3 in uf['insns']:
+				ext_calls.setdefault(i.arg, set()).add(i.pc)
+		gb = generate(b, u, u['entries'], uf['insns'], fb, (), copies, ext_calls)
+		out += [''] + prefixed(gb.out, '%s%d_' % b.unit)
+		units.append((u, gb))
+	# each bank's code at each slot, by the bank there (rcDispatch); the
+	# $A000 slot's tables less $8000 (its offsets come with bit 15 set)
+	have = {b.unit for b, u in zip(slots, us[1:]) if u['insns']}
+	n = 1
+	while n < fixed.banks8:
+		n *= 2			# (the banks, rounded up as prgBank8Mask in md.asm)
+	out += ['', '; each bank\'s code at $A000 and at $C000, by the bank there (rcDispatch)', '\t\talign 4',
+		'rcBankTablesA:'] + ['\t\tdc.l %s-$8000' % ('A%d_rcTable' % b if ('A', b) in have else 'rcNoTable')
+				    for b in range(n)]
+	out += ['rcBankTablesC:'] + ['\t\tdc.l %s' % ('C%d_rcTable' % b if ('C', b) in have else 'rcNoTable')
+				    for b in range(n)]
+	out += ['rcNoTable:', '\t\trept $2000/8', '\t\tdc.l 0,0,0,0,0,0,0,0', '\t\tendm']	# (a bank with no code there)
+	return out, units
+
+
 def main():
 	args = sys.argv[1:]
 	extra = []
@@ -2848,6 +3063,8 @@ def main():
 		u = analyze(prg, extra)
 		g = generate(prg, u)
 		out, units = g.out, [(u, g)]
+	elif prg.mode1:
+		out, units = mode1(rom, extra)
 	else:
 		# Banked PRG: the fixed bank's code, and each bank's at $8000
 		# from where the fixed bank's code goes there (wherever the

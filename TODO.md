@@ -24,8 +24,8 @@ finished in #1 to #6.
   it should be SP = `$FD` with I set.
 - [ ] **MMC3: more of it.** In PRG mode 0, only R6 and R7 as a 16 KB pair are
   supported (`mmc3Write`, PRG_IMAGES); PRG mode 1, 8 KB banks at $A000 and
-  $C000 (Super Mario Bros. 3: PRG_FRAMES, `mmc3Prg1`), only interpreted.
-  The scanline IRQ isn't emulated: Super Mario Bros. 3 times its status bar
+  $C000, is (Super Mario Bros. 3: PRG_FRAMES, `mmc3Prg1`), but a game can't
+  switch between the modes. The scanline IRQ isn't emulated: Super Mario Bros. 3 times its status bar
   with it, swapping all six CHR banks there (CHR swaps partway down the
   screen would need a second set of MD tiles).
 - [ ] **Other CHR switches.** MMC3 bank switches copy tiles made with the ROM

@@ -35,7 +35,9 @@ while the game runs. Games that use a lot of CPU run many times faster: Pinball'
 from about 3.5 to about 55 game frames per second, as fast as on a NES (which also drops frames
 when the game is busy). Super Mario Bros., Balloon Fight, Ice Climber and Excitebike run at full
 speed (60) while you play. Games with banked PRG-ROM (mappers 2 and 4) are translated a bank at a
-time: Super Mario Bros. 2 goes from about 6 to 60 game frames per second in most of its levels.
+time: Super Mario Bros. 2 goes from about 6 to 60 game frames per second in most of its levels, and
+Super Mario Bros. 3, whose MMC3 switches 8 KB banks at $A000 and $C000 apart, from about 6 to
+between 44 and 60 in World 1-1.
 
 When a game's frame needs a little more time than an MD frame, its next NMI waits until the game
 is ready for it (up to a frame), so the game runs a little slower instead of at half speed. NMIs
@@ -66,10 +68,9 @@ hide or show it. Builds without `--fps` don't contain it.
 - CHR-ROM or CHR-RAM
 
 Anything else shows an error screen saying what isn't supported. MMC3 games work if they switch
-PRG-ROM at $8000-$BFFF in 16 KB pairs and don't use its scanline interrupt, as Super Mario Bros. 2
-does. Games that put it in PRG mode 1, switching 8 KB banks at $A000 and $C000 one at a time (as
-Super Mario Bros. 3 does), run only interpreted for now, far below full speed, and its interrupt
-isn't emulated yet: Super Mario Bros. 3 gets to its world map, with its status bar garbled.
+PRG-ROM at $8000-$BFFF in 16 KB pairs, as Super Mario Bros. 2 does, or put it in PRG mode 1 and
+switch 8 KB banks at $A000 and $C000 one at a time, as Super Mario Bros. 3 does. Its scanline
+interrupt isn't emulated yet: games that time something with it show that wrong.
 
 ### Checks
 
@@ -127,6 +128,11 @@ handheld's differences.
   to about 54-56 on a Mega Drive and 50-56 on the handheld, and on the handheld 2-1, 5-1 and 6-1
   to about 56-59. Interpreted, it runs at about a tenth of full speed, and its story screen
   garbles some text lines: its menu code assumes it never runs late
+- Super Mario Bros. 3's status bar is garbled: it switches the tiles for it with the MMC3's
+  scanline interrupt, which isn't emulated. Recompiled, it plays its levels at about 44-60 game
+  frames per second (World 1-1). Interpreted, it runs at about a tenth of full speed and can't
+  enter a level: its NMI handler outlasts a frame, and the next NMI reads the pads again before
+  the game takes the A button
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its
