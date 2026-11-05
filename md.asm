@@ -19,6 +19,9 @@ FPS		equ 0			; 1: FPS counter (build.sh --fps, needs RECOMP)
 		include	"out/nes_info.asm"	; the NES ROM's mapper and PRG size (tools/nesinfo.py)
 PRG_BANKED	equ (NES_MAPPER=2)||(NES_MAPPER=4)	; PRG-ROM in 16 KB banks: PRG_IMAGES
 PRG_MODE1	equ (NES_MAPPER=4)&&(NES_MMC3_PRG1<>0)	; MMC3 in PRG mode 1, 8 KB banks: PRG_FRAMES
+MMC3_IRQ	equ (NES_MAPPER=4)&&(NES_MMC3_IRQ<>0)	; MMC3's scanline IRQ: what's below its line (splitDone)
+splitWinBase	equ $A000		; MMC3_IRQ: the window's cells (VDP $83), rows 0-27 of 32
+splitTiles	equ $340		; and the tile set below the split (VRAM $6800-$87FF)
 prgBankMask	set 1			; its banks, rounded up to a power of 2, -1
 		while prgBankMask<NES_PRG16
 prgBankMask	set prgBankMask*2
@@ -44,6 +47,7 @@ RAM_Fami_ROM	equ $FFFF0000		; PRG-ROM (not banked)
 RAM_Fami_WRAM	equ $FFFF0000		; PRG RAM, $6000-$7FFF (banked PRG: PRG_IMAGES)
 RAM_Fami_ChrDma	equ $FFFF2000		; MMC3: MD tiles for VRAM, queued for VBlank (chrUpdate, chrDma), 2 KB
 RAM_Fami_ChrCache equ $FFFF2800		; MMC3: bank switches seen before, 32 lines of 512 bytes (chrUpdate)
+RAM_Fami_Split	equ $FFFF7F00		; MMC3_IRQ: the split below the IRQ's line, $100 bytes (by a4 too)
 RAM_Fami_Emu	equ $FFFF8000		; Emulator buffer
 RAM_RcRet	equ RAM_Fami_Emu+$A50	; recompiled code: RTS return caches (rcDispatchC), 120 of 12 bytes
 RAM_Fami_RAM	equ $FFFF9000		; RAM size: $800
@@ -168,7 +172,47 @@ prgFrameC	ds.l 1			; MMC3 PRG mode 1: the frame of R6's bank, at $C000 (PRG_FRAM
 rcCurTableC	ds.l 1			; and recompiled: the code of R6's bank, at $C000 (rcCurTable: R7's)
 rcFrameC	ds.l 1			; and prgFrameC+$8000, to read $C000-$DFFF through (emu/recomp.asm)
 rcNmiInterp	ds.w 1			; recompiled code: an NMI came while interpreting (rcInterpStep, rcRti)
+emuVarsEnd	equ *
 		finish
+		if emuVarsEnd>$A00
+		error "the emulator's variables run into RAM_Fami_Apu (emu/apu.asm)"
+		endif
+
+; ----------------------------------------------------------------
+; MMC3's scanline IRQ, and the split below its line (MMC3_IRQ): a4
+; points at these too, below the above, in RAM an MMC3 game leaves
+; free (RAM_Fami_ChrCache ends before it)
+; ----------------------------------------------------------------
+
+		if MMC3_IRQ
+		if RAM_Fami_ChrCache+32*512>RAM_Fami_Split
+		error "RAM_Fami_Split is in RAM_Fami_ChrCache"
+		endif
+		struct RAM_Fami_Split-RAM_Fami_Emu
+irqLatch	ds.w 1			; the IRQ's line ($C000)
+irqOn		ds.w 1			; and 1: one is due this game frame ($E001), after the NMI handler
+irqLine		ds.w 1			; and its line, as $E001 set it
+cpuInIrq	ds.w 1			; 1: in the IRQ handler, whose PPU and CHR writes are below its line
+irqNmiSave	ds.w 1			; cpuInIrq while an NMI handler runs
+splitV		ds.w 1			; the IRQ handler's $2006 address (the rows below), $FFFF: none
+splitCtrlX	ds.w 1			; and its $2000 nametable X bit (bit 0), $FFFF: none
+splitSeen	ds.w 1			; this game frame took the IRQ (ppuFrameStart)
+splitShow	ds.w 1			; VDP $92 for the window (the split), and the value written
+splitShown	ds.w 1
+splitWinNt	ds.w 1			; the window shows the nametable from this PPU address, 0: none
+splitWinVram	ds.w 1			; from this VRAM address (its first row's)
+splitWinLen	ds.w 1			; for so many nametable bytes (rows * 32)
+irqInterp	ds.w 1			; recompiled: rcNmiInterp when the IRQ was taken (rcIrq, rcRti)
+splitBank	ds.w 4			; the split's tile set: the CHR-ROM 1 KB bank in each part, $FFFF: none yet
+mmc3RegsSplit	ds.b 8			; the CHR registers below the split
+sprHideY	ds.w 1			; OAM DMA: sprites from this Y on are hidden ($E7, or the split's)
+ppuCellAddr	ds.w 1			; the nametable byte ppuDrwCell draws (for the window)
+splitVarsEnd	equ *
+		finish
+		if splitVarsEnd>RAM_Fami_Split-RAM_Fami_Emu+$100
+		error "the split's variables run past RAM_Fami_Split's $100 bytes"
+		endif
+		endif
 sprTable2	equ vdpSprData2-vdpSprData
 
 ; ====================================================================
@@ -414,7 +458,11 @@ Video_RegList:
 		dc.b $04			; HBlank int on, HV Counter on
 		dc.b $64			; Display ON, VBlank int on
 		dc.b (($C000)>>10)		; ForeGrd at VRAM $C000 (%00xxx000)
+		if MMC3_IRQ
+		dc.b ((splitWinBase)>>10)	; Window  at splitWinBase
+		else
 		dc.b (($D000)>>10)		; Window  at VRAM $D000 (%00xxxxy0)
+		endif
 		dc.b (($E000)>>13)		; BackGrd at VRAM $E000 (%00000xxx)
 		dc.b (($BC00)>>9)		; Sprites at VRAM $BC00 (%0xxxxxxy)
 		dc.b $00			; Nothing
@@ -541,6 +589,9 @@ MD_Vint:
 		jsr	hsApply				; horizontal scroll
 		if (NES_MAPPER=4)&&(NES_CHR8<>0)
 		jsr	(chrVblank).l			; MMC3: tiles that changed (chrUpdate)
+		if MMC3_IRQ
+		jsr	(splitVblank).l			; and below the IRQ's line: the window
+		endif
 		endif
 		bsr.w	apuUpdate			; needs the Z80 bus
 		move.w	#0,(z80_bus).l			; Release Z80
@@ -670,6 +721,17 @@ Fami_LoadRom:
 		endif
 		move.l	#$00020405,mmc3Regs(a3)	; MMC3: as the CHR copied below (the
 		move.l	#$06070001,mmc3Regs+4(a3) ; first 8 KB) and PRG image 0
+		if MMC3_IRQ
+		lea	(RAM_Fami_Split).l,a5	; no split yet (MMC3_IRQ)
+		moveq	#$100/4-1,d7
+.split_clr:
+		clr.l	(a5)+
+		dbf	d7,.split_clr
+		move.w	#$E7,sprHideY(a3)
+		move.w	#$FFFF,splitV(a3)
+		move.l	#$FFFFFFFF,splitBank(a3)
+		move.l	#$FFFFFFFF,splitBank+4(a3)
+		endif
 		move.w	#1,cpuWram(a3)
 		lea	(RAM_Fami_WRAM).l,a5	; and PRG RAM, cleared
 		moveq	#0,d7
@@ -889,6 +951,10 @@ emuVint:
 doVint:
 		move.l	#emuVint,(RAM_EmuLoop+2).l
 		move.w	#1,cpuFamiVint(a4)
+		if MMC3_IRQ
+		move.w	cpuInIrq(a4),irqNmiSave(a4)	; (the NMI handler's writes are above the split)
+		clr.w	cpuInIrq(a4)
+		endif
 		bsr.w	ppuFrameStart
 
 		bsr	famiGetP		; Save PC and P (B clear)

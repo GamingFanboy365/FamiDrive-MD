@@ -31,6 +31,15 @@ wrPPU_Table:	dc.w wrPPU_Ctrl-wrPPU_Table ; $2000
 ; ----------------------------------------------------------------
 
 wrPPU_Ctrl:
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; in the IRQ handler: only the
+		beq.s	.main			; nametable X bit, for the rows below
+		andi.w	#1,d7			; its line (splitDone)
+		move.w	d7,splitCtrlX(a4)
+		moveq	#0,d7
+		jmp	(RAM_EmuLoop).l
+.main:
+		endif
 
 	; NMI on/off
 		clr.w	d6
@@ -91,6 +100,12 @@ wrPPU_Ctrl:
 ; ----------------------------------------------------------------
 
 wrPPU_Mask:
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; (in the IRQ handler: below its line,
+		beq.s	.main			; not the frame's)
+		jmp	(RAM_EmuLoop).l
+.main:
+		endif
 		move.w	d7,d6
 		andi.w	#$18,d6			; background or sprites shown
 		move.w	d6,ppuMaskOn(a4)
@@ -145,6 +160,13 @@ ppuMaskApply:
 ; -----------------------------------------------------------------
 
 wrPPU_Scroll:
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; in the IRQ handler: below its line,
+		beq.s	.main			; where the window doesn't scroll
+		eori.w	#1,ppuAddrLatch(a4)
+		jmp	(RAM_EmuLoop).l
+.main:
+		endif
 		move.w	d7,d4
 		andi.w	#$FF,d4
 		move.w	ppuNTblBase(a4),d6
@@ -399,6 +421,17 @@ ppuFrameStart:
 		move.l	(a0)+,(a1)+
 		dbf	d0,.copy
 		move.l	vdpScrlX(a4),hsTopCur(a4)
+		if MMC3_IRQ
+		tst.w	splitSeen(a4)		; the last game frame took no IRQ, and
+		bne.s	.split			; none waits (one may come late, see
+		tst.w	irqOn(a4)		; irqDue): no split
+		bne.s	.split
+		clr.w	splitShow(a4)
+		clr.w	splitWinNt(a4)
+		move.w	#$E7,sprHideY(a4)
+.split:
+		clr.w	splitSeen(a4)
+		endif
 		clr.w	hsCurN(a4)
 		clr.w	ppuSp0State(a4)
 		clr.l	ppuRdSite(a4)
@@ -575,6 +608,18 @@ wrPPU_Addr:
 		move.w	ppuAddrLatch(a4),d4
 		move.b	d7,ppuAddrBase(a4,d4.w)
 		eori.w	#1,ppuAddrLatch(a4)
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; in the IRQ handler: where the rows
+		beq.s	.main			; below its line begin (splitDone)
+		tst.w	d4
+		bne.s	.irq_low
+		move.w	#$FFFF,splitCtrlX(a4)	; (its nametable X, not $2000's)
+		jmp	(RAM_EmuLoop).l
+.irq_low:
+		move.w	ppuAddrBase(a4),splitV(a4)
+		jmp	(RAM_EmuLoop).l
+.main:
+		endif
 
 	; It shares the PPU's t register with the scroll: the high byte
 	; sets the nametable bits, the low byte coarse X (ppuXChanged)
@@ -634,6 +679,9 @@ wrPPU_Data:
 ; ----------------------------------------------------------------
 
 ppuDrwCell:
+		if MMC3_IRQ
+		move.w	d4,ppuCellAddr(a4)	; (the window's copy: below)
+		endif
 		move.w	d4,d6
 		andi.w	#$FFF,d6
 		lsl.w	#3,d6
@@ -655,6 +703,32 @@ ppuDrwCell:
 		eor.l	d7,d6
 		move.l	d6,4(a6)
 		move.w	d5,(a6)
+		if MMC3_IRQ
+		move.w	splitWinNt(a4),d6	; and in the window, if it shows it
+		beq.s	.no_win			; (MMC3_IRQ, splitDone)
+		move.w	ppuCellAddr(a4),d4
+		andi.w	#$2FFF,d4
+		sub.w	d6,d4
+		cmp.w	splitWinLen(a4),d4
+		bcs.s	.win
+		move.w	ppuCellAddr(a4),d4	; (in the mirrored nametable)
+		andi.w	#$2FFF,d4
+		move.w	ppuNtXor(a4),d7
+		eor.w	d7,d4
+		sub.w	d6,d4
+		cmp.w	splitWinLen(a4),d4
+		bcc.s	.no_win
+.win:
+		add.w	d4,d4
+		add.w	splitWinVram(a4),d4
+		andi.w	#$3FFF,d4
+		ori.w	#$4000,d4
+		move.w	d4,4(a6)
+		move.w	#splitWinBase>>14,4(a6)
+		addi.w	#splitTiles,d5
+		move.w	d5,(a6)
+.no_win:
+		endif
 		move.w	#$2000,sr
 		moveq	#0,d7
 		jmp	(RAM_EmuLoop).l
@@ -756,6 +830,10 @@ ppuDrwCellPal:
 		bsr.s	.palettes
 		bsr.s	.two_rows
 .done:
+		if MMC3_IRQ
+		move.w	(sp),d7			; an attribute byte of the window's
+		bsr.w	ppuWinAttr		; rows: draw it again
+		endif
 		move.w	#$2000,sr
 		addq.w	#2,sp
 		movem.l	(sp)+,d0-d3/a0
@@ -1035,7 +1113,11 @@ ppuRedrawPlanes:
 		bcs.w	.nametable
 		addq.w	#2,sp
 		movem.l	(sp)+,d0-d7/a0-a1/a5
+		if MMC3_IRQ
+		bra.w	ppuWinRedraw		; and the window (MMC3_IRQ)
+		else
 		rts
+		endif
 
 ; ----------------------------------------------------------------
 ; Pattern tables (the copy in a3, chrSync) -> MD tiles. MD tiles $000-$0FF
@@ -1567,3 +1649,352 @@ chrDma:
 		ori.w	#$80,d2
 		move.w	d2,12(a0)
 		bra.w	.done
+
+		if MMC3_IRQ
+; ====================================================================
+; ----------------------------------------------------------------
+; The split below MMC3's IRQ (MMC3_IRQ), as Super Mario Bros. 3's
+; status bar: the IRQ handler, taken after the NMI handler (irqDue,
+; rcRti: splitBegin), switches the CHR banks for the screen below its
+; line, and may point the PPU at other nametable rows with $2006. Its
+; PPU and CHR writes (cpuInIrq) are kept apart from the frame's, and
+; when it returns (splitDone) the screen below its line is drawn in
+; the window plane (cells at splitWinBase), with a tile set of its own
+; (splitTiles), from the first whole MD cell row there. Sprites there
+; are hidden (sprHideY) if it switched their tiles too (Super Mario
+; Bros. 3 does, to blank ones, in its levels).
+; ----------------------------------------------------------------
+
+; The IRQ is taken: the split begins with the CHR as it is
+splitBegin:
+		move.w	#$FFFF,splitV(a4)
+		move.w	#$FFFF,splitCtrlX(a4)
+		move.l	mmc3Regs(a4),mmc3RegsSplit(a4)
+		move.l	mmc3Regs+4(a4),mmc3RegsSplit+4(a4)
+		move.w	#1,splitSeen(a4)
+		clr.w	irqOn(a4)		; (one a frame: the NMI handler sets it)
+		move.w	#1,cpuInIrq(a4)
+		rts
+
+; The IRQ handler returned: the window and tile set for what it set
+splitDone:
+		movem.l	d0-d6/a5,-(sp)
+		move.w	sr,-(sp)
+		move.w	#$2700,sr
+	; the split's tile set: the BG pattern table's 4 KB under its banks,
+	; R0 and R1 (2 KB each) if they're there (CHR mode, $8000 bit 7),
+	; else R2-R5; the 1 KB parts that are new are DMAed in at VBlank
+		lea	splitBank(a4),a5	; (mmc3RegsSplit right after it)
+		move.w	ppuChrBank(a4),d0	; BG table: $2000 bit 4 (bit 7 here)
+		move.b	mmc3Select+1(a4),d1	; and the 2 KB banks' half: bit 7
+		eor.b	d1,d0
+		move.b	d0,d6			; (bit 7 set: the BG's are R2-R5)
+		moveq	#0,d1			; slot (1 KB of the BG table)
+.slot:
+		moveq	#0,d2
+		tst.b	d0
+		bmi.s	.one_kb
+		move.w	d1,d3			; R0, R1: 2 KB, even then odd
+		lsr.w	#1,d3
+		move.b	mmc3RegsSplit-splitBank(a5,d3.w),d2
+		andi.b	#$FE,d2
+		btst	#0,d1
+		beq.s	.bank
+		addq.b	#1,d2
+		bra.s	.bank
+.one_kb:
+		move.b	mmc3RegsSplit-splitBank+2(a5,d1.w),d2	; R2-R5
+.bank:
+		andi.w	#chrBankMask,d2
+		move.w	d1,d3
+		add.w	d3,d3
+		cmp.w	(a5,d3.w),d2
+		beq.s	.same
+		move.w	d2,(a5,d3.w)
+		bsr.w	splitChrQueue
+.same:
+		addq.w	#1,d1
+		cmpi.w	#4,d1
+		bcs.s	.slot
+	; the window: from the MD cell row of the line after the IRQ's on,
+	; the nametable rows the handler's $2006 points at, or if it wrote
+	; none (Super Mario Bros. 3 on its map), those the frame's vertical
+	; scroll puts there; at its $2000's nametable X if it wrote one, and
+	; X scroll 0 (as the handler's $2005 sets it); as many as fit
+		move.w	irqLine(a4),d1		; the MD row (NES line - 8)
+		subq.w	#7,d1
+		bmi.w	.no_window
+		lsr.w	#3,d1
+		move.w	d1,d5			; (its NES line)
+		lsl.w	#3,d5
+		addq.w	#8,d5
+		move.w	splitV(a4),d0
+		cmpi.w	#$FFFF,d0
+		bne.s	.v_set
+		move.w	vdpScrlY(a4),d0		; no $2006: the frame's Y scroll (+8,
+		moveq	#0,d3			; wrPPU_Scroll), nametable Y 0 if plane
+		move.w	vdpScrlY+2(a4),d2	; A's is the lower
+		cmp.w	d2,d0
+		bls.s	.nt_y
+		move.w	d2,d0
+		move.w	#$800,d3
+.nt_y:
+		subq.w	#8,d0			; + the window's line
+		add.w	d5,d0
+		cmpi.w	#240,d0
+		bcs.s	.row
+		subi.w	#240,d0			; (into the other nametable)
+		eori.w	#$800,d3
+.row:
+		move.w	d0,d2			; as a PPU address: fine Y (bits 14-12),
+		andi.w	#7,d2
+		ror.w	#4,d2
+		lsl.w	#2,d0			; row * 32,
+		andi.w	#$3E0,d0
+		or.w	d2,d0
+		or.w	d3,d0
+		btst	#6,ppuNTblBase+1(a4)	; and the frame's nametable X
+		beq.s	.v_set
+		bset	#10,d0
+.v_set:
+		btst	#14,d0			; fine Y 4-7: from the next row on (the
+		beq.s	.v_row			; window starts on a cell row)
+		move.w	d0,d2
+		andi.w	#$3E0,d2
+		eor.w	d2,d0
+		addi.w	#$20,d2
+		cmpi.w	#30<<5,d2		; past the nametable's last row: the
+		bne.s	.v_next			; other's first (and row 31's next is
+		moveq	#0,d2			; 0, as on the NES)
+		eori.w	#$800,d0
+.v_next:
+		andi.w	#$3E0,d2
+		or.w	d2,d0
+.v_row:
+		move.w	splitCtrlX(a4),d2
+		bmi.s	.nt_x
+		bclr	#10,d0
+		lsl.w	#8,d2
+		lsl.w	#2,d2
+		or.w	d2,d0
+.nt_x:
+		andi.w	#$0FE0,d0		; nametable, row; column 0
+		ori.w	#$2000,d0
+		moveq	#28,d2			; rows: to the screen's bottom (MD row 28)
+		sub.w	d1,d2
+		ble.w	.no_window
+		move.w	d0,d3			; or the nametable's (row 30)
+		lsr.w	#5,d3
+		andi.w	#31,d3
+		moveq	#30,d4
+		sub.w	d3,d4
+		ble.w	.no_window
+		cmp.w	d4,d2
+		bls.s	.rows
+		move.w	d4,d2
+.rows:
+		lsl.w	#5,d2			; nametable bytes
+		move.w	d1,d3			; VRAM: row * 64
+		lsl.w	#6,d3
+		addi.w	#splitWinBase,d3
+		ori.w	#$80,d1			; VDP $92: from row d1 down
+		move.w	d1,splitShow(a4)
+		cmp.w	splitWinNt(a4),d0	; drawn already?
+		bne.s	.draw
+		cmp.w	splitWinVram(a4),d3
+		bne.s	.draw
+		cmp.w	splitWinLen(a4),d2
+		beq.s	.drawn
+.draw:
+		move.w	d0,splitWinNt(a4)
+		move.w	d3,splitWinVram(a4)
+		move.w	d2,splitWinLen(a4)
+		bsr.s	ppuWinRedraw
+.drawn:
+	; sprites from the window's line on: hidden if the handler switched
+	; their tiles (Super Mario Bros. 3 in a level: to blank ones; on the
+	; map it doesn't), with more than half of them below it
+		lea	mmc3Regs+2(a4),a5	; the sprites' half: R2-R5,
+		moveq	#4-1,d2
+		tst.b	d6
+		bpl.s	.spr_banks
+		lea	mmc3Regs(a4),a5		; or R0, R1
+		moveq	#2-1,d2
+.spr_banks:
+		move.b	(a5)+,d3
+		cmp.b	mmc3RegsSplit-mmc3Regs-1(a5),d3
+		dbne	d2,.spr_banks
+		bne.s	.spr_hide
+		move.w	#$E7,d5			; the same tiles: shown
+		bra.s	.spr_set
+.spr_hide:
+		subq.w	#4,d5			; 8x8: 4 lines up
+		tst.w	ppuSprWide(a4)
+		beq.s	.spr_set
+		subq.w	#4,d5			; 8x16: 8
+.spr_set:
+		cmpi.w	#$E7,d5
+		bls.s	.spr_ok
+		move.w	#$E7,d5
+.spr_ok:
+		move.w	d5,sprHideY(a4)
+.done:
+		move.w	(sp)+,sr
+		movem.l	(sp)+,d0-d6/a5
+		rts
+.no_window:
+		clr.w	splitShow(a4)		; (the handler didn't move the PPU)
+		clr.w	splitWinNt(a4)
+		move.w	#$E7,sprHideY(a4)
+		bra.s	.done
+
+; ----------------------------------------------------------------
+; The window's cells, from the copy of the nametables (a3): the
+; split's tile set, the palettes from the attribute bytes
+; ----------------------------------------------------------------
+
+ppuWinRedraw:
+		movem.l	d0-d6,-(sp)
+		move.w	sr,-(sp)
+		move.w	#$2700,sr
+		move.w	splitWinNt(a4),d0	; PPU address
+		beq.s	.done
+		move.w	splitWinLen(a4),d1	; bytes
+		move.w	splitWinVram(a4),d2
+		andi.w	#$3FFF,d2
+		ori.w	#$4000,d2
+		move.w	d2,4(a6)
+		move.w	#splitWinBase>>14,4(a6)
+		subq.w	#1,d1
+.cell:
+		move.w	d0,d2			; its attribute byte: nametable, $3C0,
+		andi.w	#$2C00,d2		; row / 4 * 8, column / 4
+		ori.w	#$3C0,d2
+		move.w	d0,d3
+		lsr.w	#4,d3
+		andi.w	#$38,d3
+		or.w	d3,d2
+		move.w	d0,d3
+		lsr.w	#2,d3
+		andi.w	#7,d3
+		or.w	d3,d2
+		moveq	#0,d4
+		move.b	(a3,d2.w),d4
+		move.w	d0,d3			; its 2 bits: row bit 1 -> 4, column
+		lsr.w	#4,d3			; bit 1 -> 2
+		andi.w	#4,d3
+		move.w	d0,d5
+		andi.w	#2,d5
+		or.w	d5,d3
+		lsr.w	d3,d4
+		andi.w	#3,d4
+		ror.w	#3,d4			; palette, high priority
+		ori.w	#$8000,d4
+		moveq	#0,d5
+		move.b	(a3,d0.w),d5		; and the tile, in the split's set
+		addi.w	#splitTiles,d5
+		or.w	d4,d5
+		move.w	d5,(a6)
+		addq.w	#1,d0
+		dbf	d1,.cell
+.done:
+		move.w	(sp)+,sr
+		movem.l	(sp)+,d0-d6
+		rts
+
+; An attribute byte (d7.w, its PPU address) changed: the window again,
+; if it covers some of its cells
+ppuWinAttr:
+		movem.l	d0/d5-d6,-(sp)
+		move.w	splitWinNt(a4),d6
+		beq.s	.done
+		move.w	d7,d5			; its nametable, or the mirrored one
+		andi.w	#$2C00,d5
+		move.w	d6,d0
+		andi.w	#$2C00,d0
+		cmp.w	d0,d5
+		beq.s	.rows
+		eor.w	d0,d5
+		cmp.w	ppuNtXor(a4),d5
+		bne.s	.done
+.rows:
+		move.w	d7,d5			; its rows (4 from row/4 * 4) against
+		andi.w	#$38,d5			; the window's
+		lsr.w	#1,d5			; first row
+		move.w	d6,d0
+		lsr.w	#5,d0
+		andi.w	#31,d0
+		addq.w	#3,d5			; its last below the window's first?
+		cmp.w	d0,d5
+		bcs.s	.done
+		subq.w	#3,d5
+		move.w	splitWinLen(a4),d6	; its first past the window's last?
+		lsr.w	#5,d6
+		add.w	d6,d0
+		cmp.w	d0,d5
+		bcc.s	.done
+		bsr.w	ppuWinRedraw
+.done:
+		movem.l	(sp)+,d0/d5-d6
+		rts
+
+; ----------------------------------------------------------------
+; A 1 KB part of the split's tile set into the DMA queue (chrDma at
+; VBlank): its CHR-ROM bank's BG tiles (CHR_MD), 2 KB
+;
+; d1.w - the part (0-3), d2.w - the bank
+; ----------------------------------------------------------------
+
+splitChrQueue:
+		movem.l	d1-d5/a5,-(sp)
+		lea	(RAM_Fami_ChrDma).l,a5	; (the entry: as chrUpdate's)
+		adda.w	chrDmaTail(a4),a5
+		move.l	#$93009404,(a5)+	; $400 words,
+		moveq	#0,d5			; from CHR_MD + bank * 2 KB
+		move.w	d2,d5
+		moveq	#10,d3
+		lsl.l	d3,d5			; (in words)
+		addi.l	#CHR_MD/2,d5
+		move.l	#$97009600,(a5)
+		move.w	#$9500,4(a5)
+		movep.w	d5,3(a5)		; bits 15-8 to $96, 7-0 to $95
+		swap	d5
+		move.b	d5,1(a5)		; 23-16 to $97
+		addq.w	#6,a5
+		lsl.w	#8,d1			; to splitTiles + part * 64 tiles
+		lsl.w	#3,d1
+		addi.w	#splitTiles*32,d1
+		move.w	d1,d3
+		andi.w	#$3FFF,d3
+		ori.w	#$4000,d3
+		move.w	d3,(a5)+
+		rol.w	#2,d1
+		andi.w	#3,d1
+		ori.w	#$80,d1
+		move.w	d1,(a5)+
+		move.w	#$400,(a5)
+		move.w	chrDmaTail(a4),d5
+		addi.w	#16,d5
+		andi.w	#$7FF,d5
+		cmp.w	chrDmaHead(a4),d5
+		bne.s	.room
+		bsr.w	chrFlush		; full: copy the others now
+.room:
+		move.w	d5,chrDmaTail(a4)
+		movem.l	(sp)+,d1-d5/a5
+		rts
+
+; ----------------------------------------------------------------
+; VBlank (MD_Vint): the window on or off
+; ----------------------------------------------------------------
+
+splitVblank:
+		move.w	splitShow(a4),d0
+		cmp.w	splitShown(a4),d0
+		beq.s	.done
+		move.w	d0,splitShown(a4)
+		ori.w	#$9200,d0
+		move.w	d0,4(a6)
+.done:
+		rts
+		endif

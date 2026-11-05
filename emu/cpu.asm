@@ -766,7 +766,11 @@ mos_CLD:
 
 mos_CLI:
 		move.w	#0,cpuModeIntDis(a4)
+		if MMC3_IRQ
+		bra.w	irqDue			; (MMC3's IRQ, if it waits)
+		else
 		jmp	(RAM_EmuLoop).l
+		endif
 
 ; ----------------------------------------------------------------
 
@@ -2185,7 +2189,12 @@ mos_RTI:
 		clr.w	vbLate(a4)
 		move.w	#1,FamiMdVint(a4)
 .on_time:
+		if MMC3_IRQ
+		move.w	irqNmiSave(a4),cpuInIrq(a4)	; (one that came in the IRQ handler
+		bra.w	irqDue				; goes back to it) MMC3's IRQ
+		else
 		jmp	(RAM_EmuLoop).l
+		endif
 
 .nonint:
 		swap	d3
@@ -2207,7 +2216,81 @@ mos_RTI:
 		movea.l a1,a0
 		add.l 	d6,a0
 		endif
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; the IRQ handler's (MMC3_IRQ): what's
+		beq.s	.not_irq		; below its line, as it set it
+		clr.w	cpuInIrq(a4)
+		bsr.w	splitDone
+.not_irq:
+		endif
 		jmp	(RAM_EmuLoop).l
+
+		if MMC3_IRQ
+; ----------------------------------------------------------------
+; MMC3's scanline IRQ (MMC3_IRQ), once the game has turned it on
+; ($E001: irqOn): taken when the NMI handler returns, if the I flag is
+; clear then, else where the game clears it with CLI, but not in the
+; NMI handler: its line is further down the screen than any the game
+; draws then (its frame starts at VBlank). Not while the screen is
+; off ($2001): the MMC3 counts the lines the PPU draws, and a game may
+; be drawing to VRAM (the handler's $2006 would move its address).
+; Not at a PLP or RTI: those come anywhere in the game's code, and the
+; handler may count on what's in the switched banks then. One a game
+; frame (the handler's RTI doesn't take one an NMI in it set: that
+; would leave no time for the game's own work, where the interpreter
+; is slow). Its PPU and CHR writes only go to what's below its line
+; (cpuInIrq, splitBegin, splitDone).
+; ----------------------------------------------------------------
+
+irqDue:
+		tst.w	irqOn(a4)
+		beq.s	.none
+		tst.w	ppuMaskOn(a4)		; (the MMC3 counts lines only while the
+		beq.s	.none			; PPU draws them)
+		tst.w	cpuModeIntDis(a4)
+		bne.s	.none
+		tst.w	cpuInIrq(a4)
+		bne.s	.none
+		tst.w	cpuFamiVint(a4)
+		beq.s	irqTake
+.none:
+		jmp	(RAM_EmuLoop).l
+
+irqTake:
+		bsr	famiGetP		; push the PC and P (B clear), as doVint
+		move.b	d5,d7
+		andi.b	#$EF,d7
+		swap	d3
+		move.l	a0,d4
+		sub.l	a1,d4
+		move.b	d4,d5
+		lsr.w	#8,d4
+		or.b	#$80,d4
+		move.b	d4,(a2,d3.w)
+		subq.b	#1,d3
+		move.b	d5,(a2,d3.w)
+		subq.b	#1,d3
+		move.b	d7,(a2,d3.w)
+		subq.b	#1,d3
+		swap	d3
+		moveq	#0,d7
+		move.w	#1,cpuModeIntDis(a4)
+		bsr.w	splitBegin
+		movea.l	a1,a0			; and to the IRQ vector's address
+		move.w	#cpuIRQ,d6
+		adda.w	d6,a0
+		move.b	1(a0),d6
+		lsl.w	#8,d6
+		move.b	(a0),d6
+		and.w	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
+		movea.l	a1,a0
+		adda.w	d6,a0
+		endif
+		jmp	(RAM_EmuLoop).l
+		endif
 
 ; ----------------------------------------------------------------
 ; $60 - RTS

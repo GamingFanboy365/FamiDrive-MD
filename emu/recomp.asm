@@ -409,6 +409,10 @@ rcNmiDue:
 .take:
 		addq.l	#4,sp			; not returning
 		move.w	#1,cpuFamiVint(a4)
+		if MMC3_IRQ
+		move.w	cpuInIrq(a4),irqNmiSave(a4)	; (the NMI handler's writes are above the split)
+		clr.w	cpuInIrq(a4)
+		endif
 		jsr	ppuFrameStart
 		swap	d3			; push PC
 		move.w	d4,d6
@@ -444,6 +448,17 @@ rcNmiDue:
 ; ----------------------------------------------------------------
 
 rcRti:
+		if MMC3_IRQ
+		tst.w	cpuFamiVint(a4)		; the IRQ handler's (MMC3_IRQ): what's
+		bne.s	.nmi			; below its line, as it set it
+		tst.w	cpuInIrq(a4)
+		beq.s	.resume
+		clr.w	cpuInIrq(a4)
+		jsr	splitDone
+		move.w	irqInterp(a4),rcNmiInterp(a4)	; (on as the NMI handler's RTI went)
+		bra.s	.resume
+.nmi:
+		endif
 		clr.w	cpuFamiVint(a4)
 		tst.w	nmiCredit(a4)
 		beq.s	.none_due
@@ -458,6 +473,18 @@ rcRti:
 		move.w	#1,FamiMdVint(a4)
 		move.w	#1,nmiWaitDue(a4)
 .on_time:
+		if MMC3_IRQ
+		move.w	irqNmiSave(a4),cpuInIrq(a4)	; (one that came in the IRQ handler
+		bne.s	.resume				; goes back to it) MMC3's IRQ, as
+.irq_due:						; irqDue takes it (emu/cpu.asm)
+		tst.w	irqOn(a4)
+		beq.s	.resume
+		tst.w	ppuMaskOn(a4)
+		beq.s	.resume
+		tst.w	cpuModeIntDis(a4)
+		beq.s	rcIrq
+.resume:
+		endif
 		tst.w	rcNmiInterp(a4)		; taken while interpreting (rcInterpStep):
 		beq.w	rcDispatch		; go on interpreting there, as the code
 		clr.w	rcNmiInterp(a4)		; there may be translated but not an
@@ -477,6 +504,51 @@ rcRti:
 		adda.l	d4,a0
 		endif
 		bra.w	rcInterp
+
+		if MMC3_IRQ
+; ----------------------------------------------------------------
+; MMC3's scanline IRQ (MMC3_IRQ), as irqDue and irqTake take it (emu/
+; cpu.asm): from rcRti, or where translated code clears the I flag
+; with CLI (rcIrqCli). Its RTI goes on at d4, where the code would
+; have, and interprets there if it would have (irqInterp)
+; ----------------------------------------------------------------
+
+rcIrqCli:
+		tst.w	ppuMaskOn(a4)
+		beq.s	.no
+		tst.w	cpuModeIntDis(a4)
+		bne.s	.no
+		tst.w	cpuInIrq(a4)
+		bne.s	.no
+		tst.w	cpuFamiVint(a4)
+		bne.s	.no
+		addq.l	#4,sp			; taken: not returning
+		bra.s	rcIrq
+.no:
+		rts
+
+rcIrq:
+		move.w	rcNmiInterp(a4),irqInterp(a4)
+		clr.w	rcNmiInterp(a4)
+		swap	d3			; push the PC
+		move.w	d4,d6
+		lsr.w	#8,d6
+		move.b	d6,(a2,d3.w)
+		subq.b	#1,d3
+		move.b	d4,(a2,d3.w)
+		subq.b	#1,d3
+		swap	d3
+		jsr	famiGetP		; and P, B clear
+		andi.b	#$EF,d5
+		swap	d3
+		move.b	d5,(a2,d3.w)
+		subq.b	#1,d3
+		swap	d3
+		move.w	#1,cpuModeIntDis(a4)
+		jsr	splitBegin
+		move.w	#rcVecIrq,d4
+		bra.w	rcDispatch
+		endif
 
 ; ----------------------------------------------------------------
 ; Read/write at a computed address

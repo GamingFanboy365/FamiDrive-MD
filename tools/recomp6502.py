@@ -168,6 +168,14 @@ def mmc3_mode1(prg):
 	return any(m.group(1)[0] & 0x40 for m in re.finditer(rb'[\xA9\xA2\xA0](.)[\x8D\x8E\x8C]\x00\x80', prg, re.S))
 
 
+@functools.lru_cache(maxsize=4)
+def mmc3_irq(prg):
+	"""Does the code turn MMC3's scanline IRQ on: a store to $E001
+	(STA/STX/STY)? As NES_MMC3_IRQ from tools/nesinfo.py (MMC3_IRQ in
+	md.asm), which looks for the same."""
+	return re.search(rb'[\x8D\x8E\x8C]\x01\xE0', prg) is not None
+
+
 class Prg:
 	"""PRG-ROM as one translation unit's code sees it.
 	NROM and CNROM (unit None): all of $8000-$FFFF, one unit.
@@ -195,6 +203,7 @@ class Prg:
 		self.banked = self.mapper in (2, 4)
 		prg = rom[16:16 + rom[4] * 0x4000]
 		self.mode1 = self.mapper == 4 and mmc3_mode1(prg)
+		self.irq = self.mapper == 4 and mmc3_irq(prg)
 		self.banks = len(prg) // 0x4000
 		self.banks8 = len(prg) // 0x2000
 		self.unit = unit
@@ -1304,7 +1313,11 @@ class Gen:
 			if self.wram(a):
 				return [], 'rcWram+$%04X(a4)' % a, []
 			if a >= 0x8000 and self.prg.mapper == 4:	# MMC3's registers (emu/memory.asm)
-				reg = {0x8000: 'mmc3WrSelect', 0x8001: 'mmc3WrData', 0xA000: 'mmc3WrMirror'}.get(a & 0xE001)
+				regs = {0x8000: 'mmc3WrSelect', 0x8001: 'mmc3WrData', 0xA000: 'mmc3WrMirror'}
+				if self.prg.irq:		# and the scanline IRQ's (MMC3_IRQ)
+					regs.update({0xC000: 'mmc3WrIrqLatch', 0xC001: 'mmc3WrIrqReload',
+						     0xE000: 'mmc3WrIrqOff', 0xE001: 'mmc3WrIrqOn'})
+				reg = regs.get(a & 0xE001)
 				return [], None, (['jsr ' + reg] if reg else []) + self.after_switch(i)
 			if a >= 0x8000 and self.prg.mapper == 2:
 				return [], None, ['jsr mapper2Write'] + self.after_switch(i)
@@ -1835,6 +1848,8 @@ class Gen:
 			if need: self.e('andi.b #$FD,d3')
 		elif m in ('CLI', 'SEI'):
 			self.e('move.w #%d,cpuModeIntDis(a4)' % (m == 'SEI'))
+			if m == 'CLI':
+				self.irq_check(i)
 		elif m in ('CLD', 'SED'):
 			self.e('move.w #%d,cpuModeDec(a4)' % (m == 'SED'))
 		elif m == 'NOP':
@@ -2002,6 +2017,15 @@ class Gen:
 		else:
 			self.stubs += ['\t\tjmp %s' % self.lab(i.arg)]
 
+	def irq_check(self, i):
+		"""After a CLI, with MMC3's scanline IRQ (MMC3_IRQ): the IRQ if
+		it waits (rcIrqCli in emu/recomp.asm), its RTI coming back to the
+		next instruction (a target, see run)."""
+		if self.prg.irq:
+			k = self.tag('Iq', i.pc)
+			self.e('tst.w irqOn(a4)', 'beq.s ' + k, 'move.w #$%04X,d4' % ((i.pc + i.n) & 0xFFFF),
+			       'jsr rcIrqCli', k + ':')
+
 	def mmc3_store(self, i, r):
 		"""A store of r to MMC3's $8000 or $8001 that the code around it
 		says enough about, in place of mmc3WrSelect or mmc3WrData (emu/
@@ -2031,12 +2055,17 @@ class Gen:
 				return False
 			lo, hi = sel
 			same = self.tag('Mb', i.pc)
+			irq, call = [], ['move.b %s,d7' % r, 'jsr mmc3WrData', same + ':']
+			if self.prg.irq and lo >> 3 == hi >> 3 and hi & 7 < 6:
+				# R0-R5 with the scanline IRQ (MMC3_IRQ): in the IRQ handler,
+				# the handler, which knows where those go
+				slow = self.tag('Mi', i.pc)
+				irq, call = ['tst.w cpuInIrq(a4)', 'bne.s ' + slow], [slow + ':'] + call
 			if lo == hi and lo & 7 < 6:	# R0-R5
-				self.e('cmp.b mmc3Regs+%d(a4),%s' % (lo & 7, r), 'beq.s ' + same,
-				       'move.b %s,d7' % r, 'jsr mmc3WrData', same + ':')
+				self.e(*irq, 'cmp.b mmc3Regs+%d(a4),%s' % (lo & 7, r), 'beq.s ' + same, *call)
 			elif lo >> 3 == hi >> 3 and hi & 7 < 6:	# one of R0-R5: the register from $8000
-				self.e('moveq #7,d5', 'and.b mmc3Select+1(a4),d5', 'lea mmc3Regs(a4),a5',
-				       'cmp.b (a5,d5.w),%s' % r, 'beq.s ' + same, 'move.b %s,d7' % r, 'jsr mmc3WrData', same + ':')
+				self.e(*irq, 'moveq #7,d5', 'and.b mmc3Select+1(a4),d5', 'lea mmc3Regs(a4),a5',
+				       'cmp.b (a5,d5.w),%s' % r, 'beq.s ' + same, *call)
 			elif lo == hi and not lo & 0x40 and not self.prg.mode1:	# R6, R7 in PRG mode 0
 				self.e('move.b %s,mmc3Regs+%d(a4)' % (r, lo & 7), 'jsr mmc3Pair', *self.after_switch(i))
 			else:
@@ -2756,9 +2785,11 @@ class Gen:
 			self.targets |= {t for t in i.succ if t is not None and t != i.pc + i.n}
 			if i.m == 'JSR':
 				self.targets.add(i.pc + 3)
+		self.paired = self.php_pairs()
+		if self.prg.irq:		# where MMC3's IRQ, taken after a CLI, comes back to (irq_check)
+			self.targets |= {i.pc + 1 for i in self.insns.values() if i.m == 'CLI'}
 		self.counted = self.counted_loops()
 		self.loopy = self.loop_edges()
-		self.paired = self.php_pairs()
 		self.pha_paired = self.pha_pairs()
 		self.fall_from = {i.pc + i.n: i for i in self.insns.values() if i.pc + i.n in i.succ}
 		self.idle_exits, self.idle_jmps = self.idle_loops()
@@ -2863,7 +2894,8 @@ class Gen:
 		self.out.append('\t\talign 2')
 		if vectors:
 			self.out += ['rcPrgMask\tequ $%04X' % self.prg.mask,
-				     'rcVecNmi\tequ $%04X' % vectors[0], 'rcVecReset\tequ $%04X' % vectors[1]]
+				     'rcVecNmi\tequ $%04X' % vectors[0], 'rcVecReset\tequ $%04X' % vectors[1],
+				     'rcVecIrq\tequ $%04X' % vectors[2]]
 
 
 def long_jumps(out):

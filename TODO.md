@@ -25,9 +25,12 @@ finished in #1 to #6.
 - [ ] **MMC3: more of it.** In PRG mode 0, only R6 and R7 as a 16 KB pair are
   supported (`mmc3Write`, PRG_IMAGES); PRG mode 1, 8 KB banks at $A000 and
   $C000, is (Super Mario Bros. 3: PRG_FRAMES, `mmc3Prg1`), but a game can't
-  switch between the modes. The scanline IRQ isn't emulated: Super Mario Bros. 3 times its status bar
-  with it, swapping all six CHR banks there (CHR swaps partway down the
-  screen would need a second set of MD tiles).
+  switch between the modes. The scanline IRQ is taken once a frame, when the
+  NMI handler returns, and what its handler sets up below its line shows in
+  the window plane, from the first whole cell row (`splitDone`). Not yet:
+  more IRQs a frame (Super Mario Bros. 3's 32-pixel partition, water line
+  and spade game), a horizontal scroll below the split, and other sprite
+  tiles below it (sprites there are hidden when the handler switches them).
 - [ ] **Other CHR switches.** MMC3 bank switches copy tiles made with the ROM
   (`chrUpdate`), but a new BG pattern table (`chrLoadBg`) and CNROM's 8 KB
   switches still convert every tile, which takes several frames.

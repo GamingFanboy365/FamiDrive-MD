@@ -126,6 +126,13 @@ rdPPU_OpenBus:
 
 rdPPU_Status:
 		move.w	#0,ppuAddrLatch(a4)
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; in the IRQ handler (MMC3_IRQ): just
+		beq.s	.main			; the latch. Its line is after VBlank,
+		moveq	#0,d7			; whose flag is clear there (the game
+		rts				; may still wait for it), and its time
+.main:						; isn't this frame's (sprite 0)
+		endif
 		move.w	ppuStatus(a4),d7
 		move.w	#0,ppuStatus(a4)
 
@@ -347,7 +354,7 @@ mapper2Write:
 ; $8000 bank select (bits 2-0: the register $8001 sets, bit 6: PRG
 ; mode, bit 7: CHR mode), $8001 bank data, $A000 mirroring, $A001
 ; PRG RAM protect (PRG RAM stays on), $C000-$E001 the scanline IRQ
-; (not emulated).
+; (for a game that turns it on, MMC3_IRQ: mmc3WrIrq).
 ;
 ; PRG: R6 at $8000 and R7 at $A000 (8 KB banks), the last two banks
 ; at $C000. Only R6 and R7 as a 16 KB pair (R6 even, R7 = R6+1) are
@@ -356,14 +363,19 @@ mapper2Write:
 ; both registers make one (the game writes them one at a time).
 ;
 ; Recompiled code calls the handlers of $8000, $8001 and $A000
-; directly (mmc3WrSelect, mmc3WrData, mmc3WrMirror, value in d7), or
-; does their work itself where it knows enough (mmc3_store in
-; tools/recomp6502.py), with mmc3Pair for R6 and R7.
+; directly (mmc3WrSelect, mmc3WrData, mmc3WrMirror, value in d7; and
+; the IRQ's, MMC3_IRQ), or does their work itself where it knows
+; enough (mmc3_store in tools/recomp6502.py), with mmc3Pair for R6
+; and R7.
 ; --------------------------------------------------------
 
 mmc3Write:
 		btst	#6,d6			; $C000-$FFFF: the IRQ
+		if MMC3_IRQ
+		bne.w	mmc3WrIrq
+		else
 		bne.s	mmc3Ignore
+		endif
 		btst	#0,d4
 		bne.s	.odd
 		btst	#5,d6
@@ -385,8 +397,13 @@ mmc3WrMirror:
 mmc3WrSelect:
 		move.b	mmc3Select+1(a4),d5	; $8000
 		move.b	d7,mmc3Select+1(a4)
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; (in the IRQ handler: below its line)
+		bne.s	.same
+		endif
 		eor.b	d7,d5			; a new CHR mode (bit 7): all the
 		bmi.s	.chr_all		; CHR banks moved
+.same:
 		jmp	(RAM_EmuLoop).l
 .chr_all:
 		moveq	#6-1,d5
@@ -403,6 +420,14 @@ mmc3WrData:
 		lea	mmc3Regs(a4),a5
 		cmpi.w	#6,d5
 		bcc.s	.prg
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; R0-R5 in the IRQ handler: the CHR
+		beq.s	.chr			; below its line (splitDone)
+		lea	mmc3RegsSplit(a4),a5
+		move.b	d7,(a5,d5.w)
+		jmp	(RAM_EmuLoop).l
+.chr:
+		endif
 		cmp.b	(a5,d5.w),d7		; R0-R5: CHR, a new bank
 		beq.s	.done			; (games set them every frame)
 		move.b	d7,(a5,d5.w)
@@ -494,6 +519,48 @@ mmc3Chr:
 		bsr.w	chrUpdate
 		movem.l	(sp)+,d0/a0
 		rts
+
+		if MMC3_IRQ
+; --------------------------------------------------------
+; MMC3's scanline IRQ (MMC3_IRQ): $C000 its line, $C001 reload (the
+; counter isn't kept: the IRQ comes when the NMI handler returns, for
+; the line $E001 set, see irqDue and splitDone), $E000 off, $E001
+; on. One is taken a frame: in the IRQ handler, $E000 and $E001 are
+; for the next, which the NMI handler sets. Recompiled code calls
+; these directly (value in d7).
+; --------------------------------------------------------
+
+mmc3WrIrq:
+		btst	#5,d6
+		bne.s	.e
+		btst	#0,d4
+		bne.s	mmc3WrIrqReload
+		bra.s	mmc3WrIrqLatch
+.e:
+		btst	#0,d4
+		bne.s	mmc3WrIrqOn
+		bra.s	mmc3WrIrqOff
+
+mmc3WrIrqLatch:
+		move.b	d7,irqLatch+1(a4)
+mmc3WrIrqReload:
+		jmp	(RAM_EmuLoop).l
+
+mmc3WrIrqOff:
+		tst.w	cpuInIrq(a4)
+		bne.s	.done
+		clr.w	irqOn(a4)
+.done:
+		jmp	(RAM_EmuLoop).l
+
+mmc3WrIrqOn:
+		tst.w	cpuInIrq(a4)
+		bne.s	.done
+		move.w	#1,irqOn(a4)
+		move.w	irqLatch(a4),irqLine(a4)
+.done:
+		jmp	(RAM_EmuLoop).l
+		endif
 
 		if PRG_MODE1
 ; --------------------------------------------------------
@@ -840,7 +907,11 @@ APU_OAMDMA:
 		moveq	#$79,d0			; NES line L+1 is MD line L-8, +128
 		move.w	#$80,d1
 		moveq	#0,d2
+		if MMC3_IRQ
+		move.w	sprHideY(a4),d5		; Y $E7 on (or below the split): hidden
+		else
 		moveq	#$E7-$100,d5		; Y $E7 on: hidden
+		endif
 	; unrolled: a hidden sprite (most of them, often) is a load, a
 	; compare and a branch
 oamSpr		set	0
