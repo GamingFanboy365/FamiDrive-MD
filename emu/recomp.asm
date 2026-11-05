@@ -155,7 +155,9 @@ rcDispatch:
 
 ; ----------------------------------------------------------------
 ; Interpret code that wasn't translated, one instruction at a time,
-; until it reaches translated code again
+; until it reaches an entry of translated code (rcSafe): elsewhere
+; the translated code may count on what the code before it left,
+; such as the carry in the X flag.
 ;
 ; a0 - 6502 PC (in the PRG copy or RAM, like the interpreter)
 ; ----------------------------------------------------------------
@@ -185,7 +187,11 @@ rcInterpStep:
 		movea.l	rcCurTableC(a4),a5
 		bra.s	.look
 .a:
-		movea.l	rcCurTable(a4),a5
+		movea.l	rcCurTable(a4),a5	; (less $8000: its rcSafe at $7FFC)
+		move.l	(a5,d5.l),d6
+		beq.s	.step
+		movea.l	$7FFC(a5),a5
+		bra.s	.safe
 .look:
 		else
 		move.l	a0,d4			; 6502 address of the next instruction
@@ -210,7 +216,18 @@ rcInterpStep:
 		lea	(rcTable).l,a5
 		endif
 		endif
-		move.l	(a5,d5.l),d5
+		move.l	(a5,d5.l),d6		; translated,
+		beq.s	.step
+		movea.l	-4(a5),a5		; and an entry? (rcSafe: a bit for
+.safe:						; each address, by its offset, set at
+		move.w	d4,d5			; entries)
+		if PRG_BANKED
+		andi.w	#$3FFF,d5
+		else
+		andi.w	#rcPrgMask,d5
+		endif
+		lsr.w	#3,d5
+		btst	d4,(a5,d5.w)
 		bne.s	.translated
 .step:
 		clr.w	d4
@@ -227,8 +244,11 @@ rcInterpStep:
 		beq.s	.step
 .vblank:
 		move.w	#$4E75,(RAM_EmuLoop).l	; rcNmi may enter translated code
-		jsr	rcNmi
-		bra.s	rcInterp		; no NMI taken: carry on
+		move.w	rcNmiInterp(a4),-(sp)	; (and its RTI go on interpreting
+		move.w	#1,rcNmiInterp(a4)	; here, rcRti; one the NMI handler
+		jsr	rcNmi			; is in keeps its own)
+		move.w	(sp)+,rcNmiInterp(a4)
+		bra.w	rcInterp		; no NMI taken: carry on
 
 .translated:
 		move.w	#$4E75,(RAM_EmuLoop).l
@@ -238,7 +258,7 @@ rcInterpStep:
 		else
 		lea	(RAM_Fami_ROM+$8000).l,a0
 		endif
-		movea.l	d5,a5
+		movea.l	d6,a5
 		jmp	(a5)
 
 ; ----------------------------------------------------------------
@@ -430,7 +450,25 @@ rcRti:
 		move.w	#1,FamiMdVint(a4)
 		move.w	#1,nmiWaitDue(a4)
 .on_time:
-		bra	rcDispatch
+		tst.w	rcNmiInterp(a4)		; taken while interpreting (rcInterpStep):
+		beq.w	rcDispatch		; go on interpreting there, as the code
+		clr.w	rcNmiInterp(a4)		; there may be translated but not an
+		tst.w	d4			; entry
+		bpl.w	rcDispatch		; (in RAM: rcDispatch interprets it)
+		if PRG_MODE1
+		move.w	d4,d6
+		andi.w	#$7FFF,d6
+		bsr.w	prgPc
+		elseif PRG_BANKED
+		andi.l	#$7FFF,d4
+		movea.l	a1,a0
+		adda.l	d4,a0
+		else
+		andi.l	#rcPrgMask,d4
+		movea.l	a1,a0
+		adda.l	d4,a0
+		endif
+		bra.w	rcInterp
 
 ; ----------------------------------------------------------------
 ; Read/write at a computed address

@@ -2832,16 +2832,35 @@ class Gen:
 			self.emit_routine(f)
 			if f in self.copies_for and self.copy_label(f)[0] == 'X':
 				self.emit_routine(f, 'X')
-		# dispatch table: PRG offset -> code
-		self.out += ['', '\t\talign 4', 'rcTable:']
+		# dispatch table: PRG offset -> code, and before it, rcSafe's
+		# address, less its first byte's index (see below)
 		size = len(self.prg.data)
 		addrs = [a for lo, hi in self.prg.regions for a in range(lo, hi + 1)] if self.prg.banked else \
 			[0x10000 - size + o for o in range(size)]	# (MMC3 PRG mode 1's fixed code: $8000, $E000)
+		safe_bit = (lambda a: a & 0x3FFF) if self.prg.banked else (lambda a: a & self.prg.mask)
+		first = min(safe_bit(a) for a in addrs) & ~7
+		self.out += ['', '\t\talign 4', '\t\tdc.l rcSafe-$%X' % (first >> 3), 'rcTable:']
 		for off in range(0, size, 8):
 			row = []
 			for a in addrs[off:off + 8]:
 				row.append(lab(a) if a in self.insns else '0')
 			self.out.append('\t\tdc.l ' + ','.join(row))
+		# where code coming from the interpreter may go on in this code
+		# (rcInterpStep): a bit for each address (by its offset as in
+		# rcDispatch, and in a byte by its low 3 bits), set at entries.
+		# Elsewhere the code may count on what the code before it left
+		# (the carry in X, a5, a value range, a PHA's byte on the 68000's
+		# stack...), which the interpreter doesn't.
+		bits = bytearray((max(safe_bit(a) for a in addrs) - first) // 8 + 1)
+		inside = set(addrs)
+		for a in self.entries:
+			if a in self.insns and a in inside:
+				k = safe_bit(a) - first
+				bits[k >> 3] |= 1 << (k & 7)
+		self.out.append('rcSafe:')
+		for off in range(0, len(bits), 16):
+			self.out.append('\t\tdc.b ' + ','.join('$%02X' % b for b in bits[off:off + 16]))
+		self.out.append('\t\talign 2')
 		if vectors:
 			self.out += ['rcPrgMask\tequ $%04X' % self.prg.mask,
 				     'rcVecNmi\tequ $%04X' % vectors[0], 'rcVecReset\tequ $%04X' % vectors[1]]

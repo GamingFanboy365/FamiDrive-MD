@@ -167,6 +167,7 @@ chrStale	ds.w 1			; and those a3's copy is out of date for (bits 0-7, chrSync)
 prgFrameC	ds.l 1			; MMC3 PRG mode 1: the frame of R6's bank, at $C000 (PRG_FRAMES)
 rcCurTableC	ds.l 1			; and recompiled: the code of R6's bank, at $C000 (rcCurTable: R7's)
 rcFrameC	ds.l 1			; and prgFrameC+$8000, to read $C000-$DFFF through (emu/recomp.asm)
+rcNmiInterp	ds.w 1			; recompiled code: an NMI came while interpreting (rcInterpStep, rcRti)
 		finish
 sprTable2	equ vdpSprData2-vdpSprData
 
