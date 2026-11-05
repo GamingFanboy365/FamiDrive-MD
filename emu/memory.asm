@@ -435,10 +435,13 @@ mmc3WrData:
 .done:
 		jmp	(RAM_EmuLoop).l
 .prg:
-		move.b	d7,(a5,d5.w)
 		if PRG_MODE1
+		cmp.b	(a5,d5.w),d7		; R6, R7 (PRG mode 1: a bank each): a
+		beq.s	.done			; new bank (games set them again and
+		move.b	d7,(a5,d5.w)		; again)
 		bra.w	mmc3Prg1
 		else
+		move.b	d7,(a5,d5.w)
 		moveq	#0,d5
 		move.b	6(a5),d5		; R6, R7: PRG
 		lsr.b	#1,d5

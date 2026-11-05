@@ -412,19 +412,27 @@ def discover(prg, extra=()):
 			return insns, vectors, tables
 		forced |= bad
 
-def jump_tables(prg, insns):
+def jump_tables(prg, insns, foreign=None, loads=None):
 	"""Addresses found in jump tables:
 	- a table of low bytes and one of high bytes (or one table of both,
 	  interleaved), stored into a RAM pointer for JMP (ptr), or after a
 	  JMP opcode written to RAM
 	- tables pushed high/low before an RTS (target - 1)
-	Returns all of them, and those reached by RTS."""
+	Returns all of them, and those reached by RTS. MMC3 PRG mode 1: the
+	tables this unit loads from the other slot, whose bank it can't know,
+	go into foreign, as (low bytes, high bytes, 1 for RTS tables) (mode1
+	reads them in each bank there: slot_table), and into loads where it
+	loads anything there indexed (where such a table must end)."""
 	order = sorted(insns)
 	prev = {order[k]: insns[order[k - 1]] for k in range(1, len(order))}
 
+	def readable(a):
+		return prg.const(a) or (foreign is not None and prg.mode1 and prg.region(a) in ('A', 'C') and
+					prg.region(a) != prg.slot)
+
 	def table_load(i):
 		p = prev.get(i.pc)
-		if p and p.m in ('LDA', 'LDX', 'LDY') and p.mode in ('absx', 'absy') and prg.const(p.arg):
+		if p and p.m in ('LDA', 'LDX', 'LDY') and p.mode in ('absx', 'absy') and readable(p.arg):
 			return p.arg
 		return None
 
@@ -455,7 +463,9 @@ def jump_tables(prg, insns):
 
 	lo, hi = {}, {}
 	for i in insns.values():
-		if i.m in ('LDA', 'LDX', 'LDY') and i.mode in ('absx', 'absy') and prg.const(i.arg):
+		if loads is not None and i.mode in ('absx', 'absy') and readable(i.arg) and not prg.const(i.arg):
+			loads.add(i.arg)
+		if i.m in ('LDA', 'LDX', 'LDY') and i.mode in ('absx', 'absy') and readable(i.arg):
 			s = stored_to(i)
 			if s is not None:
 				if s in slots: lo.setdefault(s, set()).add(i.arg)
@@ -475,6 +485,10 @@ def jump_tables(prg, insns):
 					break
 	found, rts = set(), set()
 	for l, h, add in pairs:
+		if not (prg.const(l) and prg.const(h)):
+			if not (prg.const(l) or prg.const(h)) and prg.region(l) == prg.region(h):
+				foreign.append((l, h, add))
+			continue
 		step = 1
 		if h == l + 1:			# interleaved: low, high, low, high...
 			step, n = 2, 64
@@ -497,6 +511,13 @@ def plausible_code(prg, a, count=12):
 	the unit's own code (banked PRG): do they in one of its peers?"""
 	if not prg.has(a):
 		return any(plausible_code(p, a, count) for p in prg.peers if p.has(a))
+	return plausible_run(prg, a, count)
+
+
+def plausible_run(prg, a, count):
+	"""plausible_code in the unit's own code, going on at the target of a
+	branch a constant loaded before it makes always taken (taken)."""
+	nz = None
 	for _ in range(count):
 		if not prg.has(a) or prg.byte(a) not in OPS:
 			return False
@@ -506,8 +527,38 @@ def plausible_code(prg, a, count=12):
 		if m == 'JSR' and prg.const(a + 1) and prg.const(a + 2) and \
 		   inline_table_routine(prg, prg.word(a + 1)):
 			return True		# a table follows
+		if taken(m, nz) and prg.has(a + 1):
+			a, nz = rel_target(prg, a), None
+			continue
+		nz = nz_after(prg, a, m, mode, nz)
 		a += SIZE[mode]
 	return True
+
+
+# instructions that leave N and Z as they are
+NZ_KEEP = {'STA', 'STX', 'STY', 'CLC', 'SEC', 'CLI', 'SEI', 'CLV', 'CLD', 'SED', 'NOP', 'PHA', 'PHP', 'TXS',
+	   'BCC', 'BCS', 'BVC', 'BVS', 'BEQ', 'BNE', 'BPL', 'BMI'}
+
+
+def nz_after(prg, a, m, mode, nz):
+	"""The constant N and Z come from after the instruction at a (LDA,
+	LDX or LDY #n), or None."""
+	if m in ('LDA', 'LDX', 'LDY') and mode == 'imm':
+		return prg.byte(a + 1)
+	return nz if m in NZ_KEEP else None
+
+
+def taken(m, nz):
+	"""Is branch m always taken, with N and Z from constant nz?"""
+	if nz is None:
+		return False
+	return {'BEQ': nz == 0, 'BNE': nz != 0, 'BPL': nz < 0x80, 'BMI': nz >= 0x80}.get(m, False)
+
+
+def rel_target(prg, a):
+	"""Where the branch at a goes."""
+	d = prg.byte(a + 1)
+	return (a + 2 + (d - 256 if d > 127 else d)) & 0xFFFF
 
 
 def sane_address(a):
@@ -519,7 +570,10 @@ def sane_address(a):
 def code_at(prg, a, count=10):
 	"""A stricter plausible_code, for code going into a slot that holds
 	one of many banks (MMC3 PRG mode 1): legal instructions, no BRK or
-	RTI, and absolute addresses code uses."""
+	RTI, and absolute addresses code uses. As there, a JSR to a jump
+	engine ends it (a table follows), and it goes on at the target of a
+	branch always taken (taken), or followed by what can't be code."""
+	nz = None
 	for _ in range(count):
 		op = prg.byte(a)
 		if op not in OPS or op in (0x00, 0x40):	# (BRK, RTI)
@@ -529,8 +583,43 @@ def code_at(prg, a, count=10):
 			return False
 		if m in ('RTS', 'RTI', 'JMP'):
 			return True
+		if m == 'JSR' and inline_table_routine(prg, prg.word(a + 1)):
+			return True
+		if mode == 'rel' and prg.const(a + 1) and \
+		   (taken(m, nz) or prg.byte(a + 2) not in OPS or prg.byte(a + 2) in (0x00, 0x40)):
+			a, nz = rel_target(prg, a), None
+			continue
+		nz = nz_after(prg, a, m, mode, nz)
 		a += SIZE[mode]
 	return True
+
+
+def slot_table(b, l, h, add, end=0x10000):
+	"""MMC3 PRG mode 1: a jump table another unit loads from b's slot
+	(jump_tables' foreign), read in bank unit b's bytes, as jump_tables
+	reads one, if it is one there: four of its entries or more go to
+	b's own code (as the code loading it from that slot expects). Ends
+	at the first that isn't an address in PRG, or not code (code_at) in
+	b's slot or the fixed banks', or at end (where the code loading it
+	loads something else). Returns its targets in b's slot, in the fixed
+	banks' and in the other slot (which bank is there isn't known
+	here)."""
+	step, n = (2, 64) if h == l + 1 else (1, h - l if 0 < h - l <= 128 else 64)
+	own, fixed, other = [], [], []
+	for k in range(0, n * step, step):
+		if not (b.has(l + k) and b.has(h + k)) or l + k >= end:
+			break
+		a = ((b.byte(l + k) | b.byte(h + k) << 8) + add) & 0xFFFF
+		if a < 0x8000:
+			break
+		r = b.region(a)
+		if r in (b.slot, 'F'):
+			if not code_at(b, a):
+				break
+			(own if r == b.slot else fixed).append(a)
+		else:
+			other.append(a)
+	return (own, fixed, other) if len(own) >= 4 else ([], [], [])
 
 
 def slot_homes(rom):
@@ -540,20 +629,61 @@ def slot_homes(rom):
 	slot go to its code, those into the other slot to another bank's:
 	there its bytes are as likely data. A slot scores the JSRs and JMPs
 	into it whose target looks like code here (code_at), less those
-	whose target doesn't."""
-	homes = {}
+	whose target doesn't. A bank with no sign of code that way (Super
+	Mario Bros. 3's level styles, whose code calls only the fixed
+	banks' and the other slot's) scores in each slot, as well, the
+	addresses that look like code in the tables after its JSRs to a jump
+	engine in the fixed banks (inline_table_routine): in the slot, or in
+	the other slot in a bank found to be there (table_code)."""
+	fixed = Prg(rom, 'F')
+	engine = {}
+	homes, scores, tables = {}, {}, {}
 	for b in range(rom[4] * 2 - 2):
 		score = {}
 		for s in 'AC':
 			u = Prg(rom, (s, b))
 			score[s] = 0
+			tables[b, s] = []
 			for k in range(len(u.data) - 2):
 				t = u.data[k + 1] | u.data[k + 2] << 8
 				if u.data[k] in (0x20, 0x4C) and u.has(t):
 					score[s] += 1 if code_at(u, t) else -1
+				elif u.data[k] == 0x20 and fixed.has(t):
+					if t not in engine:
+						engine[t] = inline_table_routine(fixed, t)
+					if engine[t]:
+						tables[b, s].append(u.lo + k + 3)
+		best = max('AC', key=lambda s: score[s])
+		homes[b] = best if score[best] > 0 else None
+		scores[b] = score
+	for b in [b for b in homes if homes[b] is None]:
+		score = scores[b]
+		for s in 'AC':
+			u = Prg(rom, (s, b))
+			other = 'C' if s == 'A' else 'A'
+			there = [Prg(rom, (other, c)) for c in homes if homes[c] == other]
+			for at in tables[b, s]:
+				score[s] += table_code(u, at, there)
 		best = max('AC', key=lambda s: score[s])
 		homes[b] = best if score[best] > 0 else None
 	return homes
+
+
+def table_code(u, at, there):
+	"""slot_homes: how many addresses in the table at at look like code
+	(code_at) in u's slot, or in the other slot in one of the banks
+	there, up to the first in u's slot that doesn't, or one not in PRG
+	(64 at most)."""
+	n = 0
+	for _ in range(64):
+		if not (u.has(at) and u.has(at + 1)):
+			break
+		a = u.word(at)
+		if a < 0x8000 or (u.has(a) and not code_at(u, a)):
+			break
+		n += u.has(a) or any(p.has(a) and code_at(p, a) for p in there)
+		at += 2
+	return n
 
 # ----------------------------------------------------------------------
 # Value ranges of A, X and Y (to prove zp,X / zp,Y can't wrap)
@@ -2924,7 +3054,8 @@ def analyze(prg, extra, entries=()):
 	extra = list(extra) + sorted(set(entries) - set(extra))
 	insns, vectors, inline = discover(prg, extra)
 	while True:
-		found, rts = jump_tables(prg, insns)
+		foreign, loads = [], set()
+		found, rts = jump_tables(prg, insns, foreign, loads)
 		more = {a for a in found if prg.has(a)} - set(insns)
 		if not more:
 			break
@@ -2934,7 +3065,7 @@ def analyze(prg, extra, entries=()):
 	tables = sorted(found | inline)
 	return {'insns': insns, 'vectors': vectors, 'extra': extra, 'tables': tables, 'user': user,
 		'rts': {a for a in rts if prg.has(a)}, 'entries': set(entries), 'banked': prg.banked,
-		'slot': prg.slot, 'region': prg.region}
+		'slot': prg.slot, 'region': prg.region, 'foreign': sorted(set(foreign)), 'loads': loads}
 
 
 def outside(u, lo, hi):
@@ -3036,8 +3167,10 @@ def mode1(rom, extra):
 	"""MMC3 in PRG mode 1: the fixed banks' code, and each bank's at its
 	slot (slot_homes) from where other units' code goes there: the fixed
 	code's and the other slot's banks' (wherever the bank's bytes look
-	like code, code_at: which bank is there isn't known here), until no
-	unit's code goes anywhere new. Returns the output and the units."""
+	like code, code_at: which bank is there isn't known here), and from
+	the jump tables they load from its slot, as they are in the bank
+	(slot_table), until no unit's code goes anywhere new. Returns the
+	output and the units."""
 	homes = slot_homes(rom)
 	fixed = Prg(rom, 'F')
 	slots = [Prg(rom, (s, b)) for s in 'AC' for b in sorted(homes) if homes[b] == s]
@@ -3046,18 +3179,30 @@ def mode1(rom, extra):
 		b.peers = [fixed] + [p for p in slots if p.slot != b.slot]
 	win = {'F': ((0x8000, 0xA000), (0xE000, 0x10000)), 'A': ((0xA000, 0xC000),), 'C': ((0xC000, 0xE000),)}
 	into = {s: set() for s in 'FAC'}
+	tab = {b.unit: set() for b in slots}	# and into each bank, from its jump tables other units load
 	while True:
 		uf = analyze(fixed, extra, into['F'])
-		us = [uf] + [analyze(b, [], [a for a in sorted(into[b.slot]) if code_at(b, a)]) for b in slots]
+		us = [uf] + [analyze(b, [], sorted({a for a in into[b.slot] if code_at(b, a)} | tab[b.unit])) for b in slots]
 		new = {s: set() for s in 'FAC'}
+		newtab = {b.unit: set() for b in slots}
 		for u in us:
 			for s in 'FAC':
 				for lo, hi in win[s] if s != u['slot'] else ():
 					new[s] |= outside(u, lo, hi)
-		if all(new[s] <= into[s] for s in 'FAC'):
+			for l, h, add in u['foreign']:	# (slot_table)
+				end = min([a for a in u['loads'] if a > max(l, h)] + [0x10000])
+				for b in slots:
+					if b.region(l) == b.slot:
+						own, fx, other = slot_table(b, l, h, add, end)
+						newtab[b.unit] |= set(own)
+						new['F'] |= set(fx)
+						new['C' if b.slot == 'A' else 'A'] |= set(other)
+		if all(new[s] <= into[s] for s in 'FAC') and all(newtab[k] <= tab[k] for k in tab):
 			break
 		for s in 'FAC':
 			into[s] |= new[s]
+		for k in tab:
+			tab[k] |= newtab[k]
 	# flags live where one unit's code goes to another's (as for banks
 	# at $8000, main)
 	ents = [into['F']] + [u['entries'] for u in us[1:]]
