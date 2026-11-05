@@ -246,9 +246,17 @@ rcInterpStep:
 		move.w	#$4E75,(RAM_EmuLoop).l	; rcNmi may enter translated code
 		move.w	rcNmiInterp(a4),-(sp)	; (and its RTI go on interpreting
 		move.w	#1,rcNmiInterp(a4)	; here, rcRti; one the NMI handler
-		jsr	rcNmi			; is in keeps its own)
+		move.l	a0,-(sp)		; is in keeps its own), which reads
+		if PRG_BANKED			; PRG through a0, as .translated
+		movea.l	a1,a0
+		adda.l	#$8000,a0
+		else
+		lea	(RAM_Fami_ROM+$8000).l,a0
+		endif
+		jsr	rcNmi
+		movea.l	(sp)+,a0		; no NMI taken: carry on
 		move.w	(sp)+,rcNmiInterp(a4)
-		bra.w	rcInterp		; no NMI taken: carry on
+		bra.w	rcInterp
 
 .translated:
 		move.w	#$4E75,(RAM_EmuLoop).l
