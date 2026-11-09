@@ -461,20 +461,26 @@ def jump_tables(prg, insns, foreign=None, loads=None):
 			pc = j.arg if j.m == 'JMP' else pc + j.n
 		return None
 
-	lo, hi = {}, {}
+	lo, hi = {}, {}			# slot -> {table: loads' addresses}
 	for i in insns.values():
 		if loads is not None and i.mode in ('absx', 'absy') and readable(i.arg) and not prg.const(i.arg):
 			loads.add(i.arg)
 		if i.m in ('LDA', 'LDX', 'LDY') and i.mode in ('absx', 'absy') and readable(i.arg):
 			s = stored_to(i)
 			if s is not None:
-				if s in slots: lo.setdefault(s, set()).add(i.arg)
-				if s - 1 in slots: hi.setdefault(s - 1, set()).add(i.arg)
+				if s in slots: lo.setdefault(s, {}).setdefault(i.arg, set()).add(i.pc)
+				if s - 1 in slots: hi.setdefault(s - 1, {}).setdefault(i.arg, set()).add(i.pc)
+
+	def near(l, h, slot):
+		"""MMC3 PRG mode 1: are a load of the low bytes and one of the high
+		bytes 24 bytes apart at most, as code making one jump does? (A RAM
+		pointer games use everywhere gets its bytes from many tables.)"""
+		return not prg.mode1 or any(abs(a - b) <= 24 for a in lo[slot][l] for b in hi[slot][h])
 	pairs = []
 	for slot in lo:
-		same = lo[slot] & hi.get(slot, set())	# LDA t,Y / INY / LDA t,Y: interleaved
+		same = set(lo[slot]) & set(hi.get(slot, {}))	# LDA t,Y / INY / LDA t,Y: interleaved
 		pairs += [(t, t + 1, 0) for t in same]
-		pairs += [(l, h, 0) for l in lo[slot] - same for h in hi.get(slot, set()) - same]
+		pairs += [(l, h, 0) for l in set(lo[slot]) - same for h in set(hi.get(slot, {})) - same if near(l, h, slot)]
 	# RTS tables: LDA hi,X / PHA / LDA lo,X / PHA ... RTS
 	for k, pc in enumerate(order):
 		i = insns[pc]
@@ -1361,14 +1367,32 @@ class Gen:
 
 	def switches(self, i):
 		"""Can i, in a bank's code, write to the mapper (and switch the
-		bank it runs in)?"""
-		return self.prg.unit != 'F' and self.prg_switch(i)
+		bank it runs in)? MMC3 PRG mode 1: R7 switches $A000's bank, R6
+		$C000's (mmc3_regs)."""
+		if self.prg.unit == 'F' or not self.prg_switch(i):
+			return False
+		regs = self.mmc3_regs(i) if self.prg.mode1 else None
+		return regs is None or {'A': 7, 'C': 6}[self.prg.slot] in regs
 
 	def prg_switch(self, i):
-		"""Can i switch the bank at $8000? With MMC3, only its $8001 can."""
+		"""Can i switch the bank at $8000? With MMC3, only its $8001 can
+		(in PRG mode 1, not when it goes to R0-R5, CHR: mmc3_regs)."""
 		if not (self.prg.banked and mapper_write(i)):
 			return False
-		return not (i.mode == 'abs' and self.prg.mapper == 4 and i.arg & 0xE001 != 0x8001)
+		if i.mode == 'abs' and self.prg.mapper == 4 and i.arg & 0xE001 != 0x8001:
+			return False
+		regs = self.mmc3_regs(i) if self.prg.mode1 else None
+		return regs is None or max(regs) >= 6
+
+	def mmc3_regs(self, i):
+		"""The MMC3 registers (0-7) a store to $8001 can go to, from what
+		$8000 holds there (mmc3_select), or None if that isn't known."""
+		if not (i.mode == 'abs' and self.prg.mapper == 4 and i.arg >= 0x8000 and i.arg & 0xE001 == 0x8001):
+			return None
+		sel = self.mmc3_select(i)
+		if sel is None or sel[0] >> 3 != sel[1] >> 3:
+			return None
+		return set(range(sel[0] & 7, (sel[1] & 7) + 1))
 
 	def after_switch(self, i):
 		"""After a mapper write in a bank's code: if the bank at $8000 is
@@ -2162,7 +2186,8 @@ class Gen:
 		memory.asm): $8000 when bit 7 (CHR mode) is known, the handler only
 		if that changes; $8001 right after a known value went to $8000,
 		R0-R5 (CHR) the handler only if the bank changes, R6 and R7 (PRG
-		mode 0) the value put there, then mmc3Pair."""
+		mode 0) the value put there, then mmc3Pair, and in PRG mode 1 the
+		bank's code and frame (rcPrgA, rcPrgC) if it changes."""
 		if not (self.prg.mapper == 4 and i.mode == 'abs' and i.arg >= 0x8000):
 			return False
 		rng = self.ranges.get(i.pc)
@@ -2191,13 +2216,23 @@ class Gen:
 				# the handler, which knows where those go
 				slow = self.tag('Mi', i.pc)
 				irq, call = ['tst.w cpuInIrq(a4)', 'bne.s ' + slow], [slow + ':'] + call
-			if lo == hi and lo & 7 < 6:	# R0-R5
+			if lo == hi and lo & 7 < 6 and irq:	# R0-R5, MMC3_IRQ: in the IRQ handler,
+				self.e('tst.w cpuInIrq(a4)', 'bne.s ' + slow,	# mmc3RegsSplit (as mmc3WrData)
+				       'cmp.b mmc3Regs+%d(a4),%s' % (lo & 7, r), 'beq.s ' + same, 'move.b %s,d7' % r,
+				       'jsr mmc3WrData', 'bra.s ' + same, slow + ':',
+				       'move.b %s,mmc3RegsSplit+%d(a4)' % (r, lo & 7), same + ':')
+			elif lo == hi and lo & 7 < 6:	# R0-R5
 				self.e(*irq, 'cmp.b mmc3Regs+%d(a4),%s' % (lo & 7, r), 'beq.s ' + same, *call)
 			elif lo >> 3 == hi >> 3 and hi & 7 < 6:	# one of R0-R5: the register from $8000
 				self.e(*irq, 'moveq #7,d5', 'and.b mmc3Select+1(a4),d5', 'lea mmc3Regs(a4),a5',
 				       'cmp.b (a5,d5.w),%s' % r, 'beq.s ' + same, *call)
 			elif lo == hi and not lo & 0x40 and not self.prg.mode1:	# R6, R7 in PRG mode 0
 				self.e('move.b %s,mmc3Regs+%d(a4)' % (r, lo & 7), 'jsr mmc3Pair', *self.after_switch(i))
+			elif lo == hi and self.prg.mode1:	# R7 ($A000's bank), R6 ($C000's) in PRG mode 1
+				n = lo & 7
+				self.e('cmp.b mmc3Regs+%d(a4),%s' % (n, r), 'beq.s ' + same, 'move.b %s,mmc3Regs+%d(a4)' % (r, n),
+				       'move.b %s,d7' % r, 'jsr %s' % ('rcPrgA' if n == 7 else 'rcPrgC'), *self.after_switch(i),
+				       same + ':')
 			else:
 				return False
 			return True

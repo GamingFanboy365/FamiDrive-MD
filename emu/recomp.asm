@@ -711,4 +711,48 @@ rcPrgSlot:
 		lea	(rcBankTablesA).l,a5
 		move.l	(a5,d4.w),rcCurTable(a4)
 		rts
+
+; ----------------------------------------------------------------
+; MMC3 PRG mode 1: translated code wrote a new bank to R7 (rcPrgA)
+; or R6 (rcPrgC), and put it in mmc3Regs (tools/recomp6502.py,
+; mmc3_store): what mmc3Prg1 and rcPrgSlot do then, for code that
+; runs with a0 = a1+$8000. R7's bank's frame goes to a1 (and
+; cpuPrgImg, a0 with it), R6's to prgFrameC (and rcFrameC), and the
+; bank's code there to rcCurTable or rcCurTableC.
+;
+; d7.b - the bank
+; ----------------------------------------------------------------
+
+rcPrgA:
+		moveq	#0,d6
+		move.b	d7,d6
+		andi.w	#prgBank8Mask,d6
+		move.w	d6,d5
+		lsl.w	#2,d5
+		lea	(rcBankTablesA).l,a5
+		move.l	(a5,d5.w),rcCurTable(a4)
+		swap	d6			; * 32 KB: its frame
+		lsr.l	#1,d6
+		addi.l	#PRG_FRAMES,d6
+		movea.l	d6,a1
+		move.l	d6,cpuPrgImg(a4)
+		movea.l	d6,a0
+		adda.l	#$8000,a0
+		rts
+
+rcPrgC:
+		moveq	#0,d6
+		move.b	d7,d6
+		andi.w	#prgBank8Mask,d6
+		move.w	d6,d5
+		lsl.w	#2,d5
+		lea	(rcBankTablesC).l,a5
+		move.l	(a5,d5.w),rcCurTableC(a4)
+		swap	d6			; * 32 KB: its frame
+		lsr.l	#1,d6
+		addi.l	#PRG_FRAMES,d6
+		move.l	d6,prgFrameC(a4)
+		addi.l	#$8000,d6
+		move.l	d6,rcFrameC(a4)
+		rts
 		endif

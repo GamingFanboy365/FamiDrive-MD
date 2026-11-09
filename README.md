@@ -39,7 +39,7 @@ when the game is busy). Super Mario Bros., Balloon Fight, Ice Climber and Excite
 speed (60) while you play. Games with banked PRG-ROM (mappers 2 and 4) are translated a bank at a
 time: Super Mario Bros. 2 goes from about 6 to 60 game frames per second in most of its levels, and
 Super Mario Bros. 3, whose MMC3 switches 8 KB banks at $A000 and $C000 apart, from about 6 to 60
-in World 1-1's quieter parts, about 50 while it scrolls and about 40 in its busiest moments.
+in World 1-1's quieter parts, about 53 while it scrolls and 40-45 in its busiest moments.
 
 When a game's frame needs a little more time than an MD frame, its next NMI waits until the game
 is ready for it (up to a frame), so the game runs a little slower instead of at half speed. NMIs
@@ -136,7 +136,7 @@ handheld's differences.
 - Super Mario Bros. 3 splits the screen more than once a frame in its levels with water along the
   bottom or a water line, and in its spade bonus game: those show only the first split. Sprites
   that are partly below its status bar's top line show whole or not at all. Recompiled, World
-  1-1 runs at 60 game frames per second where it's quiet, about 50 while it scrolls and about 40
+  1-1 runs at 60 game frames per second where it's quiet, about 53 while it scrolls and 40-45
   where several enemies are on screen (its status bar's split costs about 4 of those where it's
   busiest), and the black screen before a level lasts about 50 frames (20 on a NES).
   Interpreted, it runs at about a tenth of full speed and can't enter a level: its NMI handler
