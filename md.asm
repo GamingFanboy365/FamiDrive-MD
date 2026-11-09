@@ -171,6 +171,10 @@ chrStale	ds.w 1			; and those a3's copy is out of date for (bits 0-7, chrSync)
 prgFrameC	ds.l 1			; MMC3 PRG mode 1: the frame of R6's bank, at $C000 (PRG_FRAMES)
 rcCurTableC	ds.l 1			; and recompiled: the code of R6's bank, at $C000 (rcCurTable: R7's)
 rcFrameC	ds.l 1			; and prgFrameC+$8000, to read $C000-$DFFF through (emu/recomp.asm)
+		if PRG_MODE1
+rcCurCallA	ds.l 1			; and the routines of R7's bank, R6's, that other code calls (rcPrgSlot)
+rcCurCallC	ds.l 1
+		endif
 rcNmiInterp	ds.w 1			; recompiled code: an NMI came while interpreting (rcInterpStep, rcRti)
 emuVarsEnd	equ *
 		finish
@@ -748,7 +752,11 @@ Fami_LoadRom:
 		dbf	d1,.chr_cache
 		endif
 		movea.l	a0,a4			; CHR-ROM: after PRG-ROM (as romGrabPrg
-		adda.l	#$10+NES_PRG16*$4000,a4	; leaves a4)
+		if PRG_MODE1			; leaves a4), or right after the header
+		adda.l	#$10,a4			; (PRG mode 1: ROM_FILE)
+		else
+		adda.l	#$10+NES_PRG16*$4000,a4
+		endif
 		else
 		moveq	#0,d7			; PRG-ROM copy
 		move.b	4(a0),d7
@@ -1018,7 +1026,12 @@ EndOfRom:
 ; ROM are here
 ; ----------------------------------------------------------------
 
+		if PRG_MODE1
+ROM_FILE:	binclude "out/nes_rom.bin",0,$10	; copied here by build.sh: its header,
+		binclude "out/nes_rom.bin",$10+NES_PRG16*$4000	; then CHR-ROM (PRG mode 1:
+		else					; its PRG is in PRG_FRAMES, below)
 ROM_FILE:	binclude "out/nes_rom.bin"	; copied here by build.sh
+		endif
 
 ; ----------------------------------------------------------------
 ; Banked PRG-ROM (mappers 2 and 4): a 32 KB image of $8000-$FFFF

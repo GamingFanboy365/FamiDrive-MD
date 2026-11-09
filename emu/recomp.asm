@@ -686,8 +686,9 @@ rcDelay:
 		if PRG_MODE1
 ; ----------------------------------------------------------------
 ; MMC3 PRG mode 1: R6 or R7 picked a bank (mmc3Prg1, rcStart): the
-; code of that bank at $C000 or at $A000 (rcCurTableC, rcCurTable),
-; and for R6 rcFrameC
+; code of that bank at $C000 or at $A000 (rcCurTableC, rcCurTable)
+; and the copies of its routines other code calls (rcCurCallC,
+; rcCurCallA: tools/recomp6502.py, Gen.dyn_call), and for R6 rcFrameC
 ;
 ; d5.w - 6 or 7
 ; d6.w - the bank (kept)
@@ -700,6 +701,8 @@ rcPrgSlot:
 		beq.s	.r7
 		lea	(rcBankTablesC).l,a5
 		move.l	(a5,d4.w),rcCurTableC(a4)
+		lea	(rcBankCallsC).l,a5
+		move.l	(a5,d4.w),rcCurCallC(a4)
 		moveq	#0,d4
 		move.w	d6,d4
 		swap	d4
@@ -710,6 +713,8 @@ rcPrgSlot:
 .r7:
 		lea	(rcBankTablesA).l,a5
 		move.l	(a5,d4.w),rcCurTable(a4)
+		lea	(rcBankCallsA).l,a5
+		move.l	(a5,d4.w),rcCurCallA(a4)
 		rts
 
 ; ----------------------------------------------------------------
@@ -718,7 +723,8 @@ rcPrgSlot:
 ; mmc3_store): what mmc3Prg1 and rcPrgSlot do then, for code that
 ; runs with a0 = a1+$8000. R7's bank's frame goes to a1 (and
 ; cpuPrgImg, a0 with it), R6's to prgFrameC (and rcFrameC), and the
-; bank's code there to rcCurTable or rcCurTableC.
+; bank's code there to rcCurTable or rcCurTableC (and rcCurCallA or
+; rcCurCallC).
 ;
 ; d7.b - the bank
 ; ----------------------------------------------------------------
@@ -731,6 +737,8 @@ rcPrgA:
 		lsl.w	#2,d5
 		lea	(rcBankTablesA).l,a5
 		move.l	(a5,d5.w),rcCurTable(a4)
+		lea	(rcBankCallsA).l,a5
+		move.l	(a5,d5.w),rcCurCallA(a4)
 		swap	d6			; * 32 KB: its frame
 		lsr.l	#1,d6
 		addi.l	#PRG_FRAMES,d6
@@ -748,6 +756,8 @@ rcPrgC:
 		lsl.w	#2,d5
 		lea	(rcBankTablesC).l,a5
 		move.l	(a5,d5.w),rcCurTableC(a4)
+		lea	(rcBankCallsC).l,a5
+		move.l	(a5,d5.w),rcCurCallC(a4)
 		swap	d6			; * 32 KB: its frame
 		lsr.l	#1,d6
 		addi.l	#PRG_FRAMES,d6

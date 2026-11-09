@@ -67,11 +67,14 @@ finished in #1 to #6.
   addresses that may wrap cost 8 cycles more than ones the index range
   proves don't: proving it for indexes kept in RAM (Super Mario Bros. 2's
   object slot at $12) would need to know nothing else writes there (it
-  doesn't hold: `ROR $12`). In MMC3 PRG mode 1 (Super Mario Bros. 3),
-  calls between the banks at $A000 and $C000 go through `rcDispatch` both
-  ways too, and one made from a routine copy also costs the copy's own
-  return: about 70 dispatches a frame in World 1-1's busiest moments,
-  about 5% of the time.
+  doesn't hold: `ROR $12`). In MMC3 PRG mode 1 (Super Mario Bros. 3), a
+  call into the other slot calls the copy of the routine in the bank
+  there through its call table (`Gen.emit_dyn_call`), but only small
+  routines that bank's own code goes to as well have copies (ROM room:
+  every bank that slot holds gets one): the rest go through `rcDispatch`
+  both ways. About 40 dispatches a frame are left in World 1-1's busiest
+  moments, about 3% of the time: those calls, jumps through RAM pointers
+  and returns from the fixed banks' bank switches.
 - [ ] **Gameplay tests.** NES RAM is compared with Nestopia's only for the
   attract demo, up to the NES's first lag frame; gameplay checks are by eye.
   A test that replays input per game frame (not per video frame) could

@@ -60,6 +60,7 @@ import re
 import sys
 
 ALL = 0xF					# flag sets: N Z C V bits
+DYN_COPY_MAX = 64				# MMC3 PRG mode 1: the most instructions a copy for calls from the other slot has
 N, Z, C, V = 1, 2, 4, 8
 FLAG_OF = {'BPL': N, 'BMI': N, 'BNE': Z, 'BEQ': Z, 'BCC': C, 'BCS': C, 'BVC': V, 'BVS': V}
 CC68 = {'BPL': 'pl', 'BMI': 'mi', 'BNE': 'ne', 'BEQ': 'eq', 'BCC': 'cc', 'BCS': 'cs', 'BVC': 'vc', 'BVS': 'vs'}
@@ -1121,6 +1122,8 @@ class Gen:
 		self.copies_for = ()		# (the fixed bank's: routines banks' code calls, to have copies of)
 		self.ext_ret = {}		# flags live where other units' calls return (cross_flags)
 		self.ext_calls = {}		# (a bank's: the fixed bank's JSRs to its routines)
+		self.dyn = {}			# MMC3 PRG mode 1: routines called in the other slot, (slot, index)
+		self.dyn_copies = set()		# and this bank's that are (copies of them, if small: DYN_COPY_MAX)
 		self.inline = set()		# small routines put in place of their calls (emit_inline)
 		self.out, self.stubs = [], []
 		self.fast = None
@@ -2065,6 +2068,8 @@ class Gen:
 				k = self.tag('Sw', i.pc)
 				self.e(*self.own_bank(k), 'move.w #$%04X,d4' % ((i.pc + 3) & 0xFFFF), 'jmp rcDispatch')
 				self.out.append(k + ':')
+		elif m == 'JSR' and self.dyn_target(i):
+			self.emit_dyn_call(i)
 		elif m == 'JSR':
 			ret = i.pc + 2
 			self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
@@ -2739,6 +2744,44 @@ class Gen:
 
 	# ---- routines called with the 68000's jsr -------------------------------
 
+	def dyn_target(self, i):
+		"""MMC3 PRG mode 1: is i a JSR into the other slot (from the fixed
+		code: into either), to a routine some bank there may have a copy
+		of (mode1: dyn)?"""
+		return self.prg.mode1 and i.m == 'JSR' and not i.table and i.arg in self.dyn and \
+			self.dyn[i.arg][0] != self.prg.slot
+
+	def emit_dyn_call(self, i):
+		"""A dyn_target JSR: which bank is in that slot isn't known here, so
+		the copy of the routine in the one there now, from its call table
+		(rcCurCallA, rcCurCallC: emu/recomp.asm, rcPrgSlot), called with
+		the 68000's jsr as a heavy copy is (the return address pushed: a
+		light one's entry in the table drops it first). Where that bank
+		has none, rcDispatch, as before. A bank's code checks after the
+		call that its own bank is still there (the routine may switch it)."""
+		s, k = self.dyn[i.arg]
+		ret = i.pc + 2
+		slow = self.tag('Ds', i.pc)
+		self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
+		       'move.b #$%02X,(a2,d3.w)' % (ret & 0xFF), 'subq.b #1,d3', 'swap d3',
+		       'movea.l rcCurCall%s(a4),a5' % s, 'move.l %d(a5),d5' % (4 * k), 'beq.w ' + slow,
+		       'movea.l d5,a5', 'jsr (a5)')
+		self.stubs += [slow + ':', '\t\tmove.w #$%04X,d4' % i.arg, '\t\tjmp rcDispatch']
+		if self.prg.unit != 'F':
+			back = self.tag('Dr', i.pc)
+			self.e(*self.own_bank(back), 'move.w #$%04X,d4' % ((i.pc + 3) & 0xFFFF), 'jmp rcDispatch',
+			       back + ':')
+
+	def dyn_worth(self, f):
+		"""Is a copy of routine f for calls from the other slot (dyn_copies)
+		worth its room? Small (DYN_COPY_MAX), and likely this bank's own
+		routine, not bytes that only look like one (the call may be for
+		another bank in this slot): its code goes there too (own_refs), and
+		its code is clean: none of it goes where nothing was decoded."""
+		body = self.callable[f][0]
+		return len(body) <= DYN_COPY_MAX and f in self.refs and \
+			all(t is None or t in self.insns for pc in body for t in self.insns[pc].succ)
+
 	def routine_body(self, f, memo):
 		"""(instructions, heavy) of a routine that can be called with the
 		68000's jsr, or None. Its copy returns with rts, so every path
@@ -2767,6 +2810,8 @@ class Gen:
 			depth[pc] = d
 			if self.switches(i):
 				heavy = True		# may go on in another bank, through rcDispatch
+			if i.m == 'CLI' and self.prg.irq:
+				heavy = True		# MMC3's IRQ, through rcDispatch (irq_check)
 			sw |= self.prg_switch(i)	# (the fixed bank's: its callers in banks check)
 			if i.m in ('PHA', 'PHP', 'PLA', 'PLP'):
 				d += 1 if i.m[1] == 'H' else -1
@@ -2792,6 +2837,8 @@ class Gen:
 					sw |= s
 				elif i.arg < 0x800:
 					heavy = True	# a jump table in RAM, through rcDispatch
+				elif self.dyn_target(i):
+					heavy = sw = True	# the other slot's bank's copy, or rcDispatch (emit_dyn_call)
 				else:
 					heavy = True	# a routine with no copy: the normal code, through rcDispatch
 					continue
@@ -2967,7 +3014,9 @@ class Gen:
 		for f in self.copies_for:
 			if f in self.insns and self.routine_body(f, memo):
 				self.callable[f] = memo[f]
-		self.called = {f for f in self.copies_for if f in self.callable}
+		self.refs = own_refs(self.insns)
+		self.called = {f for f in self.copies_for if f in self.callable and
+			       (f not in self.dyn_copies or self.dyn_worth(f))}
 		self.returns = self.return_points()
 		heads = set()
 		for i in self.insns.values():
@@ -3103,6 +3152,12 @@ def analyze(prg, extra, entries=()):
 		'slot': prg.slot, 'region': prg.region, 'foreign': sorted(set(foreign)), 'loads': loads}
 
 
+def own_refs(insns):
+	"""Where code goes from its own instructions: JSRs, JMPs and branches."""
+	return {i.arg for i in insns.values() if i.m in ('JSR', 'JMP') and i.mode == 'abs'} | \
+		{t for i in insns.values() if i.mode == 'rel' for t in i.succ if t is not None}
+
+
 def outside(u, lo, hi):
 	"""Where a unit's code goes in lo..hi-1: calls, jumps, jump tables."""
 	return {i.arg for i in u['insns'].values() if i.m in ('JSR', 'JMP') and i.mode == 'abs' and lo <= i.arg < hi} | \
@@ -3160,18 +3215,24 @@ def cross_flags(us, lives):
 
 
 def generate(prg, u, ext_entries=(), ext_insns=(), facts=(None, None, None), copies_for=(), ext_routines=None,
-	     ext_calls=None):
+	     ext_calls=None, dyn=None, dyn_copies=()):
 	"""A unit's 68000 code. ext_entries: its code that other units' code
 	goes to; ext_insns: other units' code it can jump to directly; facts:
 	cross_flags' for it. The fixed bank's: copies_for, the routines the
 	banks' code calls (copies of them, Gen.routine_body, if they can
 	have one). A bank's: ext_routines, those copies ((heavy, switches)
 	by address); ext_calls, the fixed bank's JSRs to its routines (where
-	their RTSs can return straight to)."""
+	their RTSs can return straight to). MMC3 PRG mode 1: dyn, the
+	routines code calls in the other slot (Gen.emit_dyn_call), and a bank's
+	dyn_copies, its own of them (copies with every flag kept where they
+	return, as who calls them isn't known)."""
 	insns, vectors, extra, tables = u['insns'], u['vectors'], u['extra'], u['tables']
 	g = Gen(prg, insns, ext_insns)
 	g.live_in, g.sums = unit_liveness(u, ext_entries, facts)
-	g.copies_for, g.ext_routines, g.ext_ret = copies_for, ext_routines or {}, facts[1] or {}
+	g.copies_for, g.ext_routines, g.ext_ret = tuple(copies_for) + tuple(sorted(dyn_copies)), ext_routines or {}, \
+		dict(facts[1] or {})
+	g.ext_ret.update({f: ALL for f in dyn_copies})
+	g.dyn, g.dyn_copies = dyn or {}, set(dyn_copies)
 	g.ext_calls = ext_calls or {}
 	g.tables = tables
 	g.engines = {}
@@ -3251,7 +3312,19 @@ def mode1(rom, extra):
 	# the banks' code calls the fixed banks' routines' copies
 	calls = {i.arg for u in us[1:] for i in u['insns'].values()
 		 if i.m == 'JSR' and not i.table and i.arg >= 0x8000 and fixed.region(i.arg) == 'F'}
-	g = generate(fixed, uf, into['F'], (), facts[0], calls)
+	# and code calls the routines of the bank in the other slot (the fixed
+	# code's: in either) through that bank's table of their copies (Gen.
+	# emit_dyn_call): an index for each, by slot
+	# (only routines a bank there goes to from its own code too: other
+	# addresses there are seldom its code, Gen.dyn_worth)
+	refs = {s: set().union(*[own_refs(u['insns']) & set(u['insns']) for u in us[1:] if u['slot'] == s])
+		for s in 'AC'}
+	dyn = {}
+	for s in 'AC':
+		ts = sorted({i.arg for u in us for i in u['insns'].values() if i.m == 'JSR' and not i.table and
+			     i.arg >= 0x8000 and fixed.region(i.arg) == s and u['slot'] != s} & refs[s])
+		dyn.update((t, (s, k)) for k, t in enumerate(ts))
+	g = generate(fixed, uf, into['F'], (), facts[0], calls, dyn=dyn)
 	copies = {f: g.callable[f][1:] + (g.copy_label(f),) for f in calls if f in g.callable}
 	out, units = list(g.out), [(uf, g)]
 	for b, u, fb in zip(slots, us[1:], facts[1:]):
@@ -3261,7 +3334,23 @@ def mode1(rom, extra):
 		for i in uf['insns'].values():
 			if i.m == 'JSR' and not i.table and i.arg in u['insns'] and i.pc + 3 in uf['insns']:
 				ext_calls.setdefault(i.arg, set()).add(i.pc)
-		gb = generate(b, u, u['entries'], uf['insns'], fb, (), copies, ext_calls)
+		gb = generate(b, u, u['entries'], uf['insns'], fb, (), copies, ext_calls, dyn,
+			      {t for t, (s, k) in dyn.items() if s == b.slot and t in u['insns']})
+		# its call table: a copy's address by index (a light one's entry
+		# drops the return address the call pushed), 0 where it has none
+		table, entries = [], []
+		for t in sorted(t for t, (s, k) in dyn.items() if s == b.slot):
+			if t in gb.dyn_copies and t in gb.called:
+				lab = gb.copy_label(t)
+				if not gb.callable[t][1]:
+					entries += ['D%04X:' % t, '\t\tswap d3', '\t\taddq.b #2,d3', '\t\tswap d3',
+						    '\t\tjmp (%s).l' % lab]
+					lab = 'D%04X' % t
+				table.append(lab)
+			else:
+				table.append('0')
+		gb.out += [''] + entries + ['\t\talign 4', 'rcCalls:'] + \
+			['\t\tdc.l ' + ','.join(table[k:k + 8]) for k in range(0, len(table), 8)]
 		out += [''] + prefixed(gb.out, '%s%d_' % b.unit)
 		units.append((u, gb))
 	# each bank's code at each slot, by the bank there (rcDispatch); the
@@ -3276,6 +3365,12 @@ def mode1(rom, extra):
 	out += ['rcBankTablesC:'] + ['\t\tdc.l %s' % ('C%d_rcTable' % b if ('C', b) in have else 'rcNoTable')
 				    for b in range(n)]
 	out += ['rcNoTable:', '\t\trept $2000/8', '\t\tdc.l 0,0,0,0,0,0,0,0', '\t\tendm']	# (a bank with no code there)
+	# and the routines of each bank there that code elsewhere calls (Gen.emit_dyn_call)
+	out += ['rcBankCallsA:'] + ['\t\tdc.l %s' % ('A%d_rcCalls' % b if ('A', b) in have else 'rcNoCalls')
+				   for b in range(n)]
+	out += ['rcBankCallsC:'] + ['\t\tdc.l %s' % ('C%d_rcCalls' % b if ('C', b) in have else 'rcNoCalls')
+				   for b in range(n)]
+	out += ['rcNoCalls:', '\t\trept %d' % max([k + 1 for s, k in dyn.values()] + [1]), '\t\tdc.l 0', '\t\tendm']
 	return out, units
 
 
