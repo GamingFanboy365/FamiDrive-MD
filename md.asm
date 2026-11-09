@@ -211,6 +211,9 @@ splitBank	ds.w 4			; the split's tile set: the CHR-ROM 1 KB bank in each part, $
 mmc3RegsSplit	ds.b 8			; the CHR registers below the split
 sprHideY	ds.w 1			; OAM DMA: sprites from this Y on are hidden ($E7, or the split's)
 ppuCellAddr	ds.w 1			; the nametable byte ppuDrwCell draws (for the window)
+splitKeyOk	ds.w 1			; 1: splitKey holds what splitDone read last time, and what it set is so
+splitKey	ds.b 26			; (BG banks R0, R1 or R2-R5, mmc3RegsSplit R0-R5, the sprites' mmc3Regs,
+					; irqLine, splitV, splitCtrlX, ppuSprWide, vdpScrlY, ppuNTblBase)
 splitVarsEnd	equ *
 		finish
 		if splitVarsEnd>RAM_Fami_Split-RAM_Fami_Emu+$100

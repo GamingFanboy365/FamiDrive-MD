@@ -429,6 +429,7 @@ ppuFrameStart:
 		clr.w	splitShow(a4)
 		clr.w	splitWinNt(a4)
 		move.w	#$E7,sprHideY(a4)
+		clr.w	splitKeyOk(a4)		; (splitDone: it sets them again)
 .split:
 		clr.w	splitSeen(a4)
 		endif
@@ -1676,11 +1677,65 @@ splitBegin:
 		move.w	#1,cpuInIrq(a4)
 		rts
 
-; The IRQ handler returned: the window and tile set for what it set
+; The IRQ handler returned: the window and tile set for what it set.
+; If nothing it reads changed since last time (splitKey: it's the same
+; most frames), what it set then is still so: nothing to do.
 splitDone:
-		movem.l	d0-d6/a5,-(sp)
 		move.w	sr,-(sp)
 		move.w	#$2700,sr
+		tst.w	splitKeyOk(a4)
+		beq.w	.work
+		movem.l	d0-d1/a5,-(sp)
+		lea	splitKey(a4),a5		; (the order .done stores it in)
+		move.b	ppuChrBank+1(a4),d0	; the BG's banks: R0, R1 or R2-R5
+		move.b	mmc3Select+1(a4),d1
+		eor.b	d1,d0
+		smi	d0
+		ext.w	d0
+		cmp.w	(a5)+,d0
+		bne.s	.changed
+		move.l	mmc3RegsSplit(a4),d1	; the handler's R0-R5
+		cmp.l	(a5)+,d1
+		bne.s	.changed
+		move.w	mmc3RegsSplit+4(a4),d1
+		cmp.w	(a5)+,d1
+		bne.s	.changed
+		move.l	mmc3Regs+2(a4),d1	; the frame's for the sprites: R2-R5,
+		tst.w	d0
+		beq.s	.key_spr
+		moveq	#0,d1			; or R0, R1
+		move.w	mmc3Regs(a4),d1
+.key_spr:
+		cmp.l	(a5)+,d1
+		bne.s	.changed
+		move.w	irqLine(a4),d1
+		cmp.w	(a5)+,d1
+		bne.s	.changed
+		move.w	splitV(a4),d1
+		cmp.w	(a5)+,d1
+		bne.s	.changed
+		move.w	splitCtrlX(a4),d1
+		cmp.w	(a5)+,d1
+		bne.s	.changed
+		move.w	ppuSprWide(a4),d1
+		cmp.w	(a5)+,d1
+		bne.s	.changed
+		cmpi.w	#$FFFF,splitV(a4)	; (with no $2006: the frame's scroll)
+		bne.s	.unchanged
+		move.l	vdpScrlY(a4),d1
+		cmp.l	(a5)+,d1
+		bne.s	.changed
+		move.w	ppuNTblBase(a4),d1
+		cmp.w	(a5)+,d1
+		bne.s	.changed
+.unchanged:
+		movem.l	(sp)+,d0-d1/a5
+		move.w	(sp)+,sr
+		rts
+.changed:
+		movem.l	(sp)+,d0-d1/a5
+.work:
+		movem.l	d0-d6/a5,-(sp)
 	; the split's tile set: the BG pattern table's 4 KB under its banks,
 	; R0 and R1 (2 KB each) if they're there (CHR mode, $8000 bit 7),
 	; else R2-R5; the 1 KB parts that are new are DMAed in at VBlank
@@ -1809,7 +1864,7 @@ splitDone:
 		move.w	d0,splitWinNt(a4)
 		move.w	d3,splitWinVram(a4)
 		move.w	d2,splitWinLen(a4)
-		bsr.s	ppuWinRedraw
+		bsr.w	ppuWinRedraw
 .drawn:
 	; sprites from the window's line on: hidden if the handler switched
 	; their tiles (Super Mario Bros. 3 in a level: to blank ones; on the
@@ -1839,8 +1894,32 @@ splitDone:
 .spr_ok:
 		move.w	d5,sprHideY(a4)
 .done:
-		move.w	(sp)+,sr
+		lea	splitKey(a4),a5		; what it read, for next time (in the
+		move.b	ppuChrBank+1(a4),d0	; order the start compares it in)
+		move.b	mmc3Select+1(a4),d1
+		eor.b	d1,d0
+		smi	d0
+		ext.w	d0
+		move.w	d0,(a5)+
+		move.l	mmc3RegsSplit(a4),(a5)+
+		move.w	mmc3RegsSplit+4(a4),(a5)+
+		tst.w	d0
+		bne.s	.key_01
+		move.l	mmc3Regs+2(a4),(a5)+
+		bra.s	.key_rest
+.key_01:
+		clr.w	(a5)+
+		move.w	mmc3Regs(a4),(a5)+
+.key_rest:
+		move.w	irqLine(a4),(a5)+
+		move.w	splitV(a4),(a5)+
+		move.w	splitCtrlX(a4),(a5)+
+		move.w	ppuSprWide(a4),(a5)+
+		move.l	vdpScrlY(a4),(a5)+
+		move.w	ppuNTblBase(a4),(a5)+
+		move.w	#1,splitKeyOk(a4)
 		movem.l	(sp)+,d0-d6/a5
+		move.w	(sp)+,sr
 		rts
 .no_window:
 		clr.w	splitShow(a4)		; (the handler didn't move the PPU)

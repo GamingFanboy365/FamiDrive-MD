@@ -1562,6 +1562,12 @@ class Gen:
 			return 'tst.w nmiWaitDue(a4)', 'jsr rcNmiWait'
 		return 'tst.w FamiMdVint(a4)', 'jsr rcNmi'
 
+	def rti_next(self, i):
+		"""An RTI right after i, in its 8 KB (so in its bank). Nothing
+		between them can take an interrupt."""
+		j = self.insns.get(i.pc + 1)
+		return j is not None and j.m == 'RTI' and (i.pc + 1) & 0x1FFF != 0
+
 	def php_pairs(self):
 		"""PHPs whose byte only a PLP pulls, and those PLPs: from the
 		PHP, every way reaches a PLP soon, with no other stack use, SEI,
@@ -2025,6 +2031,8 @@ class Gen:
 		elif m == 'PLA':
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d0', 'swap d3', 'tst.b d0')
 			nz_done()
+		elif m == 'PLP' and self.rti_next(i):	# the RTI pulls all P sets (flags, I, D)
+			self.e('swap d3', 'addq.b #1,d3', 'swap d3')
 		elif m == 'PLP' and i.pc in self.paired:
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d5', 'swap d3', 'move.b d5,d3')
 		elif m == 'PLP':

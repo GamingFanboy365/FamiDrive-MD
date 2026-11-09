@@ -31,6 +31,10 @@ finished in #1 to #6.
   more IRQs a frame (Super Mario Bros. 3's 32-pixel partition, water line
   and spade game), a horizontal scroll below the split, and other sprite
   tiles below it (sprites there are hidden when the handler switches them).
+  Recompiled, Super Mario Bros. 3's split costs about 4% of the time (2-3
+  frames a second where it's busiest), most of it the handler's own code
+  and its PPU and mapper writes: `splitDone` only works when something it
+  reads changed.
 - [ ] **Other CHR switches.** MMC3 bank switches copy tiles made with the ROM
   (`chrUpdate`), but a new BG pattern table (`chrLoadBg`) and CNROM's 8 KB
   switches still convert every tile, which takes several frames.
