@@ -2570,6 +2570,21 @@ class Gen:
 				ptr = i.arg
 		if ptr is None:
 			return None
+		# the furthest index the (zp),Y reads reach, from the registers at
+		# entry (emit_versioned): Y if the loop doesn't change it; Y plus
+		# the turns if one INY (taken or not) is all that changes it and X
+		# counts the turns (DEX, then BNE); Y if Y counts them (DEY, then
+		# BNE); else Y plus 255
+		ys = [i for i in body if i.m in ('INY', 'DEY', 'LDY', 'TAY')]
+		xs = [i for i in body if i.m in ('INX', 'DEX', 'LDX', 'TAX', 'TSX')]
+		cnt = body[-2] if b.pc in self.counted and b.m == 'BNE' and len(body) > 1 else None
+		reach = None
+		if not ys:
+			reach = 'Y'
+		elif cnt is not None and cnt.m == 'DEY' and ys == [cnt]:
+			reach = 'Y counts'
+		elif cnt is not None and cnt.m == 'DEX' and xs == [cnt] and len(ys) == 1 and ys[0].m == 'INY':
+			reach = 'Y + X'
 		ptrs = [ptr, (ptr + 1) & 0xFF]
 		for i in body:
 			if i.m in W and (i.mode == 'zp' or (i.mode == 'abs' and i.arg < 0x2000)) \
@@ -2628,7 +2643,7 @@ class Gen:
 			else:
 				check |= {i.pc for i, base, zp, wr in acc[r] if wr}
 		plan = {'t': t, 'b': b, 'body': body, 'pcs': {i.pc for i in body}, 'ptr': ptrs,
-			'direct': direct, 'check': check, 'guard': guard}
+			'direct': direct, 'check': check, 'guard': guard, 'reach': reach}
 		# a short loop of known length is unrolled: the index registers
 		# become displacements and the counter is set once at the end
 		if n is None or n > 16 or check or \
@@ -2795,16 +2810,26 @@ class Gen:
 				g += ['\t\tcmpi.b #$%02X,%s' % (runs[0][1], reg), '\t\tbhi.s %s' % hi_lab]
 				g += within(runs[0][0], 255) + ['\t\tbra.s %s' % ok_lab, hi_lab + ':']
 				g += within(runs[1][0], runs[1][1]) + [ok_lab + ':']
-		g += ['\t\tcmpi.w #$701,d6', '\t\tbcs.s %sVR_%04X' % (v, t)]	# RAM, +255 stays below $800
-		if self.prg.banked:		# PRG RAM, +255 stays below $8000
+		# d7: the last byte the reads reach (version_plan's reach), in the
+		# same memory as the first (d6)
+		y = '%sVY_%04X' % (v, t)
+		g += {'Y': ['\t\tmoveq #0,d7', '\t\tmove.b d2,d7'],
+		      'Y counts': ['\t\tmoveq #0,d7', '\t\tmove.b d2,d7', '\t\tbne.s ' + y,
+				   '\t\tmove.w #$FF,d7', y + ':'],		# (Y = 0: 256 turns)
+		      'Y + X': ['\t\tmoveq #0,d7', '\t\tmove.b d1,d7', '\t\tbeq.w ' + slow,	# (X = 0: 256 turns)
+				'\t\tmoveq #0,d5', '\t\tmove.b d2,d5', '\t\tadd.w d5,d7',
+				'\t\tcmpi.w #$100,d7', '\t\tbcc.w ' + slow],		# (Y would wrap)
+		      None: ['\t\tmove.w #$FF,d7']}[plan['reach']]
+		g += ['\t\tadd.w d6,d7', '\t\tbcs.w ' + slow]	# (not past $FFFF)
+		g += ['\t\tcmpi.w #$800,d7', '\t\tbcs.s %sVR_%04X' % (v, t)]	# RAM
+		if self.prg.banked:		# PRG RAM
 			g += ['\t\tcmpi.w #$6000,d6', '\t\tbcs.w %s' % slow,
-			      '\t\tcmpi.w #$7F01,d6', '\t\tbcs.s %sVW_%04X' % (v, t)]
-		g += ['\t\tcmpi.w #$8000,d6', '\t\tbcs.w %s' % slow,
-		      '\t\tcmpi.w #$FF01,d6', '\t\tbcc.w %s' % slow]	# PRG, +255 stays below $10000
+			      '\t\tcmpi.w #$8000,d7', '\t\tbcs.s %sVW_%04X' % (v, t)]
+		g += ['\t\tcmpi.w #$8000,d6', '\t\tbcs.w %s' % slow]		# PRG
 		if self.prg.mode1:		# R7's frame (a0) but at $C000-$DFFF: R6's
 			ok = '%sVP_%04X' % (v, t)
-			g += ['\t\tcmpi.w #$BF01,d6', '\t\tbcs.s ' + ok, '\t\tcmpi.w #$E000,d6', '\t\tbcc.s ' + ok,
-			      '\t\tcmpi.w #$C000,d6', '\t\tbcs.w %s' % slow, '\t\tcmpi.w #$DF01,d6', '\t\tbcc.w %s' % slow,
+			g += ['\t\tcmpi.w #$C000,d7', '\t\tbcs.s ' + ok, '\t\tcmpi.w #$E000,d6', '\t\tbcc.s ' + ok,
+			      '\t\tcmpi.w #$C000,d6', '\t\tbcs.w %s' % slow, '\t\tcmpi.w #$E000,d7', '\t\tbcc.w %s' % slow,
 			      '\t\tmovea.l rcFrameC(a4),a5', '\t\tadda.w d6,a5', '\t\tbra.s %sF_%04X' % (v, t), ok + ':']
 		g += ['\t\tlea (a0,d6.w),a5', '\t\tbra.s %sF_%04X' % (v, t)]
 		if self.prg.banked:
