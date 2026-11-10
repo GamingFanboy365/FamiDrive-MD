@@ -1843,7 +1843,8 @@ class Gen:
 				self.e('move.b %s,%s' % (s, r))
 			nz_done()
 		elif m in ('STA', 'STX', 'STY') and (self.mmc3_store(i, {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m]) or
-						     self.apu_store(i, {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m])):
+						     self.apu_store(i, {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m]) or
+						     self.ppu_store(i, {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m])):
 			pass
 		elif m in ('STA', 'STX', 'STY'):
 			r = {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m]
@@ -2266,6 +2267,23 @@ class Gen:
 			self.e('tst.b %s' % r, 'beq.s ' + zero, 'move.l padState(a4),cpuInputData(a4)', zero + ':')
 		elif n < 0x18:
 			self.e('move.b %s,(RAM_Fami_Apu+apuRegs+$%02X).w' % (r, n), 'st (RAM_Fami_Apu+apuWrote+$%02X).w' % n)
+		return True
+
+	def ppu_store(self, i, r):
+		"""A store of r to $2007: wrPPU_Data's address step and where
+		the address is, and for a nametable byte or palette entry
+		written as it is (games rewrite their status bars, palettes and
+		such each frame), nothing more; else the rest of wrPPU_Data for
+		a palette entry, a nametable byte or CHR RAM (emu/ppu.asm)."""
+		if i.mode != 'abs' or not 0x2000 <= i.arg < 0x4000 or i.arg & 7 != 7:
+			return False
+		pal, chr_, done = self.tag('Pp', i.pc), self.tag('Pc', i.pc), self.tag('Pd', i.pc)
+		self.e('move.w ppuAddrBase(a4),d4', 'move.w ppuAddrIncr(a4),d6', 'add.w d6,ppuAddrBase(a4)',
+		       'andi.w #$3FFF,d4', 'cmpi.w #$3F00,d4', 'bcc.s ' + pal, 'cmpi.w #$2000,d4', 'bcs.s ' + chr_,
+		       'cmp.b (a3,d4.w),%s' % r, 'beq.s ' + done, 'move.b %s,d7' % r, 'jsr wrPPU_DataNt', 'bra.s ' + done,
+		       pal + ':', 'andi.w #$3F1F,d4', 'moveq #$3F,d7', 'and.b %s,d7' % r, 'cmp.b (a3,d4.w),d7',
+		       'beq.s ' + done, 'jsr wrPPU_DataPal', 'bra.s ' + done,
+		       chr_ + ':', 'move.b %s,d7' % r, 'jsr ppuChrRamWrite', done + ':')
 		return True
 
 	def mmc3_select(self, i):

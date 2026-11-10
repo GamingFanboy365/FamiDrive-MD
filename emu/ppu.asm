@@ -41,6 +41,14 @@ wrPPU_Ctrl:
 .main:
 		endif
 
+	; The value written last time (most games write it often): only bit
+	; 0, bit 8 of the X scroll, which a $2006 write may have changed
+		moveq	#0,d6
+		move.b	d7,d6
+		cmp.w	ppuCtrlLast(a4),d6
+		beq.s	.nt_x
+		move.w	d6,ppuCtrlLast(a4)
+
 	; NMI on/off
 		clr.w	d6
 		lsl.b	#1,d7			; $80
@@ -82,10 +90,11 @@ wrPPU_Ctrl:
 		move.w	d7,ppuNTblBase(a4)
 
 	; Bit 0 is bit 8 of the X scroll (ppuXChanged)
+.nt_x:
 		move.w	#$2700,sr
 		move.w	ppuTX(a4),d4
 		andi.w	#$FF,d4
-		btst	#6,d7
+		btst	#6,ppuNTblBase+1(a4)
 		beq.s	.nt_x0
 		ori.w	#$100,d4
 .nt_x0:
@@ -659,12 +668,38 @@ wrPPU_Data:
 		cmpi.w	#$3F00,d4
 		bcc.s	.palette
 		cmp.b	(a3,d4.w),d7		; unchanged: its cells already show it
-		bne.s	.changed		; (VRAM is kept in step with the copy
+		bne.s	wrPPU_DataNt		; (VRAM is kept in step with the copy
 		jmp	(RAM_EmuLoop).l		; from the start, see Fami_InitVideo)
+	; The palette: 32 entries, which $3F20-$3FFF repeat, and $3F10,
+	; $3F14, $3F18 and $3F1C are $3F00, $3F04, $3F08 and $3F0C. The copy
+	; holds each entry's 6 bits at both its addresses ($FF: none written
+	; yet, Fami_LoadRom), so an entry written as it is changes nothing
+	; (Super Mario Bros. 3 writes its whole palette every other frame)
 .palette:
+		andi.w	#$3F1F,d4
+		andi.b	#$3F,d7
+		cmp.b	(a3,d4.w),d7
+		bne.s	wrPPU_DataPal
+		jmp	(RAM_EmuLoop).l
+
+; Translated code does the above itself, and all of it for a nametable
+; byte or palette entry written as it is (recomp6502.py, Gen.ppu_store):
+; it comes in at wrPPU_DataPal (d4 the entry's address, $3F00-$3F1F, d7
+; its 6 bits), wrPPU_DataNt or ppuChrRamWrite (d4 the address, d7 the
+; byte)
+wrPPU_DataPal:
 		move.b	d7,(a3,d4.w)
+		moveq	#3,d6
+		and.w	d4,d6
+		bne.s	.color
+		bchg	#4,d4			; and the entry's other address
+		move.b	d7,(a3,d4.w)
+.color:
+		moveq	#0,d5
+		move.b	d7,d5
 		bra.w	ppuSetColor
-.changed:
+
+wrPPU_DataNt:
 		move.b	d7,(a3,d4.w)
 		move.w	ppuNtXor(a4),d5		; and the mirrored nametable's copy
 		eor.w	d4,d5
@@ -746,13 +781,12 @@ ppuVdpIndex:
 		dc.w $0070,$0072,$0074,$0076
 		align 2
 
+; d4 - palette address ($3F00-$3FFF), d5 - its NES color (6 bits)
 ppuSetColor:
 		andi.w	#$1F,d4
 		add.w	d4,d4
 		move.w	ppuVdpIndex(pc,d4.w),d4
 		move.w	d4,d6
-		move.w	d7,d5
-		andi.b	#$3F,d5
 		add.w	d5,d5
 		move.w	ppuVdpColors(pc,d5.w),vdpPalette(a4,d4.w)
 		st	vdpPalDirty(a4)		; DMAed at the next VBlank

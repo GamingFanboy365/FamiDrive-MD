@@ -176,6 +176,7 @@ rcCurCallA	ds.l 1			; and the routines of R7's bank, R6's, that other code calls
 rcCurCallC	ds.l 1
 		endif
 rcNmiInterp	ds.w 1			; recompiled code: an NMI came while interpreting (rcInterpStep, rcRti)
+ppuCtrlLast	ds.w 1			; the last $2000 written, as wrPPU_Ctrl set the PPU for it ($FFFF: none)
 emuVarsEnd	equ *
 		finish
 		if emuVarsEnd>$A00
@@ -715,6 +716,12 @@ Fami_LoadRom:
 .clrvram:
 		move.l	d0,(a5)+
 		dbf	d1,.clrvram
+		lea	(RAM_Fami_PPU+$3F00).l,a5	; the palette entries: none written
+		moveq	#-1,d0				; yet (wrPPU_Data)
+		moveq	#32/4-1,d1
+.nopal:
+		move.l	d0,(a5)+
+		dbf	d1,.nopal
 		lea 	($C00000),a6
 		bsr	Fami_InitVideo
 
@@ -885,6 +892,7 @@ emuStart:
 		move.w	#$8004,vdpReg00(a4)
 		move.w	#$8174,vdpReg01(a4)
 		move.w	#1,ppuAddrIncr(a4)		; $2000 is 0 at power on: +1
+		move.w	#$FFFF,ppuCtrlLast(a4)		; (none written yet)
 		move.w	#$4EF9,(RAM_EmuLoop).l		; JMP opcode
 		move.l	#emuLoop,(RAM_EmuLoop+2).l	; default emulation loop
 		moveq	#0,d0

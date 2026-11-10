@@ -227,12 +227,17 @@ rdPPU_Data:
 		andi.w	#$3FFF,d4
 		cmpi.w	#$2000,d4
 		bcs.s	.pattern
+		cmpi.w	#$3F00,d4
+		bcc.s	.palette
 .copy:
 		move.b	(a3,d4.w),ppuDataLast+1(a4)
 .next:
 		move.w	ppuAddrIncr(a4),d4
 		add.w	d4,ppuAddrBase(a4)
 		rts
+.palette:
+		andi.w	#$3F1F,d4		; (repeated every 32 bytes: wrPPU_Data)
+		bra.s	.copy
 .pattern:
 		move.w	d4,d5			; MMC3: a 1 KB the copy is out of
 		rol.w	#6,d5			; date for (chrStale; bits 2-0 =
