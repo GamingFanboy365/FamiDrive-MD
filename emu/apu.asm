@@ -58,7 +58,7 @@ apuStore:
 		lea	(RAM_Fami_Apu).l,a5
 		move.b	d7,apuRegs(a5,d5.w)
 		st	apuWrote(a5,d5.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ----------------------------------------------------------------
 ; Set up the YM2612 triangle voice and silence the PSG

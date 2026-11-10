@@ -280,7 +280,7 @@ wrTo_RAM:
 		move.b	d4,d6
 		andi.w	#$7FF,d6
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ====================================================================
 ; ----------------------------------------------------------------
@@ -296,7 +296,7 @@ wrTo_WRAM:
 		andi.w	#$1FFF,d6
 		lea	(RAM_Fami_WRAM).l,a5
 		move.b	d7,(a5,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ====================================================================
 ; ----------------------------------------------------------------
@@ -311,7 +311,7 @@ wrTo_PRG:
 		beq.s	.mapper_3
 		subq.w	#1,d5
 		beq.w	mmc3Write
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; --------------------------------------------------------
 ; Mapper $03, CNROM
@@ -341,7 +341,7 @@ wrTo_PRG:
 		dbf	d4,.copychr
 		move.l	(sp)+,a4
 		bsr.w	Nemul_LoadChr
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; --------------------------------------------------------
 ; Mapper $02, UxROM: any write picks the 16 KB PRG bank at $8000
@@ -352,7 +352,7 @@ mapper2Write:
 		moveq	#0,d5
 		move.b	d7,d5
 		bsr.w	prgSwitch
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; --------------------------------------------------------
 ; Mapper $04, MMC3. Its registers go by address bits 14-13 and 0:
@@ -390,14 +390,14 @@ mmc3Write:
 		btst	#5,d6			; $A001: PRG RAM protect
 		beq.s	mmc3WrData
 mmc3Ignore:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 mmc3WrMirror:
 		moveq	#1,d5			; $A000 bit 0: 0 vertical, 1
 		and.w	d5,d7			; horizontal (ppuMirror: 1, 0)
 		eor.w	d5,d7
 		bsr.w	ppuSetMirror
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 mmc3WrSelect:
 		move.b	mmc3Select+1(a4),d5	; $8000
@@ -409,7 +409,7 @@ mmc3WrSelect:
 		eor.b	d7,d5			; a new CHR mode (bit 7): all the
 		bmi.s	.chr_all		; CHR banks moved
 .same:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 .chr_all:
 		moveq	#6-1,d5
 .chr_bank:
@@ -417,7 +417,7 @@ mmc3WrSelect:
 		bsr.s	mmc3Chr
 		move.w	(sp)+,d5
 		dbf	d5,.chr_bank
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 mmc3WrData:
 		move.w	mmc3Select(a4),d5	; $8001: bank data
@@ -430,7 +430,7 @@ mmc3WrData:
 		beq.s	.chr			; below its line (splitDone)
 		lea	mmc3RegsSplit(a4),a5
 		move.b	d7,(a5,d5.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 .chr:
 		endif
 		cmp.b	(a5,d5.w),d7		; R0-R5: CHR, a new bank
@@ -438,7 +438,7 @@ mmc3WrData:
 		move.b	d7,(a5,d5.w)
 		bsr.s	mmc3Chr
 .done:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 .prg:
 		if PRG_MODE1
 		cmp.b	(a5,d5.w),d7		; R6, R7 (PRG mode 1: a bank each): a
@@ -459,7 +459,7 @@ mmc3WrData:
 		btst	#6,mmc3Select+1(a4)	; PRG mode 1: R6 at $C000
 		bne.s	.prg_mode_1
 		bsr.w	prgSwitch
-		jmp	(RAM_EmuLoop).l
+		emuNext
 .prg_mode_1:
 		lea	(errStrMmc3Prg).l,a0
 		jmp	(MD_ShowError).l
@@ -552,14 +552,14 @@ mmc3WrIrq:
 mmc3WrIrqLatch:
 		move.b	d7,irqLatch+1(a4)
 mmc3WrIrqReload:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 mmc3WrIrqOff:
 		tst.w	cpuInIrq(a4)
 		bne.s	.done
 		clr.w	irqOn(a4)
 .done:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 mmc3WrIrqOn:
 		tst.w	cpuInIrq(a4)
@@ -567,7 +567,7 @@ mmc3WrIrqOn:
 		move.w	#1,irqOn(a4)
 		move.w	irqLatch(a4),irqLine(a4)
 .done:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 		endif
 
 		if PRG_MODE1
@@ -608,7 +608,7 @@ mmc3Prg1:
 		movea.l	d6,a1
 		move.l	d6,cpuPrgImg(a4)
 		lea	(a1,d4.l),a0
-		jmp	(RAM_EmuLoop).l
+		emuNext
 .r7_pc:
 		move.l	a0,d4
 		andi.l	#$7FFF,d4
@@ -625,7 +625,7 @@ mmc3Prg1:
 		movea.l	d6,a0
 		adda.w	d4,a0
 .done:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 		endif
 
 ; --------------------------------------------------------
@@ -733,7 +733,7 @@ wrAPU_Table:	dc.w apuStore-wrAPU_Table	; $4000
 		dc.w APU_Null-wrAPU_Table	; $401F
 
 APU_Null:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 
 ; Strobe: latch the buttons read at the last VBlank
@@ -741,7 +741,7 @@ APU_Input:
 		tst.b	d7
 		beq.s	APU_Null
 		move.l	padState(a4),cpuInputData(a4)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ----------------------------------------------------------------
 ; Read both pads into padState, once per frame from MD_Vint
@@ -1008,7 +1008,7 @@ oamSpr		set	oamSpr+1
 		move.w	d7,vdpSprWords-vdpSprData(a6)	; for the DMA (MD_Vint)
 		move.w	sprWrite(a4),sprLatest(a4)
 		movem.l	(sp)+,d0-d3/d7/a3/a6
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; NES sprite attributes to the MD's: priority (inverted: the NES's bit
 ; puts the sprite behind the background), palette, vertical and

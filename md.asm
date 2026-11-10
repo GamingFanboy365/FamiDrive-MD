@@ -71,6 +71,18 @@ RAM_RcStack	ds.l 1			; recompiled code: stack at dispatch (emu/recomp.asm)
 RAM_HintCount	ds.w 1			; line interrupts taken (MD_Hint, ppuMeasureLines)
 		finish
 
+; The end of an emulated instruction's routine and of a handler: on to
+; the interpreter's loop (RAM_EmuLoop). In a recompiled build a return:
+; translated code calls the handlers, and rcInterpStep each
+; instruction's routine (emu/recomp.asm)
+emuNext		macro
+		if RECOMP
+		rts
+		else
+		jmp	(RAM_EmuLoop).l
+		endif
+		endm
+
 ; ----------------------------------------------------------------
 ; Unsorted
 ; ----------------------------------------------------------------

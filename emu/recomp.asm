@@ -5,8 +5,9 @@
 ; tools/recomp6502.py translates the game's 6502 code into 68000
 ; code (out/recomp.asm) that runs instead of the interpreter. It
 ; keeps the interpreter's registers (see emuLoop) and calls the
-; same memory, PPU and APU handlers. Those end with
-; "jmp (RAM_EmuLoop).l", so rcStart turns RAM_EmuLoop into an rts.
+; same memory, PPU and APU handlers, which end with an rts in this
+; build (emuNext); so do the interpreter's instructions' routines,
+; which rcInterpStep calls in turn. (RAM_EmuLoop is an rts too.)
 ;
 ; Banked PRG (PRG_BANKED): each bank's code has its own rcTable,
 ; for $8000-$BFFF while it's at $8000 (rcCurTable, set by
@@ -162,11 +163,8 @@ rcDispatch:
 ; a0 - 6502 PC (in the PRG copy or RAM, like the interpreter)
 ; ----------------------------------------------------------------
 
-rcInterp:
-		move.w	#$4EF9,(RAM_EmuLoop).l	; handlers return to rcInterpStep
-		move.l	#rcInterpStep,(RAM_EmuLoop+2).l
-
-rcInterpStep:
+rcInterp:					; (each instruction's routine is called,
+rcInterpStep:					; and returns: emuNext)
 		if PRG_MODE1
 		move.l	a0,d4			; 6502 address of the next instruction:
 		cmpi.l	#$400000,d4		; in PRG (not RAM), a0's low 15 bits
@@ -235,15 +233,15 @@ rcInterpStep:
 		add.w	d4,d4
 		lea	(mosCpu).l,a5
 		move.w	(a5,d4.w),d6
-		jmp	(a5,d6.w)
+		jsr	(a5,d6.w)
+		bra.w	rcInterpStep
 
 .in_ram:
 		move.l	a0,d4
 		sub.l	a2,d4
 		tst.w	FamiMdVint(a4)
 		beq.s	.step
-.vblank:
-		move.w	#$4E75,(RAM_EmuLoop).l	; rcNmi may enter translated code
+.vblank:					; rcNmi may enter translated code
 		move.w	rcNmiInterp(a4),-(sp)	; (and its RTI go on interpreting
 		move.w	#1,rcNmiInterp(a4)	; here, rcRti; one the NMI handler
 		move.l	a0,-(sp)		; is in keeps its own), which reads
@@ -259,7 +257,6 @@ rcInterpStep:
 		bra.w	rcInterp
 
 .translated:
-		move.w	#$4E75,(RAM_EmuLoop).l
 		if PRG_BANKED
 		movea.l	a1,a0
 		adda.l	#$8000,a0
@@ -610,7 +607,7 @@ rcWrite16:
 		move.w	d6,d4
 		andi.w	#$FF,d4
 		lsr.w	#8,d6
-		bra	addr_Write		; its handlers return through RAM_EmuLoop
+		bra	addr_Write		; (its handlers return: emuNext)
 
 ; ----------------------------------------------------------------
 ; Read from a controller port: $4016/$4017, or $4016,X and the
