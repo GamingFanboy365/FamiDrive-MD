@@ -1166,6 +1166,7 @@ class Gen:
 		self.tails = {}			# routine -> its JMPs that are tail calls (routine_body)
 		self.engine_tails = {}		# routine -> its jump engine calls whose entries' copies it tail-calls (routine_body)
 		self.engine_entries = set()	# and those entries (copies that keep every flag: emit_routine)
+		self.double_rts = {}		# routine -> its PLA PLA RTSs' second PLAs: its copy returns from its caller there
 		self.inline = set()		# small routines put in place of their calls (emit_inline)
 		self.out, self.stubs = [], []
 		self.fast = None
@@ -2150,6 +2151,8 @@ class Gen:
 		elif m == 'PLA':
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d0', 'swap d3', 'tst.b d0')
 			nz_done()
+			if self.double_exit(i):		# and the RTS after it, as the caller's
+				self.e('addq.l #4,sp', 'swap d3', 'addq.b #2,d3', 'swap d3', 'rts')
 		elif m == 'PLP' and self.rti_next(i):	# the RTI pulls all P sets (flags, I, D)
 			self.e('swap d3', 'addq.b #1,d3', 'swap d3')
 		elif m == 'PLP' and i.pc in self.paired:
@@ -2188,7 +2191,8 @@ class Gen:
 			self.emit_engine_call(i)
 		elif m == 'JSR' and i.arg in self.inline and (not self.fast or self.fast.get('routine')):
 			self.emit_inline(i)
-		elif m == 'JSR' and i.arg in self.callable:
+		elif m == 'JSR' and i.arg in self.callable and (i.arg not in self.double_rts or
+								 self.fast and self.fast.get('routine') and not self.fast.get('inline')):
 			if self.callable[i.arg][1]:
 				ret = i.pc + 2
 				self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
@@ -3108,7 +3112,20 @@ class Gen:
 			if i.m in ('PHA', 'PHP', 'PLA', 'PLP'):
 				d += 1 if i.m[1] == 'H' else -1
 				if d < 0:
-					return None
+					# PLA PLA RTS with nothing else pushed: a check that returns
+					# from its caller too. Its copy is heavy, and so is its
+					# caller's, which calls it with nothing pushed: it drops the
+					# 68000 return address into that, and returns as that would
+					# (the RTS may be another way's too: the copy returns after
+					# the second PLA)
+					b, c = self.insns.get(pc + 1), self.insns.get(pc + 2)
+					if not (d == -1 and i.m == 'PLA' and b is not None and b.m == 'PLA' and
+						c is not None and c.m == 'RTS') or depth.get(pc + 1, -1) != -1:
+						return None
+					depth[pc + 1] = -1
+					self.double_rts.setdefault(f, set()).add(pc + 1)
+					heavy = True
+					continue
 			if i.m == 'RTS':
 				if d:
 					return None
@@ -3125,7 +3142,7 @@ class Gen:
 					# with nothing pushed, the entries' own copies if they all
 					# have one: tail calls (emit_engine_call), else their code here
 					subs = [self.routine_body(t, memo) for t in i.table] if d == 0 else None
-					if subs and all(subs):
+					if subs and all(subs) and not any(t in self.double_rts for t in i.table):
 						sw |= any(x[2] for x in subs)
 						self.engine_tails.setdefault(f, set()).add(pc)
 					else:
@@ -3133,6 +3150,10 @@ class Gen:
 				continue
 			if i.m == 'JSR':
 				sub = self.routine_body(i.arg, memo) if i.arg in self.insns else None
+				if sub and i.arg in self.double_rts:
+					if d:
+						return None
+					heavy = True		# (it may return from this one: double_rts)
 				if sub:
 					heavy |= sub[1]
 					sw |= sub[2]
@@ -3212,8 +3233,8 @@ class Gen:
 		for i in self.insns.values():
 			if i.m == 'JSR' and i.arg == f and i.pc + 3 in self.insns and prefix == 'R':
 				ctx |= self.live_in[i.pc + 3]
-		if f in self.engine_entries:	# (it returns to the callers of copies that tail-call it)
-			ctx = ALL
+		if f in self.engine_entries or f in self.double_rts:	# (it returns to the callers of copies that
+			ctx = ALL						# tail-call it, or two levels up)
 		saved = {pc: self.insns[pc].live_out for pc in pcs}
 		for pc, out in copy_liveness(self.insns, set(pcs), ctx, self.live_in, self.sums).items():
 			self.insns[pc].live_out = out
@@ -3271,8 +3292,15 @@ class Gen:
 			self.stubs = []
 			self.fast = None
 
+	def double_exit(self, i):
+		"""In a routine's copy, is i the second PLA of a PLA PLA RTS that
+		returns from its caller too (routine_body)?"""
+		return bool(self.fast and self.fast.get('routine') and i.pc in self.double_rts.get(self.fast.get('f'), ()))
+
 	def fall_through(self, i, pcs, k):
 		"""Jump to the next instruction if it isn't next in the output."""
+		if self.double_exit(i):
+			return
 		if i.mode == 'rel':
 			if i.decided == 'taken':
 				return
@@ -3685,7 +3713,8 @@ def mode1(rom, extra):
 		dyn.update((t, (s, k)) for k, t in enumerate(ts))
 	NEST[0] = nest_ok(fixed, uf)
 	g = generate(fixed, uf, into['F'], (), facts[0], calls, dyn=dyn)
-	copies = {f: g.callable[f][1:] + (g.copy_label(f), g.switch_slots(f)) for f in calls if f in g.callable}
+	copies = {f: g.callable[f][1:] + (g.copy_label(f), g.switch_slots(f)) for f in calls
+		  if f in g.callable and f not in g.double_rts}
 	out, units = list(g.out), [(uf, g)]
 	for b, u, fb in zip(slots, us[1:], facts[1:]):
 		if not u['insns']:
@@ -3701,7 +3730,7 @@ def mode1(rom, extra):
 		# Gen.emit_dyn_call), 0 where it has none
 		table, entries = [], []
 		for t in sorted(t for t, (s, k) in dyn.items() if s == b.slot):
-			if t in gb.dyn_copies and t in gb.called:
+			if t in gb.dyn_copies and t in gb.called and t not in gb.double_rts:
 				lab = gb.copy_label(t)
 				if gb.callable[t][1]:
 					entries += ['H%04X:' % t, '\t\tswap d3', '\t\tmove.w d4,d6', '\t\tlsr.w #8,d6',
@@ -3792,7 +3821,8 @@ def main():
 		calls = {i.arg for ub in ubs for i in ub['insns'].values() if i.m == 'JSR' and not i.table and i.arg >= 0xC000}
 		NEST[0] = nest_ok(fixed, uf)
 		g = generate(fixed, uf, back, (), facts[0], calls)
-		copies = {f: g.callable[f][1:] + (g.copy_label(f), g.switch_slots(f)) for f in calls if f in g.callable}
+		copies = {f: g.callable[f][1:] + (g.copy_label(f), g.switch_slots(f)) for f in calls
+			  if f in g.callable and f not in g.double_rts}
 		out, units = list(g.out), [(uf, g)]
 		for n, (b, ub) in enumerate(zip(banks, ubs)):
 			ext_calls = {}		# (the fixed bank's code is always there to return to)

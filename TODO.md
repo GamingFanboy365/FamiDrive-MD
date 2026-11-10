@@ -77,20 +77,24 @@ finished in #1 to #6.
   routines that bank's own code goes to as well have copies (ROM room:
   every bank that slot holds gets one). Other calls into a slot go
   straight to the code in that bank's table (`Gen.slot_jump`), and their
-  returns through `rcDispatch`. About 20 dispatches a game frame are left
-  in World 1-1's busiest moments, about 1.6% of the time: mostly returns
-  from routines no copy can be made of (over 300 instructions with their
-  jump engines' handlers, or leaving with PLA PLA RTS), which the 120
-  return caches (`RAM_RcRet`, given out in code order) don't reach, and
-  jumps through RAM pointers. Calls and returns take about an eighth of
-  the time there: about 105 calls a game frame push the 6502 return
-  address, as JSR does. 37 go to code with no copy (too big, or leaving
-  with PLA PLA RTS), about 13 through the other slot's call table to a
-  heavy copy or a bank with none, and about 55 to copies that may leave
-  through `rcDispatch` (`heavy`): mostly ones that call those (a call
-  through the call table goes on in the normal code where that bank has
-  no copy) or switch their own bank. (An NMI no longer makes a copy
-  heavy: it comes back to the copy, `rcNmiIn`.)
+  returns through `rcDispatch`. About 16 dispatches a game frame are left
+  in World 1-1's busiest moments, about 1.3% of the time: mostly returns
+  from code with no copy, which the 120 return caches (`RAM_RcRet`, given
+  out in code order) don't reach, and jumps through RAM pointers. Calls
+  and returns take about an eighth of the time there: about 110 calls a
+  game frame push the 6502 return address, as JSR does. About 12 go to
+  code with no copy: the fixed bank's calls into a slot whose bank isn't
+  known that its call table has no entry for, routines of over 500
+  instructions, and normal code's calls to checks that return from their
+  callers too (PLA PLA RTS: only a heavy copy's calls get their copies).
+  About 13 go through the other slot's call table to a heavy copy or a
+  bank with none, and about 80 to copies that may leave through
+  `rcDispatch` (`heavy`): mostly ones that call those (a call through the
+  call table goes on in the normal code where that bank has no copy), run
+  a jump engine or switch their own bank. (An NMI no longer makes a copy
+  heavy: it comes back to the copy, `rcNmiIn`. A jump engine's entries
+  get copies of their own, which the copies of routines that run it
+  tail-call.)
 - [ ] **Gameplay tests.** NES RAM is compared with Nestopia's only for the
   attract demo, up to the NES's first lag frame; gameplay checks are by eye.
   A test that replays input per game frame (not per video frame) could
