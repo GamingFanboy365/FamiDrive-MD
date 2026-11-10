@@ -550,8 +550,7 @@ MD_Vint:
 		adda.w	d2,a0
 		if FPS
 		jsr	(fpsUpdate).l			; the counter's sprites, in that table
-		move.l	#$94019300,4(a6)		; all 64: the counter is in the last two
-		else
+		endif
 		move.w	vdpSprWords-vdpSprData(a0),d0	; the sprites listed
 		bne.s	.spr_words
 		moveq	#4,d0				; none yet
@@ -562,7 +561,6 @@ MD_Vint:
 		lsr.w	#8,d0
 		ori.w	#$9400,d0
 		move.w	d0,4(a6)
-		endif
 		move.w	#$0100,(z80_bus).l
 		move.l	a0,d0				; DMA source: the table
 		lsr.l	#1,d0
@@ -582,6 +580,26 @@ MD_Vint:
 .wait:		btst	#0,(z80_bus).l
 		bne.s	.wait
 		move.w	(sp)+,4(a6)
+		if FPS
+		move.l	#$94009308,4(a6)		; and the counter's two, which the last
+		move.l	a0,d0				; listed one links to (8 words)
+		addi.l	#fpsSprite*8,d0
+		lsr.l	#1,d0
+		move.w	#$9500,d1
+		move.b	d0,d1
+		move.w	d1,4(a6)
+		lsr.l	#8,d0
+		move.w	#$9600,d1
+		move.b	d0,d1
+		move.w	d1,4(a6)
+		lsr.l	#8,d0
+		andi.w	#$7F,d0
+		ori.w	#$9700,d0
+		move.w	d0,4(a6)
+		move.w	#$4000|(($BC00+fpsSprite*8)&$3FFF),4(a6)	; (the table at $BC00)
+		move.w	#(($BC00+fpsSprite*8)>>14)|$80,-(sp)
+		move.w	(sp)+,4(a6)
+		endif
 		tst.b	vdpPalDirty(a4)			; palette, if it changed
 		beq.s	.same_palette
 		sf	vdpPalDirty(a4)

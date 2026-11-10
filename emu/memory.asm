@@ -833,42 +833,76 @@ sp0FirstRow:
 		andi.w	#$3FF,d4
 		adda.w	d4,a0
 .copy:
-		moveq	#0,d0			; row
-.row:
-		move.w	d0,d1			; row -> byte: rows 8-15 are the next tile
-		btst	#3,d1
-		beq.s	.top_half
-		addq.w	#8,d1
-.top_half:
-		move.b	(a0,d1.w),d4		; plane 0
-		or.b	8(a0,d1.w),d4		; plane 1
-		bne.s	.opaque
+	; four rows at a time: a long of each plane, ORed (rows 8-15 are the
+	; next tile's)
+		tst.b	2(a5)			; vertically flipped: from the bottom
+		bmi.s	.flip
+		moveq	#0,d0
+		move.l	(a0),d4
+		or.l	8(a0),d4
+		bne.s	.first
+		moveq	#4,d0
+		move.l	4(a0),d4
+		or.l	12(a0),d4
+		bne.s	.first
+		cmpi.w	#7,d5			; (8x8: no more)
+		beq.s	.none
+		moveq	#8,d0
+		move.l	16(a0),d4
+		or.l	24(a0),d4
+		bne.s	.first
+		moveq	#12,d0
+		move.l	20(a0),d4
+		or.l	28(a0),d4
+		beq.s	.none
+.first:					; the first of rows d0 to d0+3 with a pixel
+		swap	d4
+		tst.w	d4
+		bne.s	.first2
+		addq.w	#2,d0
+		swap	d4
+.first2:
+		cmpi.w	#$100,d4
+		bcc.s	.down
 		addq.w	#1,d0
-		dbf	d5,.row
+		bra.s	.down
+.flip:
+		cmpi.w	#7,d5
+		beq.s	.flip8
+		moveq	#12,d1
+		move.l	20(a0),d4
+		or.l	28(a0),d4
+		bne.s	.last
+		moveq	#8,d1
+		move.l	16(a0),d4
+		or.l	24(a0),d4
+		bne.s	.last
+.flip8:
+		moveq	#4,d1
+		move.l	4(a0),d4
+		or.l	12(a0),d4
+		bne.s	.last
+		moveq	#0,d1
+		move.l	(a0),d4
+		or.l	8(a0),d4
+		beq.s	.none
+.last:					; the last of rows d1 to d1+3 with a pixel
+		addq.w	#3,d1
+		tst.w	d4
+		bne.s	.last2
+		subq.w	#2,d1
+		swap	d4
+.last2:
+		tst.b	d4
+		bne.s	.last1
+		subq.w	#1,d1
+.last1:
+		move.w	d5,d0			; rows below it
+		sub.w	d1,d0
+		bra.s	.down
+.none:
 		move.w	#$FF,ppuSp0Ypos(a4)	; all transparent
 		bra.s	.done
-.opaque:
-		tst.b	2(a5)			; vertically flipped: count from the bottom
-		bpl.s	.down
-		move.w	ppuSprWide(a4),d4	; last row: 7 or 15
-		lsr.w	#5,d4
-		addq.w	#7,d4
-.last:
-		move.w	d4,d1
-		btst	#3,d1
-		beq.s	.top_half2
-		addq.w	#8,d1
-.top_half2:
-		move.b	(a0,d1.w),d0
-		or.b	8(a0,d1.w),d0
-		bne.s	.flipped
-		subq.w	#1,d4
-		bpl.s	.last
-.flipped:
-		move.w	ppuSprWide(a4),d0
-		lsr.w	#5,d0
-		addq.w	#7,d0
-		sub.w	d4,d0			; rows below the last opaque one
 .down:
 		moveq	#0,d4
 		move.b	(a5),d4			; Y
@@ -920,17 +954,17 @@ APU_OAMDMA:
 		else
 		moveq	#$E7-$100,d5		; Y $E7 on: hidden
 		endif
-	; unrolled: a hidden sprite (most of them, often) is a load, a
-	; compare and a branch
+	; unrolled: a hidden sprite (most of them, often) is a compare and a
+	; branch
 oamSpr		set	0
 		rept	64
 		if (oamSpr==62)&&FPS
 		tst.w	fpsOn(a4)		; the counter takes the last two slots
 		bne.w	.listed
 		endif
+		cmp.b	oamSpr*4(a5),d5		; Y at d5 on: hidden
+		bls.s	+
 		move.b	oamSpr*4(a5),d2		; Y
-		cmp.b	d5,d2
-		bcc.s	+
 		move.w	d2,d7
 		add.w	d0,d7
 		move.w	d7,(a3)+
