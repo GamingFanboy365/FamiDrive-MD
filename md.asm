@@ -189,6 +189,8 @@ rcCurCallC	ds.l 1
 		endif
 rcNmiInterp	ds.w 1			; recompiled code: an NMI came while interpreting (rcInterpStep, rcRti)
 ppuCtrlLast	ds.w 1			; the last $2000 written, as wrPPU_Ctrl set the PPU for it ($FFFF: none)
+rcNestPc	ds.w 1			; recompiled code: while an NMI a routine's copy took is out (rcNmiIn), the
+rcNestSp	ds.w 1			; 6502 PC and stack ($0100+SP) its RTI comes back to the copy at (0: none)
 emuVarsEnd	equ *
 		finish
 		if emuVarsEnd>$A00

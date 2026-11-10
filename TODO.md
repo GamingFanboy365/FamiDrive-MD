@@ -83,11 +83,13 @@ finished in #1 to #6.
   jump engines' handlers, or leaving with PLA PLA RTS), which the 120
   return caches (`RAM_RcRet`, given out in code order) don't reach, and
   jumps through RAM pointers. Calls and returns take about an eighth of
-  the time there: a copy that may leave through `rcDispatch` (a loop with
-  an NMI check, a bank switch, a call it has no copy for) is called with
-  the 6502 return address pushed, as JSR does (`heavy`, about 65 calls a
-  game frame), and `rcNmi` leaves the copy when it takes the NMI. Taking
-  it inside the copy and coming back there would make most of them light.
+  the time there: about 120 calls a game frame push the 6502 return
+  address, as JSR does. 37 go to code with no copy (too big, or leaving
+  with PLA PLA RTS), 28 through the other slot's call table (which can't
+  tell whether the copy there is light), and about 60 to copies that may
+  leave through `rcDispatch` (`heavy`): mostly ones that call those, or
+  switch their own bank. (An NMI no longer makes a copy heavy: it comes
+  back to the copy, `rcNmiIn`.)
 - [ ] **Gameplay tests.** NES RAM is compared with Nestopia's only for the
   attract demo, up to the NES's first lag frame; gameplay checks are by eye.
   A test that replays input per game frame (not per video frame) could

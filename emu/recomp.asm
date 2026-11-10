@@ -25,6 +25,7 @@ rcWram		equ RAM_Fami_WRAM-RAM_Fami_Emu-$6000
 
 rcStart:
 		move.l	sp,(RAM_RcStack).l
+		clr.w	rcNestPc(a4)		; no copy's NMI out (rcNmiIn)
 		move.w	#$4E75,(RAM_EmuLoop).l	; rts
 		lea	(RAM_RcRet).w,a5	; return caches: none kept (an RTS to
 		move.w	#2*120-1,d5		; $0000 would find rcDispatch)
@@ -376,6 +377,17 @@ rcDispatchC:
 ; rcNmiIdle is the check in a JMP-to-itself loop, where a game that
 ; runs in its NMI handler waits: each NMI taken there is a frame
 ; (FPS counter, emu/fps.asm).
+;
+; In a routine's copy, called with the 68000's jsr, the checks are
+; rcNmiIn, rcNmiWaitIn and rcNmiIdleIn (Gen.nmi_check): an NMI taken
+; there comes back to the copy when its handler's RTI (or that of the
+; IRQ rcRti takes right after it) goes on where the check was, at the
+; same 6502 stack (rcNestPc), so the copy's caller needn't have pushed
+; the 6502 return address. a5 is kept (a loop's fast copy reads
+; through it), and rcDispatch in the handlers keeps the copy's 68000
+; stack (RAM_RcStack). A handler that goes on anywhere else leaves the
+; copy behind, as an NMI taken outside one does: the next NMI forgets
+; it.
 ; ----------------------------------------------------------------
 
 rcNmiIdle:
@@ -388,23 +400,62 @@ rcNmiIdle:
 		endif
 rcNmiWait:
 		moveq	#1,d5			; (nmiHold, if it's taken)
-		bra.s	rcNmiDue
+		bra.s	rcNmiTop
 rcNmi:
 		moveq	#0,d5
+rcNmiTop:
+		moveq	#0,d7			; (taken: not returning)
+		bra.s	rcNmiDue
+
+rcNmiIdleIn:
+		if FPS
+		tst.w	cpuFamiVint(a4)
+		bne.s	rcNmiWaitIn
+		tst.w	ppuNmiFlag(a4)
+		beq.s	rcNmiWaitIn
+		addq.w	#1,fpsIdle(a4)
+		endif
+rcNmiWaitIn:
+		moveq	#1,d5
+		moveq	#1,d7			; (taken: back to the copy)
+		bra.s	rcNmiDue
+rcNmiIn:
+		moveq	#0,d5
+		moveq	#1,d7
 rcNmiDue:
 		clr.w	FamiMdVint(a4)
 		clr.w	nmiWaitDue(a4)
 		move.w	#$80,ppuStatus(a4)
 		tst.w	cpuFamiVint(a4)		; already in the NMI handler: the
-		bne.s	.late			; next NMI when it returns (rcRti)
+		bne.w	.late			; next NMI when it returns (rcRti)
 		tst.w	ppuNmiFlag(a4)
-		beq.s	.none
+		beq.w	.none
 		move.w	d5,nmiHold(a4)
 		subq.w	#1,nmiCredit(a4)	; (one for each VBlank)
 		bpl.s	.take
 		clr.w	nmiCredit(a4)
 .take:
+		tst.w	rcNestPc(a4)		; a copy's NMI whose handler went on
+		beq.s	.fresh			; elsewhere: what rcDispatch goes
+		move.l	a5,d6			; back to as it was before it
+		movea.l	(RAM_RcStack).w,a5
+		move.l	(a5),(RAM_RcStack).w
+		movea.l	d6,a5
+		clr.w	rcNestPc(a4)
+.fresh:
+		tst.w	d7
+		bne.s	.nest
 		addq.l	#4,sp			; not returning
+		bra.s	.go
+.nest:
+		move.l	a5,-(sp)		; a routine's copy: kept, with a5,
+		move.l	(RAM_RcStack).w,-(sp)	; under where rcDispatch goes back
+		move.l	sp,(RAM_RcStack).w	; to (and that, for rcRti)
+		move.w	d4,rcNestPc(a4)		; and where the RTI that comes back
+		move.l	d3,d6			; to it goes on
+		swap	d6
+		move.w	d6,rcNestSp(a4)
+.go:
 		move.w	#1,cpuFamiVint(a4)
 		if MMC3_IRQ
 		move.w	cpuInIrq(a4),irqNmiSave(a4)	; (the NMI handler's writes are above the split)
@@ -481,6 +532,20 @@ rcRti:
 		beq.s	rcIrq
 .resume:
 		endif
+		tst.w	rcNestPc(a4)		; where a routine's copy took the NMI
+		beq.s	.dispatch		; (rcNmiIn), at the same 6502 stack:
+		cmp.w	rcNestPc(a4),d4		; back into the copy
+		bne.s	.dispatch
+		move.l	d3,d6
+		swap	d6
+		cmp.w	rcNestSp(a4),d6
+		bne.s	.dispatch
+		clr.w	rcNestPc(a4)
+		movea.l	(RAM_RcStack).w,sp
+		move.l	(sp)+,(RAM_RcStack).w
+		movea.l	(sp)+,a5
+		rts
+.dispatch:
 		tst.w	rcNmiInterp(a4)		; taken while interpreting (rcInterpStep):
 		beq.w	rcDispatch		; go on interpreting there, as the code
 		clr.w	rcNmiInterp(a4)		; there may be translated but not an

@@ -698,6 +698,44 @@ def table_code(u, at, there):
 
 TOP = (0, 255)
 RET_CACHES = [0]			# return caches given out (RAM_RcRet: 120)
+NEST = [True]				# NMIs taken in routine copies come back to them (nest_ok)
+
+
+def nest_ok(prg, u):
+	"""Can an NMI taken in a routine's copy come back to it (rcNmiIn in
+	emu/recomp.asm), so the copy's caller needn't push the 6502 return
+	address? Its handler runs meanwhile, with the 6502 stack as the
+	copies left it, and its RTI (or that of the IRQ taken right after
+	it) has to be translated code's (rcRti) to come back. So not if
+	the handlers' code from the NMI vector, and the IRQ's where the
+	mapper has an IRQ (or the code runs BRK), in this unit (the fixed
+	code) and the routines it calls there, reads the stack pointer
+	(TSX: it might look below its own frame, where a light copy's
+	caller pushed no return address) or goes to code the interpreter
+	runs (RAM, or its own that isn't translated). A computed jump there
+	may go to any jump table's code it has."""
+	insns, vec = u['insns'], u['vectors']
+	work, seen = [vec[0]] + ([vec[2]] if prg.irq else []), set()
+	while work:
+		pc = work.pop()
+		if pc in seen:
+			continue
+		seen.add(pc)
+		if pc < 0x8000:
+			return False			# (RAM)
+		if not prg.has(pc):
+			continue			# a bank's code, translated there
+		i = insns.get(pc)
+		if i is None or i.m == 'TSX':
+			return False
+		work += [t for t in i.succ if t is not None]
+		if i.m == 'JSR':
+			work.append(i.arg)
+		elif i.m == 'BRK':
+			work.append(vec[2])
+		elif i.m == 'JMP' and i.mode == 'ind':
+			work += list(u['tables'])
+	return True
 
 
 def join(a, b):
@@ -1600,12 +1638,15 @@ class Gen:
 	def nmi_check(self, t):
 		"""The NMI check before a backward jump to t: in a loop that waits
 		for VBlank, for any NMI due; elsewhere, for one that can't wait
-		(rcNmi in emu/recomp.asm)."""
+		(rcNmi in emu/recomp.asm). In a routine's copy (or a loop's fast
+		copy in one), an NMI taken there comes back to it (rcNmiIn,
+		nest_ok)."""
+		k = 'In' if NEST[0] and self.fast and (self.fast.get('routine') or self.fast.get('rf')) else ''
 		if t in self.idle_jmps:
-			return 'tst.w nmiWaitDue(a4)', 'jsr rcNmiIdle'
+			return 'tst.w nmiWaitDue(a4)', 'jsr rcNmiIdle' + k
 		if t in self.idle_heads:
-			return 'tst.w nmiWaitDue(a4)', 'jsr rcNmiWait'
-		return 'tst.w FamiMdVint(a4)', 'jsr rcNmi'
+			return 'tst.w nmiWaitDue(a4)', 'jsr rcNmiWait' + k
+		return 'tst.w FamiMdVint(a4)', 'jsr rcNmi' + k
 
 	def rti_next(self, i):
 		"""An RTI right after i, in its 8 KB (so in its bank). Nothing
@@ -3018,13 +3059,15 @@ class Gen:
 		68000's jsr, or None. Its copy returns with rts, so every path
 		must reach RTS with the stack as it was, and the routines it
 		calls must be like it.
-		A light routine needs no NMI check and stays in translated code:
-		its call doesn't push the return address. (Its own pushes and
-		pulls then go where the return address would be, as nothing can
-		look at the stack meanwhile.) A heavy one may do those things:
-		its call pushes the 6502 return address like JSR does, and if it
-		leaves its copy through rcDispatch (an NMI, a computed jump), that
-		drops the 68000 return addresses and the normal code takes over."""
+		A light routine stays in translated code: its call doesn't push
+		the return address. (Its own pushes and pulls then go where the
+		return address would be, as nothing can look at the stack
+		meanwhile; an NMI it takes comes back to its copy, nest_ok.) A
+		heavy one may leave its copy through rcDispatch (a bank switch, a
+		computed jump, a routine with no copy, or an NMI where they can't
+		come back): its call pushes the 6502 return address like JSR
+		does, and rcDispatch drops the 68000 return addresses and the
+		normal code takes over."""
 		if f in memo:
 			return memo[f]
 		memo[f] = None			# recursion: not callable
@@ -3085,8 +3128,9 @@ class Gen:
 				if t is None or t not in self.insns:
 					heavy = True	# through rcDispatch
 				else:
-					if self.back(i, t) and not (i.mode == 'rel' and i.decided is None and pc in self.counted):
-						heavy = True	# NMI check
+					if self.back(i, t) and not (i.mode == 'rel' and i.decided is None and pc in self.counted) \
+					   and not NEST[0]:
+						heavy = True	# NMI check (with NEST, it comes back: rcNmiIn)
 					work.append((t, d))
 		memo[f] = (set(depth), heavy, sw)
 		return memo[f]
@@ -3604,6 +3648,7 @@ def mode1(rom, extra):
 		ts = sorted({i.arg for u in us for i in u['insns'].values() if i.m == 'JSR' and not i.table and
 			     i.arg >= 0x8000 and fixed.region(i.arg) == s and u['slot'] != s} & refs[s])
 		dyn.update((t, (s, k)) for k, t in enumerate(ts))
+	NEST[0] = nest_ok(fixed, uf)
 	g = generate(fixed, uf, into['F'], (), facts[0], calls, dyn=dyn)
 	copies = {f: g.callable[f][1:] + (g.copy_label(f), g.switch_slots(f)) for f in calls if f in g.callable}
 	out, units = list(g.out), [(uf, g)]
@@ -3667,6 +3712,7 @@ def main():
 	prg = Prg(rom)
 	if not prg.banked:
 		u = analyze(prg, extra)
+		NEST[0] = nest_ok(prg, u)
 		g = generate(prg, u)
 		out, units = g.out, [(u, g)]
 	elif prg.mode1:
@@ -3707,6 +3753,7 @@ def main():
 			facts = new
 		# the banks' code calls the fixed bank's routines' copies
 		calls = {i.arg for ub in ubs for i in ub['insns'].values() if i.m == 'JSR' and not i.table and i.arg >= 0xC000}
+		NEST[0] = nest_ok(fixed, uf)
 		g = generate(fixed, uf, back, (), facts[0], calls)
 		copies = {f: g.callable[f][1:] + (g.copy_label(f), g.switch_slots(f)) for f in calls if f in g.callable}
 		out, units = list(g.out), [(uf, g)]
@@ -3723,9 +3770,9 @@ def main():
 	with open(sys.argv[2], 'w') as f:
 		f.write('; generated by tools/recomp6502.py from %s -- do not publish\n' % sys.argv[1].split('/')[-1])
 		f.write('\n'.join(long_jumps(out)) + '\n')
-	print('recomp6502: %d instructions, %d bytes of 6502 code, %d loops versioned' %
+	print('recomp6502: %d instructions, %d bytes of 6502 code, %d loops versioned%s' %
 	      (sum(len(u['insns']) for u, g in units), sum(i.n for u, g in units for i in u['insns'].values()),
-	       sum(len(g.versioned) for u, g in units)))
+	       sum(len(g.versioned) for u, g in units), '' if NEST[0] else ', NMIs leave routine copies (nest_ok)'))
 
 
 if __name__ == '__main__':
