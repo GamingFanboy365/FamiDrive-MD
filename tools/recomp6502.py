@@ -1164,6 +1164,8 @@ class Gen:
 		self.dyn_copies = set()		# and this bank's that are (copies of them, if small: DYN_COPY_MAX)
 		self.sj = 0			# slot_jump's labels
 		self.tails = {}			# routine -> its JMPs that are tail calls (routine_body)
+		self.engine_tails = {}		# routine -> its jump engine calls whose entries' copies it tail-calls (routine_body)
+		self.engine_entries = set()	# and those entries (copies that keep every flag: emit_routine)
 		self.inline = set()		# small routines put in place of their calls (emit_inline)
 		self.out, self.stubs = [], []
 		self.fast = None
@@ -2307,7 +2309,22 @@ class Gen:
 			self.e('lea %s(pc),a5' % jt, 'movea.l (a5,d6.w),a5', 'jmp (a5)')
 		self.xc = False
 		self.stubs += [jw + ':'] + ['\t\tdc.b $%02X,$%02X' % (a & 0xFF, a >> 8) for a in t]
-		self.stubs += [jt + ':'] + ['\t\tdc.l %s' % self.lab(a) for a in t]
+		if self.fast and self.fast.get('routine') and i.pc in self.engine_tails.get(self.fast.get('f'), ()):
+			# a heavy copy's (routine_body): the entry's own copy, as a tail
+			# call. A heavy one drops the return address its caller pushed
+			# itself; a light one is called, then that is dropped
+			labs, light = [], []
+			for k, a in enumerate(t):
+				self.called.add(a)
+				if self.callable[a][1]:
+					labs.append('R%04X_%04X' % (a, a))
+				else:
+					labs.append(self.tag('Je%d' % k, i.pc))
+					light += [labs[-1] + ':', '\t\tjsr R%04X_%04X' % (a, a), '\t\tswap d3', '\t\taddq.b #2,d3',
+						  '\t\tswap d3', '\t\trts']
+			self.stubs += [jt + ':'] + ['\t\tdc.l %s' % l for l in labs] + light
+		else:
+			self.stubs += [jt + ':'] + ['\t\tdc.l %s' % self.lab(a) for a in t]
 		self.stubs += [g + ':', '\t\tswap d3', '\t\tmove.b #$%02X,(a2,d3.w)' % (ret >> 8), '\t\tsubq.b #1,d3',
 			       '\t\tmove.b #$%02X,(a2,d3.w)' % (ret & 0xFF), '\t\tsubq.b #1,d3', '\t\tswap d3']
 		if self.fast:				# leaving a copy: drop the 68000's returns
@@ -3080,7 +3097,7 @@ class Gen:
 				if depth[pc] != d:
 					return None
 				continue
-			if len(depth) >= 300 or i.m in ('RTI', 'BRK', 'TSX', 'TXS'):
+			if len(depth) >= 500 or i.m in ('RTI', 'BRK', 'TSX', 'TXS'):
 				return None
 			depth[pc] = d
 			if self.switches(i):
@@ -3105,7 +3122,14 @@ class Gen:
 			if i.m == 'JSR' and i.table:
 				heavy = True			# past the table: the engine, through rcDispatch
 				if i.arg in self.engines and self.engine_table(i) and all(t in self.insns for t in i.table):
-					work += [(t, d) for t in i.table]
+					# with nothing pushed, the entries' own copies if they all
+					# have one: tail calls (emit_engine_call), else their code here
+					subs = [self.routine_body(t, memo) for t in i.table] if d == 0 else None
+					if subs and all(subs):
+						sw |= any(x[2] for x in subs)
+						self.engine_tails.setdefault(f, set()).add(pc)
+					else:
+						work += [(t, d) for t in i.table]
 				continue
 			if i.m == 'JSR':
 				sub = self.routine_body(i.arg, memo) if i.arg in self.insns else None
@@ -3188,6 +3212,8 @@ class Gen:
 		for i in self.insns.values():
 			if i.m == 'JSR' and i.arg == f and i.pc + 3 in self.insns and prefix == 'R':
 				ctx |= self.live_in[i.pc + 3]
+		if f in self.engine_entries:	# (it returns to the callers of copies that tail-call it)
+			ctx = ALL
 		saved = {pc: self.insns[pc].live_out for pc in pcs}
 		for pc, out in copy_liveness(self.insns, set(pcs), ctx, self.live_in, self.sums).items():
 			self.insns[pc].live_out = out
@@ -3331,6 +3357,14 @@ class Gen:
 		for f in self.copies_for:
 			if f in self.insns and self.routine_body(f, memo):
 				self.callable[f] = memo[f]
+		work = list(self.callable)		# and the engine entries copies tail-call
+		while work:
+			for pc in self.engine_tails.get(work.pop(), ()):
+				for t in self.insns[pc].table:
+					if t not in self.callable:
+						self.callable[t] = memo[t]
+						work.append(t)
+					self.engine_entries.add(t)
 		self.refs = own_refs(self.insns)
 		self.called = {f for f in self.copies_for if f in self.callable and
 			       (f not in self.dyn_copies or self.dyn_worth(f))}
