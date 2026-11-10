@@ -2666,6 +2666,87 @@ class Gen:
 		plan['unroll'] = {'n': n, 'skip': skip, 'ctr': ctr, 'final': 0 if b.m == 'BNE' else 0xFF}
 		return plan
 
+	def pad_plan(self, b):
+		"""A loop that reads the pads a bit a turn, 8 turns, as Super Mario
+		Bros. 2 and 3 do. For each port, once a turn:
+
+			LDA $4016	; or $4017, or $4016,X/Y with X/Y the port
+			LSR A
+			ROL m		; the button, into m (RAM)
+			LSR A		; and maybe the next bit (a Famicom
+			ROL m2		; expansion port pad's) into m2
+
+		then DEX or DEY, BNE back, the count 8 where code falls in.
+		emit_pads puts what the 8 turns do in its place."""
+		t = b.arg
+		if b.m != 'BNE' or b.pc not in self.counted:
+			return None
+		body, pc = [], t
+		while pc <= b.pc and pc in self.insns:
+			body.append(self.insns[pc])
+			pc += self.insns[pc].n
+		if pc != b.pc + 2 or len(body) < 5:
+			return None
+		cnt = body[-2]
+		if cnt.m not in ('DEX', 'DEY') or self.trip_count(b, body) != 8:
+			return None
+		groups, k, ins = [], 0, body[:-2]
+		while k < len(ins):
+			i = ins[k]
+			if i.m != 'LDA' or (i.mode, i.arg) not in (('abs', 0x4016), ('abs', 0x4017), ('absx', 0x4016),
+								    ('absy', 0x4016)) or i.mode[-1:] == cnt.m[2].lower():
+				return None
+			k, dests = k + 1, []
+			while k + 1 < len(ins) and ins[k].m == 'LSR' and ins[k].mode == 'acc' and ins[k + 1].m == 'ROL' and \
+			      (ins[k + 1].mode == 'zp' or (ins[k + 1].mode == 'abs' and ins[k + 1].arg < 0x800)):
+				dests.append(ins[k + 1].arg)
+				k += 2
+			if not 1 <= len(dests) <= 2:
+				return None
+			groups.append((i, dests))
+		ports = [g.arg if g.mode == 'abs' else None for g, d in groups]
+		dests = [m for g, d in groups for m in d]
+		if len(set(dests)) != len(dests) or (len(groups) > 1 and (None in ports or len(set(ports)) != len(ports))):
+			return None
+		return {'t': t, 'b': b, 'pads': groups, 'cnt': cnt}
+
+	def emit_pads(self, plan):
+		"""What a pad_plan loop's 8 turns do: each port's next 8 bits (its
+		latch, cpuInputData: the next in bit 0, as rcReadPad reads them,
+		0 or 1) go to its button byte, the first in bit 7 (rcPadBits
+		reverses them), and its latch moves on 8 bits; a second byte
+		gets 0s. A and the count end 0 (Z set, N clear), and C is what
+		the last ROL took out: bit 0 of its byte as it was. A port read
+		through X or Y that isn't $4016 or $4017 runs the loop."""
+		t, b = plan['t'], plan['b']
+		self.out.append('\t\t\t\t\t\t; $%04X  pads, 8 turns' % t)
+		for g, dests in plan['pads']:
+			if g.mode != 'abs':
+				self.e('cmpi.b #1,%s' % ('d1' if g.mode == 'absx' else 'd2'), 'bhi.w ' + self.lab(t))
+		live = b.live_out
+		if live & C:
+			self.e('moveq #1,d5', 'and.b $%02X(a2),d5' % plan['pads'][-1][1][-1])
+		for g, dests in plan['pads']:
+			if g.mode == 'abs':
+				self.e('lea cpuInputData+%d(a4),a5' % (2 * (g.arg - 0x4016)))
+			else:
+				self.e('move.w %s,d4' % ('d1' if g.mode == 'absx' else 'd2'), 'add.w d4,d4',
+				       'lea cpuInputData(a4,d4.w),a5')
+			self.e('moveq #0,d7', 'move.b 1(a5),d7', 'move.b (a5),1(a5)', 'clr.b (a5)',
+			       'lea (rcPadBits).l,a5', 'move.b (a5,d7.w),$%02X(a2)' % dests[0])
+			if len(dests) > 1:
+				self.e('clr.b $%02X(a2)' % dests[1])
+		self.e('moveq #0,d0', 'moveq #0,%s' % ('d1' if plan['cnt'].m == 'DEX' else 'd2'))
+		if live & (N | Z | C):
+			self.e('andi.b #$%02X,d3' % (0xFF & ~(0x0C if live & (N | Z) else 0) & ~(0x11 if live & C else 0)))
+			if live & (N | Z):
+				self.e('ori.b #$04,d3')
+			if live & C:
+				self.e('or.b d5,d3', 'lsl.b #4,d5', 'or.b d5,d3')
+		self.xc = False
+		f = b.pc + 2
+		self.e(*(['jmp %s' % self.lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
+
 	def fill_plan(self, b):
 		"""STA base,X / DEX / BPL (or the INX, Y and BNE forms, or a run of
 		DEX for a stride of 2, 4...) with a known start value fills
@@ -3080,12 +3161,16 @@ class Gen:
 				 ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
 
 	def loop_entry(self, prev, plan):
-		"""Fill or fast copy where the previous instruction falls into a loop."""
+		"""Fill, pad reads or fast copy where the previous instruction falls
+		into a loop."""
 		p = self.insns[prev]
 		pc = plan['t']
 		if p.pc + p.n == pc and pc in p.succ:
 			if 'addrs' in plan:
 				self.emit_fill(plan)
+				self.versioned.append(pc)
+			elif 'pads' in plan:
+				self.emit_pads(plan)
 				self.versioned.append(pc)
 			elif self.emit_versioned(plan):
 				self.versioned.append(pc)
@@ -3160,7 +3245,7 @@ class Gen:
 		plans = {}
 		for i in self.insns.values():
 			if i.mode == 'rel' and i.decided is None and i.arg < i.pc and i.arg not in plans:
-				plan = self.fill_plan(i) or self.version_plan(i)
+				plan = self.fill_plan(i) or self.version_plan(i) or self.pad_plan(i)
 				if plan:
 					plans[i.arg] = plan
 		self.versioned = []
