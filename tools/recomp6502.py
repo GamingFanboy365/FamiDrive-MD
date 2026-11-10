@@ -2314,13 +2314,22 @@ class Gen:
 		if i.mode != 'abs' or not 0x2000 <= i.arg < 0x4000 or i.arg & 7 != 7:
 			return False
 		pal, chr_, done = self.tag('Pp', i.pc), self.tag('Pc', i.pc), self.tag('Pd', i.pc)
+		call = self.kept_a5
 		self.e('move.w ppuAddrBase(a4),d4', 'move.w ppuAddrIncr(a4),d6', 'add.w d6,ppuAddrBase(a4)',
 		       'andi.w #$3FFF,d4', 'cmpi.w #$3F00,d4', 'bcc.s ' + pal, 'cmpi.w #$2000,d4', 'bcs.s ' + chr_,
-		       'cmp.b (a3,d4.w),%s' % r, 'beq.s ' + done, 'move.b %s,d7' % r, 'jsr wrPPU_DataNt', 'bra.s ' + done,
+		       'cmp.b (a3,d4.w),%s' % r, 'beq.s ' + done, 'move.b %s,d7' % r, *call('wrPPU_DataNt'), 'bra.s ' + done,
 		       pal + ':', 'andi.w #$3F1F,d4', 'moveq #$3F,d7', 'and.b %s,d7' % r, 'cmp.b (a3,d4.w),d7',
-		       'beq.s ' + done, 'jsr wrPPU_DataPal', 'bra.s ' + done,
-		       chr_ + ':', 'move.b %s,d7' % r, 'jsr ppuChrRamWrite', done + ':')
+		       'beq.s ' + done, *call('wrPPU_DataPal'), 'bra.s ' + done,
+		       chr_ + ':', 'move.b %s,d7' % r, *call('ppuChrRamWrite'), done + ':')
 		return True
+
+	def kept_a5(self, routine):
+		"""A call to a handler that may use a5: in a loop's fast copy,
+		where a5 holds the pointer the loop reads through (copy_of), with
+		a5 kept around it."""
+		if not self.fast or self.fast.get('routine'):
+			return ['jsr ' + routine]
+		return ['move.l a5,-(sp)\t; (a5 kept)', 'jsr %s\t; (a5 kept)' % routine, 'movea.l (sp)+,a5\t; (a5 kept)']
 
 	def mmc3_select(self, i):
 		"""What MMC3's $8000 holds at a store to $8001 (its range): what
@@ -2546,7 +2555,7 @@ class Gen:
 		while pc <= b.pc and pc in self.insns:
 			body.append(self.insns[pc])
 			pc += self.insns[pc].n
-		if pc != b.pc + 2 or body[0].mode == 'rel':
+		if pc != b.pc + 2:
 			return None
 		W = ('STA', 'STX', 'STY', 'INC', 'DEC', 'ASL', 'LSR', 'ROL', 'ROR')
 		ptr = None
@@ -2754,7 +2763,7 @@ class Gen:
 			self.fast = outer
 			self.out, self.stubs, self.xc, self.c_skipped = save
 			self.ccr_d3 = None
-		if fast and any(',a5' in l or ('jsr' in l and 'rcNmi' not in l) for l in fast):
+		if fast and any((',a5' in l or ('jsr' in l and 'rcNmi' not in l)) and '(a5 kept)' not in l for l in fast):
 			fast = None
 		return fast
 
