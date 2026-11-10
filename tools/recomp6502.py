@@ -1631,6 +1631,9 @@ class Gen:
 					all(s is None or s > i.pc for s in i.succ))
 
 	def stack_pairs(self, push, pull, also=lambda i: True):
+		"""(Pushes in between are fine where every way pulls them again
+		first, as Super Mario Bros. 3's PHP PHP ... PLP PHA ... PLA PLP:
+		the walk keeps how many bytes are on the push's.)"""
 		preds = {pc: set() for pc in self.insns}
 		for i in self.insns.values():
 			for s in i.succ:
@@ -1641,20 +1644,27 @@ class Gen:
 		for p in self.insns.values():
 			if p.m != push:
 				continue
-			walk, work, ok = set(), [p.pc + 1], True
+			depth, pulls, work, ok = {}, set(), [(p.pc + 1, 0)], True
 			while work and ok:
-				pc = work.pop()
+				pc, d = work.pop()
 				i = self.insns.get(pc)
-				if i is None or len(walk) > 32 or i.m in ('PLA', 'PHA', 'PHP', 'PLP', 'JSR', 'RTS', 'RTI', 'BRK',
-									   'TSX', 'TXS', 'SEI', 'CLI', 'SED', 'CLD') and i.m != pull or \
-				   None in i.succ or not also(i):
+				if i is None or len(depth) > 32 or i.m in ('JSR', 'RTS', 'RTI', 'BRK', 'TSX', 'TXS', 'SEI', 'CLI',
+									    'SED', 'CLD') or None in i.succ or not also(i):
 					ok = False
-				elif pc not in walk:
-					walk.add(pc)
-					if i.m != pull:
-						work += i.succ
-			if ok and walk and not (walk & outside) and all(preds[pc] <= walk | {p.pc} for pc in walk):
-				found |= {p.pc} | {pc for pc in walk if self.insns[pc].m == pull}
+				elif pc in depth:
+					ok = depth[pc] == d	# (each way gets there with as many on top)
+				else:
+					depth[pc] = d
+					d += {'PHA': 1, 'PHP': 1, 'PLA': -1, 'PLP': -1}.get(i.m, 0)
+					if d >= 0:
+						work += [(s, d) for s in i.succ]
+					elif i.m == pull:	# pulls the push's byte
+						pulls.add(pc)
+					else:
+						ok = False
+			walk = set(depth)
+			if ok and pulls and not (walk & outside) and all(preds[pc] <= walk | {p.pc} for pc in walk):
+				found |= {p.pc} | pulls
 		return found
 
 	def loop_edges(self):
