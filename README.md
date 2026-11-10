@@ -136,7 +136,7 @@ handheld's differences.
 - Super Mario Bros. 3 splits the screen more than once a frame in its levels with water along the
   bottom or a water line, and in its spade bonus game: those show only the first split. Sprites
   that are partly below its status bar's top line show whole or not at all. Recompiled, World
-  1-1 runs at 60 game frames per second where it's quiet, about 57 while it scrolls and 43-47
+  1-1 runs at 60 game frames per second where it's quiet, about 58 while it scrolls and 44-49
   where several enemies are on screen (its status bar's split costs about 2-3 of those where
   it's busiest), and the black screen before a level lasts about 50 frames (20 on a NES).
   Interpreted, it runs at about a tenth of full speed and can't enter a level: its NMI handler

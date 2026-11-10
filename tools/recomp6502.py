@@ -1124,6 +1124,8 @@ class Gen:
 		self.ext_calls = {}		# (a bank's: the fixed bank's JSRs to its routines)
 		self.dyn = {}			# MMC3 PRG mode 1: routines called in the other slot, (slot, index)
 		self.dyn_copies = set()		# and this bank's that are (copies of them, if small: DYN_COPY_MAX)
+		self.sj = 0			# slot_jump's labels
+		self.tails = {}			# routine -> its JMPs that are tail calls (routine_body)
 		self.inline = set()		# small routines put in place of their calls (emit_inline)
 		self.out, self.stubs = [], []
 		self.fast = None
@@ -1404,6 +1406,26 @@ class Gen:
 			return []
 		k = self.tag('Sw', i.pc)
 		return self.own_bank(k) + ['move.w #$%04X,d4' % ((i.pc + i.n) & 0xFFFF), 'jmp rcDispatch', k + ':']
+
+	def slot_jump(self, t):
+		"""Lines that go to t, in the $A000 or $C000 slot (MMC3 PRG mode 1)
+		where the bank isn't known here: its code in that bank's table, as
+		rcDispatch looks it up (rcCurTable: R7's, less $8000; rcCurTableC:
+		R6's), or rcDispatch where it has none (it interprets). Leaving a
+		routine copy, the 68000's returns go (as rcDispatch drops them).
+		None for anywhere else (rcDispatch)."""
+		s = self.prg.region(t) if self.prg.mode1 else None
+		if s not in ('A', 'C'):
+			return None
+		self.sj += 1
+		miss, k = 'Sj%d' % self.sj, (t & 0x1FFF) * 4
+		lines = ['movea.l (RAM_RcStack).w,sp'] if self.fast and (self.fast.get('routine') or self.fast.get('rf')) else []
+		if s == 'A':
+			lines += ['movea.l rcCurTable(a4),a5', 'lea $7FFF(a5),a5', 'move.l %d(a5),d5' % (k + 1)]
+		else:
+			lines += ['movea.l rcCurTableC(a4),a5', 'move.l %d(a5),d5' % k]
+		return lines + ['beq.s ' + miss, 'movea.l d5,a5', 'jmp (a5)', miss + ':', 'move.w #$%04X,d4' % t,
+				'jmp rcDispatch']
 
 	def own_bank(self, k):
 		"""Lines that go to k if this bank is still where its code runs
@@ -1719,7 +1741,7 @@ class Gen:
 		elif target in self.ext:
 			self.e('jmp %s' % lab(target))
 		else:
-			self.e('move.w #$%04X,d4' % target, 'jmp rcDispatch')
+			self.e(*(self.slot_jump(target) or ['move.w #$%04X,d4' % target, 'jmp rcDispatch']))
 
 	def branch(self, i, cc, tag='S'):
 		"""Conditional branch on 68k condition cc (flags already in the CCR).
@@ -2038,6 +2060,17 @@ class Gen:
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d5', 'swap d3', 'move.b d5,d3')
 		elif m == 'PLP':
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d5', 'swap d3', 'jsr famiSetP')
+		elif m == 'JMP' and self.fast and i.pc in self.tails.get(self.fast.get('f', self.fast.get('rf')), ()):
+			if not self.fast.get('routine'):
+				raise Unroll		# (a loop's fast copy in a routine's: no calls there)
+			heavy, sw, label = self.ext_routines[i.arg][:3]
+			self.e('jsr ' + label)		# a tail call (routine_body): the copy, then back as RTS goes
+			if self.fast.get('inline'):
+				self.e('bra.w %s' % self.fast['inline'])
+			else:
+				if self.fast['heavy'] and not heavy:
+					self.e('swap d3', 'addq.b #2,d3', 'swap d3')	# (a heavy copy drops it itself)
+				self.e('rts')
 		elif m == 'JMP':
 			if i.mode == 'abs':
 				self.goto(i, i.arg)
@@ -2067,7 +2100,7 @@ class Gen:
 			self.e('jsr R%04X_%04X' % (i.arg, i.arg))	# see routine_body
 			self.called.add(i.arg)
 		elif m == 'JSR' and i.arg in self.ext_routines and not i.table:
-			heavy, sw, label = self.ext_routines[i.arg]
+			heavy, sw, label = self.ext_routines[i.arg][:3]
 			if heavy:
 				ret = i.pc + 2
 				self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
@@ -2084,11 +2117,14 @@ class Gen:
 			self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
 			       'move.b #$%02X,(a2,d3.w)' % (ret & 0xFF), 'subq.b #1,d3', 'swap d3')
 			if self.fast and self.fast.get('routine'):	# leaving a copy: drop the 68000's returns
-				self.e('move.w #$%04X,d4' % i.arg, 'jmp rcDispatch')
+				if i.arg >= 0x8000 and (not self.prg.banked or i.arg in self.insns or i.arg in self.ext):
+					self.e('movea.l (RAM_RcStack).w,sp', 'jmp %s' % lab(i.arg))
+				else:
+					self.e(*(self.slot_jump(i.arg) or ['move.w #$%04X,d4' % i.arg, 'jmp rcDispatch']))
 			elif i.arg >= 0x8000 and (not self.prg.banked or i.arg in self.insns or i.arg in self.ext):
 				self.e('jmp %s' % lab(i.arg))
 			else:
-				self.e('move.w #$%04X,d4' % i.arg, 'jmp rcDispatch')
+				self.e(*(self.slot_jump(i.arg) or ['move.w #$%04X,d4' % i.arg, 'jmp rcDispatch']))
 		elif m == 'RTS' and self.fast and self.fast.get('inline'):
 			if self.fast['last'] != i.pc:		# (the last one falls into the code after the call)
 				self.e('bra.w %s' % self.fast['inline'])
@@ -2678,7 +2714,8 @@ class Gen:
 		try:
 			off = {'d1': 0, 'd2': 0}
 			for k in range(turns['n'] if turns else 1):
-				self.fast = dict(plan, prefix=base + ('U%d' % k if k else 'F'), outer=outer and base)
+				self.fast = dict(plan, prefix=base + ('U%d' % k if k else 'F'), outer=outer and base,
+						 rf=outer.get('f') if outer and outer.get('routine') else None)
 				if turns:
 					self.fast.update(off=off, skip=turns['skip'])
 				dk = None
@@ -2792,7 +2829,7 @@ class Gen:
 		       'move.b #$%02X,(a2,d3.w)' % (ret & 0xFF), 'subq.b #1,d3', 'swap d3',
 		       'movea.l rcCurCall%s(a4),a5' % s, 'move.l %d(a5),d5' % (4 * k), 'beq.w ' + slow,
 		       'movea.l d5,a5', 'jsr (a5)')
-		self.stubs += [slow + ':', '\t\tmove.w #$%04X,d4' % i.arg, '\t\tjmp rcDispatch']
+		self.stubs += [slow + ':'] + ['\t\t' + l if not l.endswith(':') else l for l in self.slot_jump(i.arg)]
 		if self.prg.unit != 'F':
 			back = self.tag('Dr', i.pc)
 			self.e(*self.own_bank(back), 'move.w #$%04X,d4' % ((i.pc + 3) & 0xFFFF), 'jmp rcDispatch',
@@ -2847,6 +2884,12 @@ class Gen:
 				if d:
 					return None
 				continue
+			if self.tail_call(i, d):
+				h, s = self.ext_routines[i.arg][:2]
+				heavy |= h			# (its copy may leave through rcDispatch: so may this one)
+				sw |= s
+				self.tails.setdefault(f, set()).add(pc)
+				continue
 			if i.m == 'JSR' and i.table:
 				heavy = True			# past the table: the engine, through rcDispatch
 				if i.arg in self.engines and self.engine_table(i) and all(t in self.insns for t in i.table):
@@ -2858,7 +2901,7 @@ class Gen:
 					heavy |= sub[1]
 					sw |= sub[2]
 				elif i.arg in self.ext_routines:
-					h, s, _ = self.ext_routines[i.arg]
+					h, s = self.ext_routines[i.arg][:2]
 					heavy |= h or s		# a switch goes on through rcDispatch
 					sw |= s
 				elif i.arg < 0x800:
@@ -2880,6 +2923,36 @@ class Gen:
 		memo[f] = (set(depth), heavy, sw)
 		return memo[f]
 
+	def switch_slots(self, f, memo=None):
+		"""The slots a callable routine (with those it calls) may switch
+		the bank of: 'A' ($A000, R7) and 'C' ($C000, R6) in MMC3 PRG mode
+		1, both where that isn't known (or another mapper's bank)."""
+		memo = {} if memo is None else memo
+		if f in memo:
+			return memo[f]
+		memo[f] = {'A', 'C'}			# (recursion: not known)
+		out = set()
+		for pc in self.callable[f][0]:
+			i = self.insns[pc]
+			if self.prg_switch(i):
+				regs = self.mmc3_regs(i) if self.prg.mode1 else None
+				out |= {'A', 'C'} if regs is None else {s for s, r in (('A', 7), ('C', 6)) if r in regs}
+			if i.m == 'JSR':
+				out |= self.switch_slots(i.arg, memo) if not i.table and i.arg in self.callable else {'A', 'C'}
+		memo[f] = out
+		return out
+
+	def tail_call(self, i, d):
+		"""Is i (at stack depth d in a routine) a JMP to a routine of the
+		fixed bank's that has a copy (ext_routines), which can't switch
+		this code's bank out: so the same as calling the copy and
+		returning? MMC3 PRG mode 1 only (another mapper's bank switches
+		where the copy doesn't know)."""
+		if not (self.prg.mode1 and i.m == 'JMP' and i.mode == 'abs' and d == 0 and i.arg not in self.insns):
+			return False
+		r = self.ext_routines.get(i.arg)
+		return r is not None and self.prg.slot not in r[3]
+
 	def copy_label(self, f):
 		"""The label of the copy of the fixed bank's routine f that the
 		banks' code calls: a copy of its own (X) where they need more
@@ -2893,7 +2966,8 @@ class Gen:
 
 	def emit_routine(self, f, prefix='R'):
 		pcs = sorted(self.callable[f][0])
-		self.fast = {'pcs': set(pcs), 'prefix': '%s%04X' % (prefix, f), 'routine': True, 'heavy': self.callable[f][1]}
+		self.fast = {'pcs': set(pcs), 'prefix': '%s%04X' % (prefix, f), 'routine': True, 'heavy': self.callable[f][1],
+			     'f': f}
 		self.xc, self.c_skipped = False, 0
 		self.out.append('')
 		# its own liveness: it returns only to its callers (the banks', for X)
@@ -2922,7 +2996,7 @@ class Gen:
 			self.insns[pc].live_out = out
 		last = max(pcs, key=lambda pc: pc + self.insns[pc].n)
 		self.fast = {'pcs': set(pcs), 'prefix': '%sI%04X' % (outer['prefix'] if outer else '', i.pc), 'routine': True,
-			     'heavy': False, 'inline': end, 'last': last if self.insns[last].m == 'RTS' else None}
+			     'heavy': False, 'inline': end, 'last': last if self.insns[last].m == 'RTS' else None, 'f': f}
 		if pcs[0] != f:				# code before its start: go in at its start
 			self.e('bra.w %s' % self.lab(f))
 		try:
@@ -3136,6 +3210,14 @@ class Gen:
 			self.out += ['rcPrgMask\tequ $%04X' % self.prg.mask,
 				     'rcVecNmi\tequ $%04X' % vectors[0], 'rcVecReset\tequ $%04X' % vectors[1],
 				     'rcVecIrq\tequ $%04X' % vectors[2]]
+			# the NMI's and IRQ's way in (rcNmiDue, rcIrq): their code, as
+			# rcDispatch would find it there
+			for name, v in (('rcVecNmiGo', vectors[0]), ('rcVecIrqGo', vectors[2])):
+				self.out += [name + ':', '\t\tmovea.l (RAM_RcStack).w,sp']
+				if v in self.insns and self.prg.region(v) == 'F':
+					self.out += ['\t\tjmp (%s).l' % lab(v)]
+				else:
+					self.out += ['\t\tmove.w #$%04X,d4' % v, '\t\tjmp rcDispatch']
 
 
 def long_jumps(out):
@@ -3351,7 +3433,7 @@ def mode1(rom, extra):
 			     i.arg >= 0x8000 and fixed.region(i.arg) == s and u['slot'] != s} & refs[s])
 		dyn.update((t, (s, k)) for k, t in enumerate(ts))
 	g = generate(fixed, uf, into['F'], (), facts[0], calls, dyn=dyn)
-	copies = {f: g.callable[f][1:] + (g.copy_label(f),) for f in calls if f in g.callable}
+	copies = {f: g.callable[f][1:] + (g.copy_label(f), g.switch_slots(f)) for f in calls if f in g.callable}
 	out, units = list(g.out), [(uf, g)]
 	for b, u, fb in zip(slots, us[1:], facts[1:]):
 		if not u['insns']:
@@ -3454,7 +3536,7 @@ def main():
 		# the banks' code calls the fixed bank's routines' copies
 		calls = {i.arg for ub in ubs for i in ub['insns'].values() if i.m == 'JSR' and not i.table and i.arg >= 0xC000}
 		g = generate(fixed, uf, back, (), facts[0], calls)
-		copies = {f: g.callable[f][1:] + (g.copy_label(f),) for f in calls if f in g.callable}
+		copies = {f: g.callable[f][1:] + (g.copy_label(f), g.switch_slots(f)) for f in calls if f in g.callable}
 		out, units = list(g.out), [(uf, g)]
 		for n, (b, ub) in enumerate(zip(banks, ubs)):
 			ext_calls = {}		# (the fixed bank's code is always there to return to)

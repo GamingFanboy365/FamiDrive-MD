@@ -429,8 +429,7 @@ rcNmiDue:
 		subq.b	#1,d3
 		swap	d3
 		move.w	#1,cpuModeIntDis(a4)
-		move.w	#rcVecNmi,d4
-		bra	rcDispatch
+		jmp	(rcVecNmiGo).l		; (its code, recomp6502.py)
 .late:
 		move.w	#1,vbLate(a4)
 		rts
@@ -546,8 +545,7 @@ rcIrq:
 		swap	d3
 		move.w	#1,cpuModeIntDis(a4)
 		jsr	splitBegin
-		move.w	#rcVecIrq,d4
-		bra.w	rcDispatch
+		jmp	(rcVecIrqGo).l		; (its code, recomp6502.py)
 		endif
 
 ; ----------------------------------------------------------------
