@@ -1225,6 +1225,8 @@ class Gen:
 				return f[0] + ['lea $%04X(%s),a5' % (a & 0x7FFF, f[1])], '(a5,%s.w)' % r
 			if self.wram(a, self.index_hi(i)):
 				return ['lea rcWram+$%04X(a4),a5' % a], '(a5,%s.w)' % r
+			if self.wram(a):		# unless the index takes it past $7FFF
+				return self.wram_checked(i, r, dst)
 			if a in (0x4016, 0x4017):	# a controller port, by the index
 				return ['move.w %s,d4' % r] + (['addq.w #1,d4'] if a & 1 else []) + \
 				       ['jsr rcReadPad'], 'd7'
@@ -1254,6 +1256,25 @@ class Gen:
 		if m == 'indx':
 			return self.indx_addr(a) + ['jsr rcRead16'], 'd7'
 		raise ValueError(m)
+
+	def wram_checked(self, i, r, dst=None):
+		"""abs,X / abs,Y in PRG RAM where the index register (r) may take
+		it past $7FFF: an index that keeps it in PRG RAM reads or writes
+		there, others go through rcRead16 or rcWrite16, out of line. A
+		read's value ends in dst (or d7): (setup, it). A store's value
+		comes in d7: its lines."""
+		a = i.arg
+		far, done = self.tag('Ef', i.pc), self.tag('Ed', i.pc)
+		check = ['cmpi.b #$%02X,%s' % (0x7FFF - a, r), 'bhi.w ' + far, 'lea rcWram+$%04X(a4),a5' % a]
+		addr = ['\t\tmove.w #$%04X,d6' % a, '\t\tadd.w %s,d6' % r]
+		if i.m in ('STA', 'STX', 'STY'):
+			self.stubs += [far + ':'] + addr + ['\t\tjsr rcWrite16'] + \
+				      ['\t\t' + l if not l.endswith(':') else l for l in self.after_switch(i)] + ['\t\tjmp ' + done]
+			return check + ['move.b d7,(a5,%s.w)' % r, done + ':']
+		v = dst or 'd7'
+		self.stubs += [far + ':'] + addr + ['\t\tjsr rcRead16'] + \
+			      (['\t\tmove.b d7,%s' % v] if v != 'd7' else []) + ['\t\tjmp ' + done]
+		return check + ['move.b (a5,%s.w),%s' % (r, v), done + ':'], v
 
 	def index_hi(self, i):
 		"""Highest value of an abs,X / abs,Y instruction's index register."""
@@ -1508,6 +1529,8 @@ class Gen:
 				return setup, ea, []
 			if self.wram(a, self.index_hi(i)):
 				return ['lea rcWram+$%04X(a4),a5' % a], '(a5,%s.w)' % r, []
+			if self.wram(a) and i.m in ('STA', 'STX', 'STY'):	# unless the index takes it past $7FFF
+				return [], None, self.wram_checked(i, r)
 			return [], None, ['move.w #$%04X,d6' % a, 'add.w %s,d6' % r, 'jsr rcWrite16'] + self.after_switch(i)
 		if m == 'indy':
 			# RAM (the usual case) inline; mirrors, I/O and PRG out of line
