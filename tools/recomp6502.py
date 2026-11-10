@@ -1720,15 +1720,35 @@ class Gen:
 				reg = p.m[2]
 			else:
 				continue
-			body, pc, ok = [], b.arg, True
-			while pc < b.pc:
+			# the loop: what is on a way from its head back to b, in
+			# its range (a way out, as an RTS when a search finds what
+			# it looks for, isn't), every way to b through p
+			fwd, work, ok = set(), [b.arg], True
+			while work and ok:
+				pc = work.pop()
+				if pc in fwd or not b.arg <= pc < b.pc:
+					continue
 				i = self.insns.get(pc)
-				if i is None or i.m in ('JSR', 'JMP', 'RTS', 'RTI', 'BRK'):
-					ok = False; break
-				if i.mode == 'rel' and i.arg <= i.pc:
-					ok = False; break		# not innermost
-				body.append(i)
-				pc += i.n
+				if i is None:
+					ok = False
+					break
+				fwd.add(pc)
+				work += [s for s in i.succ if s is not None]
+			back, work = {b.pc}, [b.pc]
+			while work and ok:
+				t = work.pop()
+				for pc in fwd:
+					if pc not in back and t in self.insns[pc].succ:
+						back.add(pc)
+						work.append(pc)
+			pcs = sorted(fwd & back)
+			body = [self.insns[pc] for pc in pcs]
+			if ok and (not pcs or pcs[0] != b.arg or p.pc not in back or
+				   any(b.pc in i.succ and i is not p for i in body) or
+				   any(i.m in ('JSR', 'JMP', 'RTS', 'RTI', 'BRK') or None in i.succ or
+				       (i.mode == 'rel' and i.arg <= i.pc) for i in body)):
+				ok = False		# (a call, a jump, an inner loop)
+			pc = b.pc
 			if isinstance(reg, int):
 				n = sum(1 for i in body if i.mode == 'zp' and i.arg == reg and
 					i.m in ('STA', 'STX', 'STY', 'INC', 'DEC', 'ASL', 'LSR', 'ROL', 'ROR'))
