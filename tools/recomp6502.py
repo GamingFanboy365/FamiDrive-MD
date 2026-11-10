@@ -3027,18 +3027,19 @@ class Gen:
 		"""A dyn_target JSR: which bank is in that slot isn't known here, so
 		the copy of the routine in the one there now, from its call table
 		(rcCurCallA, rcCurCallC: emu/recomp.asm, rcPrgSlot), called with
-		the 68000's jsr as a heavy copy is (the return address pushed: a
-		light one's entry in the table drops it first). Where that bank
-		has none, rcDispatch, as before. A bank's code checks after the
-		call that its own bank is still there (the routine may switch it)."""
+		the 68000's jsr, the 6502 return address in d4: a light copy's
+		entry is the copy, a heavy one's pushes it first (mode1). Where
+		that bank has none, the return address pushed, rcDispatch, as
+		before. A bank's code checks after the call that its own bank is
+		still there (the routine may switch it)."""
 		s, k = self.dyn[i.arg]
 		ret = i.pc + 2
 		slow = self.tag('Ds', i.pc)
-		self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
-		       'move.b #$%02X,(a2,d3.w)' % (ret & 0xFF), 'subq.b #1,d3', 'swap d3',
-		       'movea.l rcCurCall%s(a4),a5' % s, 'move.l %d(a5),d5' % (4 * k), 'beq.w ' + slow,
-		       'movea.l d5,a5', 'jsr (a5)')
-		self.stubs += [slow + ':'] + ['\t\t' + l if not l.endswith(':') else l for l in self.slot_jump(i.arg)]
+		self.e('move.w #$%04X,d4' % ret, 'movea.l rcCurCall%s(a4),a5' % s, 'move.l %d(a5),d5' % (4 * k),
+		       'beq.w ' + slow, 'movea.l d5,a5', 'jsr (a5)')
+		self.stubs += [slow + ':', '\t\tswap d3', '\t\tmove.b #$%02X,(a2,d3.w)' % (ret >> 8), '\t\tsubq.b #1,d3',
+			       '\t\tmove.b #$%02X,(a2,d3.w)' % (ret & 0xFF), '\t\tsubq.b #1,d3', '\t\tswap d3'] + \
+			      ['\t\t' + l if not l.endswith(':') else l for l in self.slot_jump(i.arg)]
 		if self.prg.unit != 'F':
 			back = self.tag('Dr', i.pc)
 			self.e(*self.own_bank(back), 'move.w #$%04X,d4' % ((i.pc + 3) & 0xFFFF), 'jmp rcDispatch',
@@ -3661,16 +3662,18 @@ def mode1(rom, extra):
 				ext_calls.setdefault(i.arg, set()).add(i.pc)
 		gb = generate(b, u, u['entries'], uf['insns'], fb, (), copies, ext_calls, dyn,
 			      {t for t, (s, k) in dyn.items() if s == b.slot and t in u['insns']})
-		# its call table: a copy's address by index (a light one's entry
-		# drops the return address the call pushed), 0 where it has none
+		# its call table: a copy's address by index (a heavy one's entry
+		# pushes the 6502 return address the call brings in d4 first:
+		# Gen.emit_dyn_call), 0 where it has none
 		table, entries = [], []
 		for t in sorted(t for t, (s, k) in dyn.items() if s == b.slot):
 			if t in gb.dyn_copies and t in gb.called:
 				lab = gb.copy_label(t)
-				if not gb.callable[t][1]:
-					entries += ['D%04X:' % t, '\t\tswap d3', '\t\taddq.b #2,d3', '\t\tswap d3',
-						    '\t\tjmp (%s).l' % lab]
-					lab = 'D%04X' % t
+				if gb.callable[t][1]:
+					entries += ['H%04X:' % t, '\t\tswap d3', '\t\tmove.w d4,d6', '\t\tlsr.w #8,d6',
+						    '\t\tmove.b d6,(a2,d3.w)', '\t\tsubq.b #1,d3', '\t\tmove.b d4,(a2,d3.w)',
+						    '\t\tsubq.b #1,d3', '\t\tswap d3', '\t\tjmp (%s).l' % lab]
+					lab = 'H%04X' % t
 				table.append(lab)
 			else:
 				table.append('0')
