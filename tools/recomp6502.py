@@ -2428,6 +2428,23 @@ class Gen:
 		a palette entry, a nametable byte or CHR RAM (emu/ppu.asm)."""
 		if i.mode != 'abs' or not 0x2000 <= i.arg < 0x4000 or i.arg & 7 != 7:
 			return False
+		kind = self.fast and self.fast.get('ppu_run')
+		if kind:
+			# a loop's copy whose guard found every store's address in the
+			# nametables or every one in the palette (emit_versioned): the
+			# address in d4, the step in d6, kept around the handler
+			chg, back = self.tag('Pn', i.pc), self.tag('Pb', i.pc)
+			if kind == 'nt':
+				self.e('cmp.b (a3,d4.w),%s\t; (ppu run)' % r)
+				call = ['\t\tmove.b %s,d7' % r, '\t\tjsr wrPPU_DataNt\t; (a5 kept) (ppu run)']
+			else:
+				self.e('move.w d4,d5\t; (ppu run)', 'andi.w #$3F1F,d5', 'moveq #$3F,d7', 'and.b %s,d7' % r,
+				       'cmp.b (a3,d5.w),d7')
+				call = ['\t\tmove.w d5,d4\t; (ppu run)', '\t\tjsr wrPPU_DataPal\t; (a5 kept) (ppu run)']
+			self.e('bne.w %s' % chg, back + ':', 'add.w d6,d4\t; (ppu run)')
+			self.stubs += [chg + ':', '\t\tmovem.l d4/d6/a5,-(sp)\t; (a5 kept) (ppu run)', *call,
+				       '\t\tmovem.l (sp)+,d4/d6/a5\t; (a5 kept) (ppu run)', '\t\tbra.w ' + back]
+			return True
 		pal, chr_, done = self.tag('Pp', i.pc), self.tag('Pc', i.pc), self.tag('Pd', i.pc)
 		call = self.kept_a5
 		self.e('move.w ppuAddrBase(a4),d4', 'move.w ppuAddrIncr(a4),d6', 'add.w d6,ppuAddrBase(a4)',
@@ -2759,6 +2776,17 @@ class Gen:
 				check |= {i.pc for i, base, zp, wr in acc[r] if wr}
 		plan = {'t': t, 'b': b, 'body': body, 'pcs': {i.pc for i in body}, 'ptr': ptrs,
 			'direct': direct, 'check': check, 'guard': guard, 'reach': reach}
+		# $2007 stores and no other PPU access, X or Y counting the turns
+		# down (one DEX or DEY all that changes it), and no way out but
+		# the last turn (no branch to the BNE either: its copy for entries
+		# with the flags in d3 leaves as it is): copies that keep the PPU
+		# address in d4 (emit_versioned). (stores a turn, the counter)
+		ppu = [i for i in body if i.mode in ('abs', 'absx', 'absy') and i.arg < 0x4000 and
+		       i.arg + (255 if i.mode != 'abs' else 0) >= 0x2000]
+		if ppu and all(i.mode == 'abs' and i.m in ('STA', 'STX', 'STY') and i.arg & 7 == 7 for i in ppu) and \
+		   cnt is not None and cnt.m in ('DEX', 'DEY') and (xs if cnt.m == 'DEX' else ys) == [cnt] and \
+		   not check and all(t <= i.arg < b.pc for i in body if i.mode == 'rel' and i is not b):
+			plan['ppu'] = (len(ppu), 'd1' if cnt.m == 'DEX' else 'd2')
 		# a short loop of known length is unrolled: the index registers
 		# become displacements and the counter is set once at the end
 		if n is None or n > 16 or check or \
@@ -2920,9 +2948,13 @@ class Gen:
 		f = plan['b'].pc + 2
 		self.e(*(['jmp %s' % self.lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
 
-	def copy_of(self, plan, turns):
+	def copy_of(self, plan, turns, run=None):
 		"""Code for a loop's fast copy, or None if it would need a5 or a
-		call. turns: None for a loop, else (turns, off) to unroll."""
+		call. turns: None for a loop, else (turns, off) to unroll. run:
+		'nt' or 'pal' for a copy whose $2007 stores all go to the
+		nametables or all to the palette (version_plan's ppu), with
+		their address in d4 and step in d6, and d4 back in ppuAddrBase
+		where it leaves: None if anything else in it uses those."""
 		t, b = plan['t'], plan['b']
 		outer = self.fast
 		base = outer['prefix'] if outer else ''
@@ -2934,8 +2966,9 @@ class Gen:
 		try:
 			off = {'d1': 0, 'd2': 0}
 			for k in range(turns['n'] if turns else 1):
-				self.fast = dict(plan, prefix=base + ('U%d' % k if k else 'F'), outer=outer and base,
-						 rf=outer.get('f') if outer and outer.get('routine') else None)
+				self.fast = dict(plan, prefix=base + ({'nt': 'N', 'pal': 'Q'}[run] if run else 'U%d' % k if k else 'F'),
+						 outer=outer and base, rf=outer.get('f') if outer and outer.get('routine') else None,
+						 ppu_run=run)
 				if turns:
 					self.fast.update(off=off, skip=turns['skip'])
 				dk = None
@@ -2966,6 +2999,11 @@ class Gen:
 				if b.live_out & (N | Z):
 					self.e('tst.b %s' % (loc or ('d1' if ctr.m[2] == 'X' else 'd2')))
 					self.save_nz()
+			if run:			# (nothing else uses d4 or d6, or calls what may)
+				if any((re.search(r'\bd[46]\b', l) or 'jsr' in l) and '(ppu run)' not in l
+				       for l in self.out + self.stubs):
+					raise Unroll
+				self.e('move.w d4,ppuAddrBase(a4)\t; (ppu run)')
 			self.e(*exit)
 			fast = self.out + self.stubs
 		except Unroll:
@@ -3032,6 +3070,27 @@ class Gen:
 			g += ['%sVW_%04X:' % (v, t), '\t\tlea (RAM_Fami_WRAM-$6000).l,a5', '\t\tadda.w d6,a5',
 			      '\t\tbra.s %sF_%04X' % (v, t)]
 		g += ['%sVR_%04X:' % (v, t), '\t\tlea (a2,d6.w),a5']
+		nt = pal = None
+		if 'ppu' in plan and 'unroll' not in plan:
+			nt = self.copy_of(plan, None, 'nt')
+			pal = nt and self.copy_of(plan, None, 'pal')
+		if pal:
+			# the copies that keep the $2007 stores' address in d4 and their
+			# step in d6, if every store's (from ppuAddrBase to it plus the
+			# turns, X or Y, times the stores a turn, times the step) is in
+			# the nametables ($2000-$3EFF) or every one in the palette
+			# ($3F00-$3FFF)
+			k, reg = plan['ppu']
+			F, G = '%sF_%04X' % (v, t), '%sG_%04X' % (v, t)
+			g = [l.replace('bra.s ' + F, 'bra.s ' + G) for l in g]
+			g += [G + ':', '\t\tmove.w ppuAddrBase(a4),d4', '\t\tcmpi.w #$2000,d4', '\t\tbcs.w ' + F,
+			      '\t\tmoveq #0,d7', '\t\tmove.b %s,d7' % reg, '\t\tbeq.w ' + F] + \
+			     (['\t\tmulu #%d,d7' % k] if k > 1 else []) + \
+			     ['\t\tmove.w ppuAddrIncr(a4),d6', '\t\tmulu d6,d7', '\t\tcmpi.l #$1F00,d7', '\t\tbhi.w ' + F,
+			      '\t\tadd.w d4,d7', '\t\tbcs.w ' + F, '\t\tcmpi.w #$3F00,d4', '\t\tbcc.s %sGq_%04X' % (v, t),
+			      '\t\tcmpi.w #$3F00,d7', '\t\tbls.w %sN_%04X' % (v, t), '\t\tbra.w ' + F,
+			      '%sGq_%04X:' % (v, t), '\t\tcmpi.w #$4000,d7', '\t\tbls.w %sQ_%04X' % (v, t)]
+			fast += nt + pal
 		self.out += g + fast
 		return True
 
