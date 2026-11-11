@@ -2403,7 +2403,7 @@ class Gen:
 		if that changes; $8001 right after a known value went to $8000,
 		R0-R5 (CHR) the handler only if the bank changes, R6 and R7 (PRG
 		mode 0) the value put there, then mmc3Pair, and in PRG mode 1 the
-		bank's code and frame (rcPrgA, rcPrgC) if it changes."""
+		bank's code and frame (prg1_switch) if it changes."""
 		if not (self.prg.mapper == 4 and i.mode == 'abs' and i.arg >= 0x8000):
 			return False
 		rng = self.ranges.get(i.pc)
@@ -2447,12 +2447,26 @@ class Gen:
 			elif lo == hi and self.prg.mode1:	# R7 ($A000's bank), R6 ($C000's) in PRG mode 1
 				n = lo & 7
 				self.e('cmp.b mmc3Regs+%d(a4),%s' % (n, r), 'beq.s ' + same, 'move.b %s,mmc3Regs+%d(a4)' % (r, n),
-				       'move.b %s,d7' % r, 'jsr %s' % ('rcPrgA' if n == 7 else 'rcPrgC'), *self.after_switch(i),
-				       same + ':')
+				       *self.prg1_switch(n, r), *self.after_switch(i), same + ':')
 			else:
 				return False
 			return True
 		return False
+
+	def prg1_switch(self, n, r):
+		"""MMC3 PRG mode 1: R7 (n 7, $A000) or R6 now holds r's bank. What
+		rcDispatch, the call tables and PRG reads go by comes from the
+		bank's record (rcBankRecsA, rcBankRecsC: mode1): its code there,
+		the copies of its routines other code calls (emit_dyn_call), its
+		frame and the frame +$8000."""
+		s = 'A' if n == 7 else 'C'
+		lines = ['moveq #prgBank8Mask,d6', 'and.b %s,d6' % r, 'lsl.w #4,d6', 'lea (rcBankRecs%s).l,a5' % s,
+			 'adda.w d6,a5']
+		if s == 'A':		# (the frame in a1 and cpuPrgImg, a0 the frame +$8000)
+			return lines + ['move.l (a5)+,rcCurTable(a4)', 'move.l (a5)+,rcCurCallA(a4)', 'movea.l (a5)+,a1',
+					'move.l a1,cpuPrgImg(a4)', 'movea.l (a5),a0']
+		return lines + ['move.l (a5)+,rcCurTableC(a4)', 'move.l (a5)+,rcCurCallC(a4)', 'move.l (a5)+,prgFrameC(a4)',
+				'move.l (a5),rcFrameC(a4)']
 
 	def apu_store(self, i, r):
 		"""A store of r to an APU register ($4000-$401F), in place of
@@ -3878,23 +3892,21 @@ def mode1(rom, extra):
 			['\t\tdc.l ' + ','.join(table[k:k + 8]) for k in range(0, len(table), 8)]
 		out += [''] + prefixed(gb.out, '%s%d_' % b.unit)
 		units.append((u, gb))
-	# each bank's code at each slot, by the bank there (rcDispatch); the
-	# $A000 slot's tables less $8000 (its offsets come with bit 15 set)
+	# a record for each bank at each slot, by the bank there (Gen.prg1_switch,
+	# rcPrgSlot): its code there (rcDispatch; the $A000 slot's less $8000:
+	# its offsets come with bit 15 set), the routines of it that code
+	# elsewhere calls (Gen.emit_dyn_call), its frame and the frame +$8000
 	have = {b.unit for b, u in zip(slots, us[1:]) if u['insns']}
 	n = 1
 	while n < fixed.banks8:
 		n *= 2			# (the banks, rounded up as prgBank8Mask in md.asm)
-	out += ['', '; each bank\'s code at $A000 and at $C000, by the bank there (rcDispatch)', '\t\talign 4',
-		'rcBankTablesA:'] + ['\t\tdc.l %s-$8000' % ('A%d_rcTable' % b if ('A', b) in have else 'rcNoTable')
-				    for b in range(n)]
-	out += ['rcBankTablesC:'] + ['\t\tdc.l %s' % ('C%d_rcTable' % b if ('C', b) in have else 'rcNoTable')
-				    for b in range(n)]
+	out += ['', '; each bank\'s code at $A000 and at $C000, by the bank there: its record', '\t\talign 4']
+	for s, less in (('A', '-$8000'), ('C', '')):
+		out += ['rcBankRecs%s:' % s] + ['\t\tdc.l %s%s,%s,PRG_FRAMES+$%X,PRG_FRAMES+$%X' % (
+			'%s%d_rcTable' % (s, b) if (s, b) in have else 'rcNoTable', less,
+			'%s%d_rcCalls' % (s, b) if (s, b) in have else 'rcNoCalls', b * 0x8000, b * 0x8000 + 0x8000)
+			for b in range(n)]
 	out += ['rcNoTable:', '\t\trept $2000/8', '\t\tdc.l 0,0,0,0,0,0,0,0', '\t\tendm']	# (a bank with no code there)
-	# and the routines of each bank there that code elsewhere calls (Gen.emit_dyn_call)
-	out += ['rcBankCallsA:'] + ['\t\tdc.l %s' % ('A%d_rcCalls' % b if ('A', b) in have else 'rcNoCalls')
-				   for b in range(n)]
-	out += ['rcBankCallsC:'] + ['\t\tdc.l %s' % ('C%d_rcCalls' % b if ('C', b) in have else 'rcNoCalls')
-				   for b in range(n)]
 	out += ['rcNoCalls:', '\t\trept %d' % max([k + 1 for s, k in dyn.values()] + [1]), '\t\tdc.l 0', '\t\tendm']
 	return out, units
 

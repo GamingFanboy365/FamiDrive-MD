@@ -791,7 +791,11 @@ rcDelay:
 ; MMC3 PRG mode 1: R6 or R7 picked a bank (mmc3Prg1, rcStart): the
 ; code of that bank at $C000 or at $A000 (rcCurTableC, rcCurTable)
 ; and the copies of its routines other code calls (rcCurCallC,
-; rcCurCallA: tools/recomp6502.py, Gen.dyn_call), and for R6 rcFrameC
+; rcCurCallA: tools/recomp6502.py, Gen.dyn_call), and for R6 rcFrameC.
+; Each bank's record (rcBankRecsC, rcBankRecsA: tools/recomp6502.py,
+; mode1) holds those and its frame (prgFrameC; a1 and cpuPrgImg) and
+; the frame +$8000 (rcFrameC; a0): translated code that switches a
+; bank takes them all from it (Gen.prg1_switch).
 ;
 ; d5.w - 6 or 7
 ; d6.w - the bank (kept)
@@ -799,73 +803,19 @@ rcDelay:
 
 rcPrgSlot:
 		move.w	d6,d4
-		lsl.w	#2,d4
+		lsl.w	#4,d4			; (16 bytes a bank)
 		cmpi.w	#7,d5
 		beq.s	.r7
-		lea	(rcBankTablesC).l,a5
-		move.l	(a5,d4.w),rcCurTableC(a4)
-		lea	(rcBankCallsC).l,a5
-		move.l	(a5,d4.w),rcCurCallC(a4)
-		moveq	#0,d4
-		move.w	d6,d4
-		swap	d4
-		lsr.l	#1,d4			; * 32 KB: its frame, +$8000
-		addi.l	#PRG_FRAMES+$8000,d4
-		move.l	d4,rcFrameC(a4)
+		lea	(rcBankRecsC).l,a5
+		adda.w	d4,a5
+		move.l	(a5)+,rcCurTableC(a4)
+		move.l	(a5)+,rcCurCallC(a4)
+		move.l	4(a5),rcFrameC(a4)
 		rts
 .r7:
-		lea	(rcBankTablesA).l,a5
-		move.l	(a5,d4.w),rcCurTable(a4)
-		lea	(rcBankCallsA).l,a5
-		move.l	(a5,d4.w),rcCurCallA(a4)
-		rts
-
-; ----------------------------------------------------------------
-; MMC3 PRG mode 1: translated code wrote a new bank to R7 (rcPrgA)
-; or R6 (rcPrgC), and put it in mmc3Regs (tools/recomp6502.py,
-; mmc3_store): what mmc3Prg1 and rcPrgSlot do then, for code that
-; runs with a0 = a1+$8000. R7's bank's frame goes to a1 (and
-; cpuPrgImg, a0 with it), R6's to prgFrameC (and rcFrameC), and the
-; bank's code there to rcCurTable or rcCurTableC (and rcCurCallA or
-; rcCurCallC).
-;
-; d7.b - the bank
-; ----------------------------------------------------------------
-
-rcPrgA:
-		moveq	#0,d6
-		move.b	d7,d6
-		andi.w	#prgBank8Mask,d6
-		move.w	d6,d5
-		lsl.w	#2,d5
-		lea	(rcBankTablesA).l,a5
-		move.l	(a5,d5.w),rcCurTable(a4)
-		lea	(rcBankCallsA).l,a5
-		move.l	(a5,d5.w),rcCurCallA(a4)
-		swap	d6			; * 32 KB: its frame
-		lsr.l	#1,d6
-		addi.l	#PRG_FRAMES,d6
-		movea.l	d6,a1
-		move.l	d6,cpuPrgImg(a4)
-		movea.l	d6,a0
-		adda.l	#$8000,a0
-		rts
-
-rcPrgC:
-		moveq	#0,d6
-		move.b	d7,d6
-		andi.w	#prgBank8Mask,d6
-		move.w	d6,d5
-		lsl.w	#2,d5
-		lea	(rcBankTablesC).l,a5
-		move.l	(a5,d5.w),rcCurTableC(a4)
-		lea	(rcBankCallsC).l,a5
-		move.l	(a5,d5.w),rcCurCallC(a4)
-		swap	d6			; * 32 KB: its frame
-		lsr.l	#1,d6
-		addi.l	#PRG_FRAMES,d6
-		move.l	d6,prgFrameC(a4)
-		addi.l	#$8000,d6
-		move.l	d6,rcFrameC(a4)
+		lea	(rcBankRecsA).l,a5
+		adda.w	d4,a5
+		move.l	(a5)+,rcCurTable(a4)
+		move.l	(a5),rcCurCallA(a4)
 		rts
 		endif
