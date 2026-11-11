@@ -657,6 +657,74 @@ wrPPU_Addr:
 		move.w	#$2000,sr
 		emuNext
 ; ----------------------------------------------------------------
+; Two $2006 writes at once, for translated code that makes them with
+; nothing between that the PPU sees (recomp6502.py, Gen.pairs_2006):
+; d7 - the first byte, d6 - the second. As wrPPU_Addr with each: with
+; the latch on the second byte, it is called twice; else both bytes go
+; in, the IRQ handler's split gets both, or the t register takes both
+; and the scroll what ppuXChanged makes of the two changes: from the
+; top if either changes it, to where the second leaves it.
+; ----------------------------------------------------------------
+
+		if RECOMP
+wrPPU_AddrPair:
+		tst.w	ppuAddrLatch(a4)
+		beq.s	.pair
+		move.b	d6,-(sp)
+		bsr.w	wrPPU_Addr
+		move.b	(sp)+,d7
+		bra.w	wrPPU_Addr
+.pair:
+		move.b	d7,ppuAddrBase(a4)	; (the latch ends as it was)
+		move.b	d6,ppuAddrBase+1(a4)
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)
+		beq.s	.main
+		move.w	#$FFFF,splitCtrlX(a4)
+		move.w	ppuAddrBase(a4),splitV(a4)
+		rts
+.main:
+		endif
+		move.w	#$2700,sr
+		move.w	ppuTX(a4),d4		; t after the first byte: the nametable
+		andi.w	#$FF,d4			; X bit
+		btst	#2,d7
+		beq.s	.nt_x0
+		ori.w	#$100,d4
+.nt_x0:
+		moveq	#$1F,d5			; and after the second: coarse X
+		and.b	d6,d5
+		lsl.w	#3,d5
+		move.w	d4,d6
+		andi.w	#$107,d6
+		or.w	d5,d6
+		move.w	d6,ppuTX(a4)
+		neg.w	d4
+		neg.w	d6
+		move.w	vdpScrlX(a4),d5
+		cmp.w	d5,d4
+		bne.s	.changed
+		cmp.w	d5,d6
+		beq.s	.done
+.changed:
+		tst.w	ppuSp0State(a4)
+		bne.s	.split_ok
+		tst.w	ppuScrollSet(a4)
+		beq.s	.top
+.split_ok:
+		tst.w	ppuMaskOn(a4)
+		bne.s	.done
+.top:
+		move.w	d6,hsTopCur(a4)
+		move.w	d6,hsTopCur+2(a4)
+		move.w	d6,vdpScrlX(a4)
+		move.w	d6,vdpScrlX+2(a4)
+.done:
+		clr.l	ppuRdSite(a4)
+		move.w	#$2000,sr
+		rts
+		endif
+; ----------------------------------------------------------------
 
 wrPPU_Data:
 		move.w	ppuAddrBase(a4),d4

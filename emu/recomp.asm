@@ -615,7 +615,26 @@ rcIrq:
 ;
 ; d6.w - 6502 address
 ; d7 - value read / to write
+;
+; rcRead16P: rcRead16 for a (zp),Y read between two $2006 stores
+; that translated code makes at once (recomp6502.py, Gen.pairs_2006).
+; The first's byte is still to be written: the low byte of the word on
+; the stack where the read's code calls this, unless bit 15 says it
+; was. A PPU register sees it written first.
 ; ----------------------------------------------------------------
+
+rcRead16P:
+		cmpi.w	#$2000,d6
+		bcs.w	rcRead16
+		cmpi.w	#$4000,d6
+		bcc.w	rcRead16
+		tst.w	4(sp)
+		bmi.w	rcRead16
+		bset	#7,4(sp)		; (the second store writes alone)
+		move.b	5(sp),d7
+		move.w	d6,-(sp)
+		jsr	wrPPU_Addr
+		move.w	(sp)+,d6
 
 rcRead16:
 		cmpi.w	#$2000,d6

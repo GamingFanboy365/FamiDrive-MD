@@ -1173,6 +1173,8 @@ class Gen:
 		self.split_next = None		# flags a branch puts in d3 by way (split_plan)
 		self.ccr_d3 = None		# (pc, output length) where the CCR still holds d3's flags
 		self.fused_next = None		# an LSR A done with the LDA $4016 before it (pad_lsr)
+		self.addr_firsts, self.addr_seconds = {}, {}	# $2006 stores two at a time (pairs_2006)
+		self.addr_pending = set()	# and (zp),Y reads between them
 
 	def e(self, *lines):
 		for l in lines:
@@ -1285,7 +1287,7 @@ class Gen:
 				self.stubs += ['\t\tcmpi.w #$6000,d6', '\t\tbcs.s ' + ri,
 					       '\t\tlea (RAM_Fami_WRAM-$6000).l,a5', '\t\tmove.b (a5,d6.w),%s' % r,
 					       '\t\tjmp ' + rd, ri + ':']
-			self.stubs += ['\t\tjsr rcRead16'] + \
+			self.stubs += ['\t\tjsr ' + ('rcRead16P' if i.pc in self.addr_pending else 'rcRead16')] + \
 				      (['\t\tmove.b d7,%s' % r] if r != 'd7' else []) + ['\t\tjmp ' + rd]
 			prg = ['bpl.w ' + rn]
 			if self.prg.mode1:		# $C000-$DFFF: R6's bank (rcFrameC)
@@ -1674,6 +1676,54 @@ class Gen:
 		return self.stack_pairs('PHA', 'PLA', lambda i: not self.switches(i) and
 					all(s is None or s > i.pc for s in i.succ))
 
+	def pairs_2006(self):
+		"""Stores to $2006 two at a time: from the first, straight code
+		that only moves values between registers and RAM leads to the
+		second, and nothing else comes into it (as stack_pairs). The
+		first leaves its byte on the 68000's stack (right before the
+		second, in its register), and the second writes both
+		(wrPPU_AddrPair), as the two writes would: nothing between them
+		sees the PPU, or a (zp),Y read there that does writes the first
+		before it (rcRead16P) and leaves the second to write alone.
+		{first: (second, read)}, {second: (first, read)} and those reads."""
+		def addr(i):
+			return i.m in ('STA', 'STX', 'STY') and i.mode == 'abs' and 0x2000 <= i.arg < 0x4000 and \
+			       i.arg & 7 == 6
+
+		def plain(i):			# no call, jump, PPU or 68000 stack
+			if i.m in ('TAX', 'TAY', 'TXA', 'TYA', 'INX', 'INY', 'DEX', 'DEY', 'CLC', 'SEC', 'CLV', 'NOP'):
+				return True
+			if i.m not in ('LDA', 'LDX', 'LDY', 'STA', 'STX', 'STY', 'ORA', 'AND', 'EOR', 'ADC', 'SBC',
+				       'CMP', 'CPX', 'CPY', 'BIT', 'INC', 'DEC', 'ASL', 'LSR', 'ROL', 'ROR'):
+				return False
+			if i.mode in ('imm', 'acc', 'zp', 'zpx', 'zpy'):
+				return True
+			if i.mode == 'indy':
+				return i.m not in ('STA', 'INC', 'DEC', 'ASL', 'LSR', 'ROL', 'ROR')
+			return i.mode in ('abs', 'absx', 'absy') and i.arg + (0 if i.mode == 'abs' else 255) < 0x2000
+
+		outside = self.targets | set(self.tables)
+		firsts, seconds, reads = {}, {}, set()
+		for p in sorted(self.insns):
+			i = self.insns[p]
+			if not addr(i) or p in seconds or i.succ != [p + 3]:
+				continue
+			pc, between = p + 3, []
+			for _ in range(8):
+				q = self.insns.get(pc)
+				if q is None or pc in outside:
+					break
+				if addr(q):
+					ind = [b.pc for b in between if b.mode == 'indy']
+					firsts[p], seconds[pc] = (pc, bool(ind)), (p, bool(ind))
+					reads |= set(ind)
+					break
+				if not plain(q) or q.succ != [pc + q.n]:
+					break
+				between.append(q)
+				pc += q.n
+		return firsts, seconds, reads
+
 	def stack_pairs(self, push, pull, also=lambda i: True):
 		"""(Pushes in between are fine where every way pulls them again
 		first, as Super Mario Bros. 3's PHP PHP ... PLP PHA ... PLA PLP:
@@ -1963,7 +2013,8 @@ class Gen:
 			nz_done()
 		elif m in ('STA', 'STX', 'STY') and (self.mmc3_store(i, {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m]) or
 						     self.apu_store(i, {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m]) or
-						     self.ppu_store(i, {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m])):
+						     self.ppu_store(i, {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m]) or
+						     self.addr_store(i, {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m])):
 			pass
 		elif m in ('STA', 'STX', 'STY'):
 			r = {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[m]
@@ -2453,6 +2504,29 @@ class Gen:
 		       pal + ':', 'andi.w #$3F1F,d4', 'moveq #$3F,d7', 'and.b %s,d7' % r, 'cmp.b (a3,d4.w),d7',
 		       'beq.s ' + done, *call('wrPPU_DataPal'), 'bra.s ' + done,
 		       chr_ + ':', 'move.b %s,d7' % r, *call('ppuChrRamWrite'), done + ':')
+		return True
+
+	def addr_store(self, i, r):
+		"""A store to $2006 of a pair (pairs_2006)."""
+		if i.pc in self.addr_firsts:
+			second, read = self.addr_firsts[i.pc]
+			if read:		# (a word, its bit 15 set once written: rcRead16P)
+				self.e('moveq #0,d7', 'move.b %s,d7' % r,
+				       'move.w d7,-(sp)\t; (for the $2006 store at $%04X)' % second)
+			elif second != i.pc + 3:
+				self.e('move.b %s,-(sp)\t; (for the $2006 store at $%04X)' % (r, second))
+			return True
+		if i.pc not in self.addr_seconds:
+			return False
+		p, read = self.addr_seconds[i.pc]
+		if read:
+			one, back = self.tag('Aw', i.pc), self.tag('Ab', i.pc)
+			self.e('move.w (sp)+,d7', 'bmi.w ' + one)
+			self.stubs += [one + ':', '\t\tmove.b %s,d7' % r, '\t\tjsr wrPPU_Addr', '\t\tjmp ' + back]
+		else:
+			first = {'STA': 'd0', 'STX': 'd1', 'STY': 'd2'}[self.insns[p].m]
+			self.e('move.b %s,d7' % first if p + 3 == i.pc else 'move.b (sp)+,d7')
+		self.e('move.b %s,d6' % r, 'jsr wrPPU_AddrPair', *([back + ':'] if read else []))
 		return True
 
 	def kept_a5(self, routine):
@@ -3430,6 +3504,7 @@ class Gen:
 		self.paired = self.php_pairs()
 		if self.prg.irq:		# where MMC3's IRQ, taken after a CLI, comes back to (irq_check)
 			self.targets |= {i.pc + 1 for i in self.insns.values() if i.m == 'CLI'}
+		self.addr_firsts, self.addr_seconds, self.addr_pending = self.pairs_2006()
 		self.counted = self.counted_loops()
 		self.loopy = self.loop_edges()
 		self.pha_paired = self.pha_pairs()
