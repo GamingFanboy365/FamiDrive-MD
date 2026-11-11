@@ -40,6 +40,16 @@ rdFrom_PRG:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		andi.w	#$7FFF,d6
+		if PRG_MODE1
+		btst	#14,d6			; MMC3 PRG mode 1: $C000-$DFFF in R6's
+		beq.s	.frame			; frame (prgPc)
+		btst	#13,d6
+		bne.s	.frame
+		movea.l	prgFrameC(a4),a5
+		move.b	(a5,d6.w),d7
+		rts
+.frame:
+		endif
 		move.b	(a1,d6.w),d7
 		rts
 ; ----------------------------------------------------------------
@@ -116,6 +126,13 @@ rdPPU_OpenBus:
 
 rdPPU_Status:
 		move.w	#0,ppuAddrLatch(a4)
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; in the IRQ handler (MMC3_IRQ): just
+		beq.s	.main			; the latch. Its line is after VBlank,
+		moveq	#0,d7			; whose flag is clear there (the game
+		rts				; may still wait for it), and its time
+.main:						; isn't this frame's (sprite 0)
+		endif
 		move.w	ppuStatus(a4),d7
 		move.w	#0,ppuStatus(a4)
 
@@ -210,12 +227,17 @@ rdPPU_Data:
 		andi.w	#$3FFF,d4
 		cmpi.w	#$2000,d4
 		bcs.s	.pattern
+		cmpi.w	#$3F00,d4
+		bcc.s	.palette
 .copy:
 		move.b	(a3,d4.w),ppuDataLast+1(a4)
 .next:
 		move.w	ppuAddrIncr(a4),d4
 		add.w	d4,ppuAddrBase(a4)
 		rts
+.palette:
+		andi.w	#$3F1F,d4		; (repeated every 32 bytes: wrPPU_Data)
+		bra.s	.copy
 .pattern:
 		move.w	d4,d5			; MMC3: a 1 KB the copy is out of
 		rol.w	#6,d5			; date for (chrStale; bits 2-0 =
@@ -258,7 +280,7 @@ wrTo_RAM:
 		move.b	d4,d6
 		andi.w	#$7FF,d6
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ====================================================================
 ; ----------------------------------------------------------------
@@ -274,7 +296,7 @@ wrTo_WRAM:
 		andi.w	#$1FFF,d6
 		lea	(RAM_Fami_WRAM).l,a5
 		move.b	d7,(a5,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ====================================================================
 ; ----------------------------------------------------------------
@@ -289,7 +311,7 @@ wrTo_PRG:
 		beq.s	.mapper_3
 		subq.w	#1,d5
 		beq.w	mmc3Write
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; --------------------------------------------------------
 ; Mapper $03, CNROM
@@ -319,7 +341,7 @@ wrTo_PRG:
 		dbf	d4,.copychr
 		move.l	(sp)+,a4
 		bsr.w	Nemul_LoadChr
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; --------------------------------------------------------
 ; Mapper $02, UxROM: any write picks the 16 KB PRG bank at $8000
@@ -330,14 +352,14 @@ mapper2Write:
 		moveq	#0,d5
 		move.b	d7,d5
 		bsr.w	prgSwitch
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; --------------------------------------------------------
 ; Mapper $04, MMC3. Its registers go by address bits 14-13 and 0:
 ; $8000 bank select (bits 2-0: the register $8001 sets, bit 6: PRG
 ; mode, bit 7: CHR mode), $8001 bank data, $A000 mirroring, $A001
 ; PRG RAM protect (PRG RAM stays on), $C000-$E001 the scanline IRQ
-; (not emulated).
+; (for a game that turns it on, MMC3_IRQ: mmc3WrIrq).
 ;
 ; PRG: R6 at $8000 and R7 at $A000 (8 KB banks), the last two banks
 ; at $C000. Only R6 and R7 as a 16 KB pair (R6 even, R7 = R6+1) are
@@ -346,14 +368,19 @@ mapper2Write:
 ; both registers make one (the game writes them one at a time).
 ;
 ; Recompiled code calls the handlers of $8000, $8001 and $A000
-; directly (mmc3WrSelect, mmc3WrData, mmc3WrMirror, value in d7), or
-; does their work itself where it knows enough (mmc3_store in
-; tools/recomp6502.py), with mmc3Pair for R6 and R7.
+; directly (mmc3WrSelect, mmc3WrData, mmc3WrMirror, value in d7; and
+; the IRQ's, MMC3_IRQ), or does their work itself where it knows
+; enough (mmc3_store in tools/recomp6502.py), with mmc3Pair for R6
+; and R7.
 ; --------------------------------------------------------
 
 mmc3Write:
 		btst	#6,d6			; $C000-$FFFF: the IRQ
+		if MMC3_IRQ
+		bne.w	mmc3WrIrq
+		else
 		bne.s	mmc3Ignore
+		endif
 		btst	#0,d4
 		bne.s	.odd
 		btst	#5,d6
@@ -363,21 +390,26 @@ mmc3Write:
 		btst	#5,d6			; $A001: PRG RAM protect
 		beq.s	mmc3WrData
 mmc3Ignore:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 mmc3WrMirror:
 		moveq	#1,d5			; $A000 bit 0: 0 vertical, 1
 		and.w	d5,d7			; horizontal (ppuMirror: 1, 0)
 		eor.w	d5,d7
 		bsr.w	ppuSetMirror
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 mmc3WrSelect:
 		move.b	mmc3Select+1(a4),d5	; $8000
 		move.b	d7,mmc3Select+1(a4)
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; (in the IRQ handler: below its line)
+		bne.s	.same
+		endif
 		eor.b	d7,d5			; a new CHR mode (bit 7): all the
 		bmi.s	.chr_all		; CHR banks moved
-		jmp	(RAM_EmuLoop).l
+.same:
+		emuNext
 .chr_all:
 		moveq	#6-1,d5
 .chr_bank:
@@ -385,7 +417,7 @@ mmc3WrSelect:
 		bsr.s	mmc3Chr
 		move.w	(sp)+,d5
 		dbf	d5,.chr_bank
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 mmc3WrData:
 		move.w	mmc3Select(a4),d5	; $8001: bank data
@@ -393,13 +425,27 @@ mmc3WrData:
 		lea	mmc3Regs(a4),a5
 		cmpi.w	#6,d5
 		bcc.s	.prg
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; R0-R5 in the IRQ handler: the CHR
+		beq.s	.chr			; below its line (splitDone)
+		lea	mmc3RegsSplit(a4),a5
+		move.b	d7,(a5,d5.w)
+		emuNext
+.chr:
+		endif
 		cmp.b	(a5,d5.w),d7		; R0-R5: CHR, a new bank
 		beq.s	.done			; (games set them every frame)
 		move.b	d7,(a5,d5.w)
 		bsr.s	mmc3Chr
 .done:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 .prg:
+		if PRG_MODE1
+		cmp.b	(a5,d5.w),d7		; R6, R7 (PRG mode 1: a bank each): a
+		beq.s	.done			; new bank (games set them again and
+		move.b	d7,(a5,d5.w)		; again)
+		bra.w	mmc3Prg1
+		else
 		move.b	d7,(a5,d5.w)
 		moveq	#0,d5
 		move.b	6(a5),d5		; R6, R7: PRG
@@ -413,10 +459,11 @@ mmc3WrData:
 		btst	#6,mmc3Select+1(a4)	; PRG mode 1: R6 at $C000
 		bne.s	.prg_mode_1
 		bsr.w	prgSwitch
-		jmp	(RAM_EmuLoop).l
+		emuNext
 .prg_mode_1:
 		lea	(errStrMmc3Prg).l,a0
 		jmp	(MD_ShowError).l
+		endif
 
 ; --------------------------------------------------------
 ; MMC3: a CHR bank register -> the MD tiles that show its bank, and
@@ -481,6 +528,106 @@ mmc3Chr:
 		movem.l	(sp)+,d0/a0
 		rts
 
+		if MMC3_IRQ
+; --------------------------------------------------------
+; MMC3's scanline IRQ (MMC3_IRQ): $C000 its line, $C001 reload (the
+; counter isn't kept: the IRQ comes when the NMI handler returns, for
+; the line $E001 set, see irqDue and splitDone), $E000 off, $E001
+; on. One is taken a frame: in the IRQ handler, $E000 and $E001 are
+; for the next, which the NMI handler sets. Recompiled code calls
+; these directly (value in d7).
+; --------------------------------------------------------
+
+mmc3WrIrq:
+		btst	#5,d6
+		bne.s	.e
+		btst	#0,d4
+		bne.s	mmc3WrIrqReload
+		bra.s	mmc3WrIrqLatch
+.e:
+		btst	#0,d4
+		bne.s	mmc3WrIrqOn
+		bra.s	mmc3WrIrqOff
+
+mmc3WrIrqLatch:
+		move.b	d7,irqLatch+1(a4)
+mmc3WrIrqReload:
+		emuNext
+
+mmc3WrIrqOff:
+		tst.w	cpuInIrq(a4)
+		bne.s	.done
+		clr.w	irqOn(a4)
+.done:
+		emuNext
+
+mmc3WrIrqOn:
+		tst.w	cpuInIrq(a4)
+		bne.s	.done
+		move.w	#1,irqOn(a4)
+		move.w	irqLatch(a4),irqLine(a4)
+.done:
+		emuNext
+		endif
+
+		if PRG_MODE1
+; --------------------------------------------------------
+; MMC3 in PRG mode 1 (PRG_MODE1): R6 (d5 = 6) picks the 8 KB bank at
+; $C000, R7 the one at $A000 (PRG_FRAMES: the frame of R7's bank is
+; a1, R6's prgFrameC). Code running there goes on in the new bank.
+;
+; d7.b - the bank
+; --------------------------------------------------------
+
+mmc3Prg1:
+		moveq	#0,d6
+		move.b	d7,d6
+		andi.w	#prgBank8Mask,d6
+		if RECOMP
+		jsr	(rcPrgSlot).l		; its code there (emu/recomp.asm)
+		endif
+		swap	d6
+		lsr.l	#1,d6			; * 32 KB
+		addi.l	#PRG_FRAMES,d6
+		move.l	a0,d4			; the code's place in its frame: if it
+		andi.l	#$7FFF,d4		; runs there, a0 moves to the new one
+		cmpi.w	#7,d5
+		beq.s	.r7
+		move.l	d6,prgFrameC(a4)	; R6, at $C000: bits 14, 13 = 1, 0
+		btst	#14,d4
+		beq.s	.done
+		btst	#13,d4
+		bne.s	.done
+		bra.s	.move
+.r7:
+		if RECOMP
+		move.l	a0,d4			; translated code: a0 = a1+$8000,
+		sub.l	a1,d4			; which goes with a1
+		cmpi.l	#$8000,d4
+		bne.s	.r7_pc
+		movea.l	d6,a1
+		move.l	d6,cpuPrgImg(a4)
+		lea	(a1,d4.l),a0
+		emuNext
+.r7_pc:
+		move.l	a0,d4
+		andi.l	#$7FFF,d4
+		endif
+		movea.l	d6,a1			; R7, at $A000: 0, 1
+		move.l	d6,cpuPrgImg(a4)
+		btst	#14,d4
+		bne.s	.done
+		btst	#13,d4
+		beq.s	.done
+.move:
+		cmpa.l	#$400000,a0		; (not code in RAM)
+		bcc.s	.done
+		movea.l	d6,a0
+		adda.w	d4,a0
+.done:
+		emuNext
+		endif
+
 ; --------------------------------------------------------
 ; Banked PRG (PRG_BANKED): switch the 16 KB bank at $8000.
 ; a1 moves to the bank's image in PRG_IMAGES, and so does the PC
@@ -491,7 +638,7 @@ mmc3Chr:
 ; --------------------------------------------------------
 
 prgSwitch:
-		if PRG_BANKED
+		if PRG_BANKED&&(PRG_MODE1=0)		; (PRG mode 1: mmc3WrData)
 		andi.l	#prgBankMask,d5
 		cmpi.w	#NES_PRG16,d5
 		bcs.s	.bank_ok
@@ -586,7 +733,7 @@ wrAPU_Table:	dc.w apuStore-wrAPU_Table	; $4000
 		dc.w APU_Null-wrAPU_Table	; $401F
 
 APU_Null:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 
 ; Strobe: latch the buttons read at the last VBlank
@@ -594,7 +741,7 @@ APU_Input:
 		tst.b	d7
 		beq.s	APU_Null
 		move.l	padState(a4),cpuInputData(a4)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ----------------------------------------------------------------
 ; Read both pads into padState, once per frame from MD_Vint
@@ -686,42 +833,76 @@ sp0FirstRow:
 		andi.w	#$3FF,d4
 		adda.w	d4,a0
 .copy:
-		moveq	#0,d0			; row
-.row:
-		move.w	d0,d1			; row -> byte: rows 8-15 are the next tile
-		btst	#3,d1
-		beq.s	.top_half
-		addq.w	#8,d1
-.top_half:
-		move.b	(a0,d1.w),d4		; plane 0
-		or.b	8(a0,d1.w),d4		; plane 1
-		bne.s	.opaque
+	; four rows at a time: a long of each plane, ORed (rows 8-15 are the
+	; next tile's)
+		tst.b	2(a5)			; vertically flipped: from the bottom
+		bmi.s	.flip
+		moveq	#0,d0
+		move.l	(a0),d4
+		or.l	8(a0),d4
+		bne.s	.first
+		moveq	#4,d0
+		move.l	4(a0),d4
+		or.l	12(a0),d4
+		bne.s	.first
+		cmpi.w	#7,d5			; (8x8: no more)
+		beq.s	.none
+		moveq	#8,d0
+		move.l	16(a0),d4
+		or.l	24(a0),d4
+		bne.s	.first
+		moveq	#12,d0
+		move.l	20(a0),d4
+		or.l	28(a0),d4
+		beq.s	.none
+.first:					; the first of rows d0 to d0+3 with a pixel
+		swap	d4
+		tst.w	d4
+		bne.s	.first2
+		addq.w	#2,d0
+		swap	d4
+.first2:
+		cmpi.w	#$100,d4
+		bcc.s	.down
 		addq.w	#1,d0
-		dbf	d5,.row
+		bra.s	.down
+.flip:
+		cmpi.w	#7,d5
+		beq.s	.flip8
+		moveq	#12,d1
+		move.l	20(a0),d4
+		or.l	28(a0),d4
+		bne.s	.last
+		moveq	#8,d1
+		move.l	16(a0),d4
+		or.l	24(a0),d4
+		bne.s	.last
+.flip8:
+		moveq	#4,d1
+		move.l	4(a0),d4
+		or.l	12(a0),d4
+		bne.s	.last
+		moveq	#0,d1
+		move.l	(a0),d4
+		or.l	8(a0),d4
+		beq.s	.none
+.last:					; the last of rows d1 to d1+3 with a pixel
+		addq.w	#3,d1
+		tst.w	d4
+		bne.s	.last2
+		subq.w	#2,d1
+		swap	d4
+.last2:
+		tst.b	d4
+		bne.s	.last1
+		subq.w	#1,d1
+.last1:
+		move.w	d5,d0			; rows below it
+		sub.w	d1,d0
+		bra.s	.down
+.none:
 		move.w	#$FF,ppuSp0Ypos(a4)	; all transparent
 		bra.s	.done
-.opaque:
-		tst.b	2(a5)			; vertically flipped: count from the bottom
-		bpl.s	.down
-		move.w	ppuSprWide(a4),d4	; last row: 7 or 15
-		lsr.w	#5,d4
-		addq.w	#7,d4
-.last:
-		move.w	d4,d1
-		btst	#3,d1
-		beq.s	.top_half2
-		addq.w	#8,d1
-.top_half2:
-		move.b	(a0,d1.w),d0
-		or.b	8(a0,d1.w),d0
-		bne.s	.flipped
-		subq.w	#1,d4
-		bpl.s	.last
-.flipped:
-		move.w	ppuSprWide(a4),d0
-		lsr.w	#5,d0
-		addq.w	#7,d0
-		sub.w	d4,d0			; rows below the last opaque one
 .down:
 		moveq	#0,d4
 		move.b	(a5),d4			; Y
@@ -768,18 +949,22 @@ APU_OAMDMA:
 		moveq	#$79,d0			; NES line L+1 is MD line L-8, +128
 		move.w	#$80,d1
 		moveq	#0,d2
+		if MMC3_IRQ
+		move.w	sprHideY(a4),d5		; Y $E7 on (or below the split): hidden
+		else
 		moveq	#$E7-$100,d5		; Y $E7 on: hidden
-	; unrolled: a hidden sprite (most of them, often) is a load, a
-	; compare and a branch
+		endif
+	; unrolled: a hidden sprite (most of them, often) is a compare and a
+	; branch
 oamSpr		set	0
 		rept	64
 		if (oamSpr==62)&&FPS
 		tst.w	fpsOn(a4)		; the counter takes the last two slots
 		bne.w	.listed
 		endif
+		cmp.b	oamSpr*4(a5),d5		; Y at d5 on: hidden
+		bls.s	+
 		move.b	oamSpr*4(a5),d2		; Y
-		cmp.b	d5,d2
-		bcc.s	+
 		move.w	d2,d7
 		add.w	d0,d7
 		move.w	d7,(a3)+
@@ -823,7 +1008,7 @@ oamSpr		set	oamSpr+1
 		move.w	d7,vdpSprWords-vdpSprData(a6)	; for the DMA (MD_Vint)
 		move.w	sprWrite(a4),sprLatest(a4)
 		movem.l	(sp)+,d0-d3/d7/a3/a6
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; NES sprite attributes to the MD's: priority (inverted: the NES's bit
 ; puts the sprite behind the background), palette, vertical and

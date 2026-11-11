@@ -280,7 +280,7 @@ mos_ADC_imm:
 		move	d3,sr
 		addx.b	d7,d0
 		move	sr,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ADC_zp:
@@ -291,7 +291,7 @@ mos_ADC_zp:
 		move	d3,sr
 		addx.b	d7,d0
 		move	sr,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ADC_zpx:
@@ -303,7 +303,7 @@ mos_ADC_zpx:
 		move	d3,sr
 		addx.b	d7,d0
 		move	sr,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ADC_abs:
@@ -316,7 +316,7 @@ mos_ADC_abs:
 		move	d3,sr
 		addx.b	d7,d0
 		move	sr,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ADC_absx:
@@ -332,7 +332,7 @@ mos_ADC_absx:
 		move	d3,sr
 		addx.b	d7,d0
 		move	sr,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ADC_absy:
@@ -348,7 +348,7 @@ mos_ADC_absy:
 		move	d3,sr
 		addx.b	d7,d0
 		move	sr,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ADC_indx:
@@ -365,7 +365,7 @@ mos_ADC_indx:
 		move	d3,sr
 		addx.b	d7,d0
 		move	sr,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ADC_indy:
@@ -384,7 +384,7 @@ mos_ADC_indy:
 		move	d3,sr
 		addx.b	d7,d0
 		move	sr,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_AND_imm:
@@ -394,7 +394,7 @@ mos_AND_imm:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_AND_zp:
@@ -406,7 +406,7 @@ mos_AND_zp:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_AND_zpx:
@@ -419,7 +419,7 @@ mos_AND_zpx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_AND_abs:
@@ -433,7 +433,7 @@ mos_AND_abs:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_AND_absx:
@@ -450,7 +450,7 @@ mos_AND_absx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_AND_absy:
@@ -467,7 +467,7 @@ mos_AND_absy:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_AND_indx:
@@ -485,7 +485,7 @@ mos_AND_indx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_AND_indy:
@@ -505,7 +505,7 @@ mos_AND_indy:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ASL_acc:
@@ -514,7 +514,7 @@ mos_ASL_acc:
 		andi.w	#$1D,d5
 		andi.b	#$E2,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ASL_zp:
@@ -527,7 +527,7 @@ mos_ASL_zp:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ASL_zpx:
@@ -541,7 +541,7 @@ mos_ASL_zpx:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ASL_abs:
@@ -549,6 +549,8 @@ mos_ASL_abs:
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
 		move.b	d4,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwASL
+		bcc.w	rmwASL
 		move.b	(a2,d6.w),d7
 		lsl.b	#1,d7
 		move	sr,d5
@@ -556,7 +558,7 @@ mos_ASL_abs:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ASL_absx:
@@ -565,6 +567,8 @@ mos_ASL_absx:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		add.w	d1,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwASL
+		bcc.w	rmwASL
 		move.b	(a2,d6.w),d7
 		lsl.b	#1,d7
 		move	sr,d5
@@ -572,7 +576,7 @@ mos_ASL_absx:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_BCC:
@@ -582,7 +586,7 @@ mos_BCC:
 		ext.w	d6
 		adda.w	d6,a0
 .next:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_BCS:
@@ -592,7 +596,7 @@ mos_BCS:
 		ext.w	d6
 		adda.w	d6,a0
 .next:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_BEQ:
@@ -602,7 +606,7 @@ mos_BEQ:
 		ext.w	d6
 		adda.w	d6,a0
 .next:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_BIT_zp:
@@ -623,7 +627,7 @@ mos_BIT_zp:
 		bne.s	.next
 		ori.b	#4,d3
 .next:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_BIT_abs:
@@ -649,7 +653,7 @@ mos_BIT_abs:
 		ori.b	#4,d3
 
 .next:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_BMI:
@@ -660,7 +664,7 @@ mos_BMI:
 		adda.w	d6,a0
 
 .next:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_BNE:
@@ -671,7 +675,7 @@ mos_BNE:
 		adda.w	d6,a0
 
 .next:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_BPL:
@@ -682,7 +686,7 @@ mos_BPL:
 		adda.w	d6,a0
 
 .next:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ----------------------------------------------------------------
 ; $00 - BRK
@@ -713,9 +717,13 @@ mos_BRK:
 		lsl.w	#8,d6
 		move.b	(a5),d6
 		and.w	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l	a1,a0
 		add.l	d6,a0
-		jmp	(RAM_EmuLoop).l
+		endif
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_BVC:
@@ -726,7 +734,7 @@ mos_BVC:
 		adda.w	d6,a0
 
 .next:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_BVS:
@@ -737,12 +745,12 @@ mos_BVS:
 		adda.w	d6,a0
 
 .next:
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CLC:
 		andi.b	#$EE,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ----------------------------------------------------------------
 ; CLD - Clear Decimal mode
@@ -750,7 +758,7 @@ mos_CLC:
 
 mos_CLD:
 		move.w	#0,cpuModeDec(a4)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ----------------------------------------------------------------
 ; CLI - Clear Interrupt disable
@@ -758,13 +766,17 @@ mos_CLD:
 
 mos_CLI:
 		move.w	#0,cpuModeIntDis(a4)
-		jmp	(RAM_EmuLoop).l
+		if MMC3_IRQ
+		bra.w	irqDue			; (MMC3's IRQ, if it waits)
+		else
+		emuNext
+		endif
 
 ; ----------------------------------------------------------------
 
 mos_CLV:
 		andi.b	#$FD,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CMP_imm:
@@ -778,7 +790,7 @@ mos_CMP_imm:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CMP_zp:
@@ -794,7 +806,7 @@ mos_CMP_zp:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CMP_zpx:
@@ -811,7 +823,7 @@ mos_CMP_zpx:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CMP_abs:
@@ -829,7 +841,7 @@ mos_CMP_abs:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CMP_absx:
@@ -850,7 +862,7 @@ mos_CMP_absx:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CMP_absy:
@@ -871,7 +883,7 @@ mos_CMP_absy:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CMP_indx:
@@ -893,7 +905,7 @@ mos_CMP_indx:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CMP_indy:
@@ -917,7 +929,7 @@ mos_CMP_indy:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CPX_imm:
@@ -931,7 +943,7 @@ mos_CPX_imm:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CPX_zp:
@@ -947,7 +959,7 @@ mos_CPX_zp:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CPX_abs:
@@ -965,7 +977,7 @@ mos_CPX_abs:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CPY_imm:
@@ -979,7 +991,7 @@ mos_CPY_imm:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CPY_zp:
@@ -995,7 +1007,7 @@ mos_CPY_zp:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_CPY_abs:
@@ -1013,7 +1025,7 @@ mos_CPY_abs:
 		andi.b	#1,d5
 		lsl.b	#4,d5
 		or.b	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_DEC_zp:
@@ -1024,7 +1036,7 @@ mos_DEC_zp:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_DEC_zpx:
@@ -1036,7 +1048,7 @@ mos_DEC_zpx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_DEC_abs:
@@ -1044,12 +1056,14 @@ mos_DEC_abs:
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
 		move.b	d4,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwDEC
+		bcc.w	rmwDEC
 		subq.b	#1,(a2,d6.w)
 		move	sr,d5
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_DEC_absx:
@@ -1058,12 +1072,14 @@ mos_DEC_absx:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		add.w	d1,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwDEC
+		bcc.w	rmwDEC
 		subq.b	#1,(a2,d6.w)
 		move	sr,d5
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_DEX:
@@ -1072,7 +1088,7 @@ mos_DEX:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_DEY:
@@ -1081,7 +1097,7 @@ mos_DEY:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_EOR_imm:
@@ -1091,7 +1107,7 @@ mos_EOR_imm:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_EOR_zp:
@@ -1103,7 +1119,7 @@ mos_EOR_zp:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_EOR_zpx:
@@ -1116,7 +1132,7 @@ mos_EOR_zpx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_EOR_abs:
@@ -1130,7 +1146,7 @@ mos_EOR_abs:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_EOR_absx:
@@ -1147,7 +1163,7 @@ mos_EOR_absx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_EOR_absy:
@@ -1164,7 +1180,7 @@ mos_EOR_absy:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_EOR_indx:
@@ -1182,7 +1198,7 @@ mos_EOR_indx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_EOR_indy:
@@ -1202,7 +1218,7 @@ mos_EOR_indy:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_INC_zp:
@@ -1213,7 +1229,7 @@ mos_INC_zp:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_INC_zpx:
@@ -1225,7 +1241,7 @@ mos_INC_zpx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_INC_abs:
@@ -1233,12 +1249,14 @@ mos_INC_abs:
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
 		move.b	d4,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwINC
+		bcc.w	rmwINC
 		addq.b	#1,(a2,d6.w)
 		move	sr,d5
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_INC_absx:
@@ -1247,12 +1265,14 @@ mos_INC_absx:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		add.w	d1,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwINC
+		bcc.w	rmwINC
 		addq.b	#1,(a2,d6.w)
 		move	sr,d5
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_INX:
@@ -1261,7 +1281,7 @@ mos_INX:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_INY:
@@ -1270,7 +1290,7 @@ mos_INY:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 ; $4C - JMP $xxxx
 ; ----------------------------------------------------------------
@@ -1281,9 +1301,13 @@ mos_JMP_abs:
 		lsl.w	#8,d6
 		move.b	(a0),d6
 		and.l	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l a1,a0
 		add.l 	d6,a0
-		jmp	(RAM_EmuLoop).l
+		endif
+		emuNext
 
 ; ----------------------------------------------------------------
 ; $6C - JMP ($xxxx)
@@ -1305,12 +1329,16 @@ mos_JMP_ind:
 		bmi.s	.to_rom
 		move.l	a2,a0
 		adda	d6,a0
-		jmp	(RAM_EmuLoop).l
+		emuNext
 .to_rom:
 		and.l	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l a1,a0
 		add.l 	d6,a0
-		jmp	(RAM_EmuLoop).l
+		endif
+		emuNext
 
 ; ----------------------------------------------------------------
 ; $20 - JSR $xxxx
@@ -1335,9 +1363,13 @@ mos_JSR:
 		swap	d3
 		
 		and.l	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l a1,a0
 		add.l 	d6,a0
-		jmp	(RAM_EmuLoop).l
+		endif
+		emuNext
 ; ----------------------------------------------------------------
 ; $A9 - LDA #$xx
 ; ----------------------------------------------------------------
@@ -1348,7 +1380,7 @@ mos_LDA_imm:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDA_zp:
@@ -1359,7 +1391,7 @@ mos_LDA_zp:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDA_zpx:
@@ -1371,7 +1403,7 @@ mos_LDA_zpx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDA_abs:
@@ -1385,7 +1417,7 @@ mos_LDA_abs:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDA_absx:
@@ -1402,7 +1434,7 @@ mos_LDA_absx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDA_absy:
@@ -1419,7 +1451,7 @@ mos_LDA_absy:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 ; LDA (oper,X)
 
@@ -1438,7 +1470,7 @@ mos_LDA_indx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDA_indy:
@@ -1458,7 +1490,7 @@ mos_LDA_indy:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDX_imm:
@@ -1467,7 +1499,7 @@ mos_LDX_imm:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDX_zp:
@@ -1478,7 +1510,7 @@ mos_LDX_zp:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDX_zpy:
@@ -1490,7 +1522,7 @@ mos_LDX_zpy:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDX_abs:
@@ -1504,7 +1536,7 @@ mos_LDX_abs:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDX_absy:
@@ -1521,7 +1553,7 @@ mos_LDX_absy:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDY_imm:
@@ -1530,7 +1562,7 @@ mos_LDY_imm:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDY_zp:
@@ -1541,7 +1573,7 @@ mos_LDY_zp:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDY_zpx:
@@ -1553,7 +1585,7 @@ mos_LDY_zpx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDY_abs:
@@ -1567,7 +1599,7 @@ mos_LDY_abs:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LDY_absx:
@@ -1584,7 +1616,7 @@ mos_LDY_absx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LSR_acc:
@@ -1593,7 +1625,7 @@ mos_LSR_acc:
 		andi.w	#$1D,d5
 		andi.b	#$E2,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LSR_zp:
@@ -1606,7 +1638,7 @@ mos_LSR_zp:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LSR_zpx:
@@ -1620,7 +1652,7 @@ mos_LSR_zpx:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LSR_abs:
@@ -1628,6 +1660,8 @@ mos_LSR_abs:
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
 		move.b	d4,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwLSR
+		bcc.w	rmwLSR
 		move.b	(a2,d6.w),d7
 		lsr.b	#1,d7
 		move	sr,d5
@@ -1635,7 +1669,7 @@ mos_LSR_abs:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_LSR_absx:
@@ -1644,6 +1678,8 @@ mos_LSR_absx:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		add.w	d1,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwLSR
+		bcc.w	rmwLSR
 		move.b	(a2,d6.w),d7
 		lsr.b	#1,d7
 		move	sr,d5
@@ -1651,13 +1687,13 @@ mos_LSR_absx:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 ; $EA - nop
 
 mos_NOP:
 		nop
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ORA_imm:
@@ -1667,7 +1703,7 @@ mos_ORA_imm:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ORA_zp:
@@ -1679,7 +1715,7 @@ mos_ORA_zp:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ORA_zpx:
@@ -1692,7 +1728,7 @@ mos_ORA_zpx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ORA_abs:
@@ -1706,7 +1742,7 @@ mos_ORA_abs:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ORA_absx:
@@ -1723,7 +1759,7 @@ mos_ORA_absx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ORA_absy:
@@ -1740,7 +1776,7 @@ mos_ORA_absy:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ORA_indx:
@@ -1758,7 +1794,7 @@ mos_ORA_indx:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ORA_indy:
@@ -1778,7 +1814,7 @@ mos_ORA_indy:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_PHA:
@@ -1786,7 +1822,7 @@ mos_PHA:
 		move.b	d0,(a2,d3.w)
 		subq.b	#1,d3
 		swap	d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ----------------------------------------------------------------
 ; $08 - PHP
@@ -1798,7 +1834,7 @@ mos_PHP:
 		move.b	d5,(a2,d3.w)
 		subq.b	#1,d3
 		swap	d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ----------------------------------------------------------------
 ; Convert between the 6502 P register and the emulator's flags
@@ -1807,6 +1843,85 @@ mos_PHP:
 ; I and D live in cpuModeIntDis and cpuModeDec.
 ; d3 must not be swapped when calling these.
 ; ----------------------------------------------------------------
+
+; ----------------------------------------------------------------
+; Read-modify-write instructions (ASL, LSR, ROL, ROR, INC, DEC, abs and
+; abs,X) on an address past the 2 KB of RAM, $0800 on (its mirrors, PRG
+; RAM, the PPU's, APU's and mapper's registers): the byte through
+; addr_Read, and back through addr_Write, as LDA and STA do
+;
+; d6.w - the address
+; ----------------------------------------------------------------
+
+	; d7: the byte at d6.w
+rmwRead:
+		move.w	d6,d4			; d4: its low byte, d6: its high one
+		andi.w	#$FF,d4
+		lsr.w	#8,d6
+		bra.w	addr_Read
+
+rmwASL:
+		move.w	d6,-(sp)		; (the address, for rmwWrite)
+		bsr.s	rmwRead
+		lsl.b	#1,d7
+		bra.s	rmwShift
+rmwLSR:
+		move.w	d6,-(sp)
+		bsr.s	rmwRead
+		lsr.b	#1,d7
+		bra.s	rmwShift
+rmwROL:
+		move.w	d6,-(sp)
+		bsr.s	rmwRead
+		move	d3,sr
+		roxl.b	#1,d7
+		bra.s	rmwShift
+rmwROR:
+		move.w	d6,-(sp)
+		bsr.s	rmwRead
+		move	d3,sr
+		roxr.b	#1,d7
+rmwShift:
+		move	sr,d5
+		andi.w	#$1D,d5
+		andi.b	#$E2,d3
+		or.w	d5,d3
+		bra.s	rmwWrite
+rmwINC:
+		move.w	d6,-(sp)
+		bsr.s	rmwRead
+		addq.b	#1,d7
+		bra.s	rmwStep
+rmwDEC:
+		move.w	d6,-(sp)
+		bsr.s	rmwRead
+		subq.b	#1,d7
+rmwStep:
+		move	sr,d5
+		andi.w	#$C,d5
+		andi.b	#$F3,d3
+		or.w	d5,d3
+rmwWrite:
+		move.w	(sp)+,d6
+		move.w	d6,d4
+		andi.w	#$FF,d4
+		lsr.w	#8,d6
+		bra.w	addr_Write
+
+		if PRG_MODE1
+; MMC3 PRG mode 1 (PRG_MODE1, PRG_FRAMES): a0 for the code at $8000 +
+; d6.w ($0000-$7FFF), in R6's frame for $C000-$DFFF, else in R7's (a1)
+prgPc:
+		movea.l	a1,a0
+		btst	#14,d6			; $C000-$DFFF: bits 14, 13 = 1, 0
+		beq.s	.frame
+		btst	#13,d6
+		bne.s	.frame
+		movea.l	prgFrameC(a4),a0
+.frame:
+		adda.w	d6,a0
+		rts
+		endif
 
 ; Build P in d5 (bits 5 and 4 set; clear bit 4 for NMI/IRQ)
 ; Uses: d5, a5
@@ -1871,7 +1986,7 @@ mos_PLA:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ----------------------------------------------------------------
 ; $28 - PLP
@@ -1883,7 +1998,7 @@ mos_PLP:
 		move.b	(a2,d3.w),d5
 		swap	d3
 		bsr	famiSetP
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ROL_acc:
@@ -1893,7 +2008,7 @@ mos_ROL_acc:
 		andi.w	#$1D,d5
 		andi.b	#$E2,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ROL_zp:
@@ -1907,7 +2022,7 @@ mos_ROL_zp:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ROL_zpx:
@@ -1922,7 +2037,7 @@ mos_ROL_zpx:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ROL_abs:
@@ -1930,6 +2045,8 @@ mos_ROL_abs:
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
 		move.b	d4,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwROL
+		bcc.w	rmwROL
 		move.b	(a2,d6.w),d7
 		move	d3,sr
 		roxl.b	#1,d7
@@ -1938,7 +2055,7 @@ mos_ROL_abs:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ROL_absx:
@@ -1947,6 +2064,8 @@ mos_ROL_absx:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		add.w	d1,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwROL
+		bcc.w	rmwROL
 		move.b	(a2,d6.w),d7
 		move	d3,sr
 		roxl.b	#1,d7
@@ -1955,7 +2074,7 @@ mos_ROL_absx:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ROR_acc:
@@ -1965,7 +2084,7 @@ mos_ROR_acc:
 		andi.w	#$1D,d5
 		andi.b	#$E2,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ROR_zp:
@@ -1979,7 +2098,7 @@ mos_ROR_zp:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ROR_zpx:
@@ -1994,7 +2113,7 @@ mos_ROR_zpx:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ROR_abs:
@@ -2002,6 +2121,8 @@ mos_ROR_abs:
 		move.b	(a0)+,d6
 		lsl.w	#8,d6
 		move.b	d4,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwROR
+		bcc.w	rmwROR
 		move.b	(a2,d6.w),d7
 		move	d3,sr
 		roxr.b	#1,d7
@@ -2010,7 +2131,7 @@ mos_ROR_abs:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_ROR_absx:
@@ -2019,6 +2140,8 @@ mos_ROR_absx:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		add.w	d1,d6
+		cmpi.w	#$800,d6		; past the 2 KB of RAM: rmwROR
+		bcc.w	rmwROR
 		move.b	(a2,d6.w),d7
 		move	d3,sr
 		roxr.b	#1,d7
@@ -2027,7 +2150,7 @@ mos_ROR_absx:
 		andi.b	#$E2,d3
 		or.w	d5,d3
 		move.b	d7,(a2,d6.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ----------------------------------------------------------------
 ; $40 - RTI
@@ -2052,8 +2175,12 @@ mos_RTI:
 		swap	d3
 		bsr	famiSetP
 		and.l	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l a1,a0
 		add.l 	d6,a0
+		endif
 
 		move.l	#emuLoop,(RAM_EmuLoop+2).l
 		move.w	#0,cpuFamiVint(a4)
@@ -2062,7 +2189,12 @@ mos_RTI:
 		clr.w	vbLate(a4)
 		move.w	#1,FamiMdVint(a4)
 .on_time:
-		jmp	(RAM_EmuLoop).l
+		if MMC3_IRQ
+		move.w	irqNmiSave(a4),cpuInIrq(a4)	; (one that came in the IRQ handler
+		bra.w	irqDue				; goes back to it) MMC3's IRQ
+		else
+		emuNext
+		endif
 
 .nonint:
 		swap	d3
@@ -2078,9 +2210,87 @@ mos_RTI:
 		swap	d3
 		bsr	famiSetP
 		and.l	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l a1,a0
 		add.l 	d6,a0
-		jmp	(RAM_EmuLoop).l
+		endif
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; the IRQ handler's (MMC3_IRQ): what's
+		beq.s	.not_irq		; below its line, as it set it
+		clr.w	cpuInIrq(a4)
+		bsr.w	splitDone
+.not_irq:
+		endif
+		emuNext
+
+		if MMC3_IRQ
+; ----------------------------------------------------------------
+; MMC3's scanline IRQ (MMC3_IRQ), once the game has turned it on
+; ($E001: irqOn): taken when the NMI handler returns, if the I flag is
+; clear then, else where the game clears it with CLI, but not in the
+; NMI handler: its line is further down the screen than any the game
+; draws then (its frame starts at VBlank). Not while the screen is
+; off ($2001): the MMC3 counts the lines the PPU draws, and a game may
+; be drawing to VRAM (the handler's $2006 would move its address).
+; Not at a PLP or RTI: those come anywhere in the game's code, and the
+; handler may count on what's in the switched banks then. One a game
+; frame (the handler's RTI doesn't take one an NMI in it set: that
+; would leave no time for the game's own work, where the interpreter
+; is slow). Its PPU and CHR writes only go to what's below its line
+; (cpuInIrq, splitBegin, splitDone).
+; ----------------------------------------------------------------
+
+irqDue:
+		tst.w	irqOn(a4)
+		beq.s	.none
+		tst.w	ppuMaskOn(a4)		; (the MMC3 counts lines only while the
+		beq.s	.none			; PPU draws them)
+		tst.w	cpuModeIntDis(a4)
+		bne.s	.none
+		tst.w	cpuInIrq(a4)
+		bne.s	.none
+		tst.w	cpuFamiVint(a4)
+		beq.s	irqTake
+.none:
+		emuNext
+
+irqTake:
+		bsr	famiGetP		; push the PC and P (B clear), as doVint
+		move.b	d5,d7
+		andi.b	#$EF,d7
+		swap	d3
+		move.l	a0,d4
+		sub.l	a1,d4
+		move.b	d4,d5
+		lsr.w	#8,d4
+		or.b	#$80,d4
+		move.b	d4,(a2,d3.w)
+		subq.b	#1,d3
+		move.b	d5,(a2,d3.w)
+		subq.b	#1,d3
+		move.b	d7,(a2,d3.w)
+		subq.b	#1,d3
+		swap	d3
+		moveq	#0,d7
+		move.w	#1,cpuModeIntDis(a4)
+		bsr.w	splitBegin
+		movea.l	a1,a0			; and to the IRQ vector's address
+		move.w	#cpuIRQ,d6
+		adda.w	d6,a0
+		move.b	1(a0),d6
+		lsl.w	#8,d6
+		move.b	(a0),d6
+		and.w	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
+		movea.l	a1,a0
+		adda.w	d6,a0
+		endif
+		emuNext
+		endif
 
 ; ----------------------------------------------------------------
 ; $60 - RTS
@@ -2098,9 +2308,13 @@ mos_RTS:
 		swap	d3
 		addq.w	#1,d6
 		and.l	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l a1,a0
 		add.l 	d6,a0
-		jmp	(RAM_EmuLoop).l
+		endif
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_SBC_imm:
@@ -2111,7 +2325,7 @@ mos_SBC_imm:
 		subx.b	d7,d0
 		move	sr,d3
 		eori.b	#$11,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_SBC_zp:
@@ -2124,7 +2338,7 @@ mos_SBC_zp:
 		subx.b	d7,d0
 		move	sr,d3
 		eori.b	#$11,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_SBC_zpx:
@@ -2138,7 +2352,7 @@ mos_SBC_zpx:
 		subx.b	d7,d0
 		move	sr,d3
 		eori.b	#$11,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_SBC_abs:
@@ -2153,7 +2367,7 @@ mos_SBC_abs:
 		subx.b	d7,d0
 		move	sr,d3
 		eori.b	#$11,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_SBC_absx:
@@ -2171,7 +2385,7 @@ mos_SBC_absx:
 		subx.b	d7,d0
 		move	sr,d3
 		eori.b	#$11,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_SBC_absy:
@@ -2189,7 +2403,7 @@ mos_SBC_absy:
 		subx.b	d7,d0
 		move	sr,d3
 		eori.b	#$11,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_SBC_indx:
@@ -2209,7 +2423,7 @@ mos_SBC_indx:
 		subx.b	d7,d0
 		move	sr,d3
 		eori.b	#$11,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_SBC_indy:
@@ -2230,12 +2444,12 @@ mos_SBC_indy:
 		subx.b	d7,d0
 		move	sr,d3
 		eori.b	#$11,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_SEC:
 		ori.b	#$11,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ----------------------------------------------------------------
 ; SED - Set Decimal mode
@@ -2243,7 +2457,7 @@ mos_SEC:
 
 mos_SED:
 		move.w	#1,cpuModeDec(a4)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ----------------------------------------------------------------
 ; SEI - Set Interrupt disable
@@ -2251,7 +2465,7 @@ mos_SED:
 
 mos_SEI:
 		move.w	#1,cpuModeIntDis(a4)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 
 ; ----------------------------------------------------------------
 
@@ -2259,7 +2473,7 @@ mos_STA_zp:
 		clr.w	d4
 		move.b	(a0)+,d4
 		move.b	d0,(a2,d4.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_STA_zpx:
@@ -2267,7 +2481,7 @@ mos_STA_zpx:
 		move.b	(a0)+,d4
 		add.b	d1,d4
 		move.b	d0,(a2,d4.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_STA_abs:
@@ -2278,7 +2492,7 @@ mos_STA_abs:
 		move.b	d0,d7
 		bra.w	addr_Write
 ; ----------------------------------------------------------------
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_STA_absx:
@@ -2338,7 +2552,7 @@ mos_STX_zp:
 		clr.w	d4
 		move.b	(a0)+,d4
 		move.b	d1,(a2,d4.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_STX_zpy:
@@ -2346,7 +2560,7 @@ mos_STX_zpy:
 		move.b	(a0)+,d4
 		add.b	d2,d4
 		move.b	d1,(a2,d4.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_STX_abs:
@@ -2357,14 +2571,14 @@ mos_STX_abs:
 		move.b	d1,d7
 		bra.w	addr_Write
 ; ----------------------------------------------------------------
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_STY_zp:
 		clr.w	d4
 		move.b	(a0)+,d4
 		move.b	d2,(a2,d4.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_STY_zpx:
@@ -2372,7 +2586,7 @@ mos_STY_zpx:
 		move.b	(a0)+,d4
 		add.b	d1,d4
 		move.b	d2,(a2,d4.w)
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_STY_abs:
@@ -2383,7 +2597,7 @@ mos_STY_abs:
 		move.b	d2,d7
 		bra.w	addr_Write
 ; ----------------------------------------------------------------
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_TAX:
@@ -2392,7 +2606,7 @@ mos_TAX:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_TAY:
@@ -2401,7 +2615,7 @@ mos_TAY:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 ; TSX
 
@@ -2413,7 +2627,7 @@ mos_TSX:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_TXA:
@@ -2422,14 +2636,14 @@ mos_TXA:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_TXS:
 		swap	d3
 		move.b	d1,d3
 		swap	d3
-		jmp	(RAM_EmuLoop).l
+		emuNext
 ; ----------------------------------------------------------------
 
 mos_TYA:
@@ -2438,4 +2652,4 @@ mos_TYA:
 		andi.w	#$C,d5
 		andi.b	#$F3,d3
 		or.w	d5,d3
-		jmp	(RAM_EmuLoop).l
+		emuNext

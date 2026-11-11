@@ -18,11 +18,16 @@ FPS		equ 0			; 1: FPS counter (build.sh --fps, needs RECOMP)
 		include	"system/md/map.asm"	; Genesis hardware map
 		include	"out/nes_info.asm"	; the NES ROM's mapper and PRG size (tools/nesinfo.py)
 PRG_BANKED	equ (NES_MAPPER=2)||(NES_MAPPER=4)	; PRG-ROM in 16 KB banks: PRG_IMAGES
+PRG_MODE1	equ (NES_MAPPER=4)&&(NES_MMC3_PRG1<>0)	; MMC3 in PRG mode 1, 8 KB banks: PRG_FRAMES
+MMC3_IRQ	equ (NES_MAPPER=4)&&(NES_MMC3_IRQ<>0)	; MMC3's scanline IRQ: what's below its line (splitDone)
+splitWinBase	equ $A000		; MMC3_IRQ: the window's cells (VDP $83), rows 0-27 of 32
+splitTiles	equ $340		; and the tile set below the split (VRAM $6800-$87FF)
 prgBankMask	set 1			; its banks, rounded up to a power of 2, -1
 		while prgBankMask<NES_PRG16
 prgBankMask	set prgBankMask*2
 		endm
 prgBankMask	set prgBankMask-1
+prgBank8Mask	equ prgBankMask*2+1	; and its 8 KB banks'
 chrBankMask	set 1			; its CHR-ROM's 1 KB banks, rounded up likewise
 		while chrBankMask<NES_CHR8*8
 chrBankMask	set chrBankMask*2
@@ -42,6 +47,7 @@ RAM_Fami_ROM	equ $FFFF0000		; PRG-ROM (not banked)
 RAM_Fami_WRAM	equ $FFFF0000		; PRG RAM, $6000-$7FFF (banked PRG: PRG_IMAGES)
 RAM_Fami_ChrDma	equ $FFFF2000		; MMC3: MD tiles for VRAM, queued for VBlank (chrUpdate, chrDma), 2 KB
 RAM_Fami_ChrCache equ $FFFF2800		; MMC3: bank switches seen before, 32 lines of 512 bytes (chrUpdate)
+RAM_Fami_Split	equ $FFFF7F00		; MMC3_IRQ: the split below the IRQ's line, $100 bytes (by a4 too)
 RAM_Fami_Emu	equ $FFFF8000		; Emulator buffer
 RAM_RcRet	equ RAM_Fami_Emu+$A50	; recompiled code: RTS return caches (rcDispatchC), 120 of 12 bytes
 RAM_Fami_RAM	equ $FFFF9000		; RAM size: $800
@@ -64,6 +70,18 @@ RAM_EmuLoop	ds.w 3
 RAM_RcStack	ds.l 1			; recompiled code: stack at dispatch (emu/recomp.asm)
 RAM_HintCount	ds.w 1			; line interrupts taken (MD_Hint, ppuMeasureLines)
 		finish
+
+; The end of an emulated instruction's routine and of a handler: on to
+; the interpreter's loop (RAM_EmuLoop). In a recompiled build a return:
+; translated code calls the handlers, and rcInterpStep each
+; instruction's routine (emu/recomp.asm)
+emuNext		macro
+		if RECOMP
+		rts
+		else
+		jmp	(RAM_EmuLoop).l
+		endif
+		endm
 
 ; ----------------------------------------------------------------
 ; Unsorted
@@ -154,7 +172,7 @@ cpuPrgImg	ds.l 1			; $8000-$FFFF: RAM_Fami_ROM, or a PRG_IMAGES image (a1)
 cpuWram		ds.w 1			; 1: PRG RAM at $6000-$7FFF (RAM_Fami_WRAM)
 mmc3Select	ds.w 1			; MMC3 (mapper 4): the last $8000 write
 mmc3Regs	ds.b 8			; and its bank registers R0-R7 (mmc3Write)
-rcCurTable	ds.l 1			; recompiled banked PRG: the bank at $8000's rcTable (prgSwitch)
+rcCurTable	ds.l 1			; recompiled banked PRG: the bank at $8000's rcTable (prgSwitch, rcPrgSlot)
 chrDmaHead	ds.w 1			; MMC3: the first MD tiles queued for VRAM (RAM_Fami_ChrDma)
 chrDmaTail	ds.w 1			; and where the next go
 nmiCredit	ds.w 1			; recompiled code: VBlanks not yet answered by an NMI (rcNmi)
@@ -162,7 +180,61 @@ nmiWaitDue	ds.w 1			; and 1: one is due where the game waits for it (rcNmiWait)
 nmiHold		ds.w 1			; 1: the game took its last NMI waiting for it
 chrSlotPtr	ds.l 8			; MMC3: the CHR-ROM data each 1 KB of the pattern tables shows,
 chrStale	ds.w 1			; and those a3's copy is out of date for (bits 0-7, chrSync)
+prgFrameC	ds.l 1			; MMC3 PRG mode 1: the frame of R6's bank, at $C000 (PRG_FRAMES)
+rcCurTableC	ds.l 1			; and recompiled: the code of R6's bank, at $C000 (rcCurTable: R7's)
+rcFrameC	ds.l 1			; and prgFrameC+$8000, to read $C000-$DFFF through (emu/recomp.asm)
+		if PRG_MODE1
+rcCurCallA	ds.l 1			; and the routines of R7's bank, R6's, that other code calls (rcPrgSlot)
+rcCurCallC	ds.l 1
+		endif
+rcNmiInterp	ds.w 1			; recompiled code: an NMI came while interpreting (rcInterpStep, rcRti)
+ppuCtrlLast	ds.w 1			; the last $2000 written, as wrPPU_Ctrl set the PPU for it ($FFFF: none)
+rcNestPc	ds.w 1			; recompiled code: while an NMI a routine's copy took is out (rcNmiIn), the
+rcNestSp	ds.w 1			; 6502 PC and stack ($0100+SP) its RTI comes back to the copy at (0: none)
+emuVarsEnd	equ *
 		finish
+		if emuVarsEnd>$A00
+		error "the emulator's variables run into RAM_Fami_Apu (emu/apu.asm)"
+		endif
+
+; ----------------------------------------------------------------
+; MMC3's scanline IRQ, and the split below its line (MMC3_IRQ): a4
+; points at these too, below the above, in RAM an MMC3 game leaves
+; free (RAM_Fami_ChrCache ends before it)
+; ----------------------------------------------------------------
+
+		if MMC3_IRQ
+		if RAM_Fami_ChrCache+32*512>RAM_Fami_Split
+		error "RAM_Fami_Split is in RAM_Fami_ChrCache"
+		endif
+		struct RAM_Fami_Split-RAM_Fami_Emu
+irqLatch	ds.w 1			; the IRQ's line ($C000)
+irqOn		ds.w 1			; and 1: one is due this game frame ($E001), after the NMI handler
+irqLine		ds.w 1			; and its line, as $E001 set it
+cpuInIrq	ds.w 1			; 1: in the IRQ handler, whose PPU and CHR writes are below its line
+irqNmiSave	ds.w 1			; cpuInIrq while an NMI handler runs
+splitV		ds.w 1			; the IRQ handler's $2006 address (the rows below), $FFFF: none
+splitCtrlX	ds.w 1			; and its $2000 nametable X bit (bit 0), $FFFF: none
+splitSeen	ds.w 1			; this game frame took the IRQ (ppuFrameStart)
+splitShow	ds.w 1			; VDP $92 for the window (the split), and the value written
+splitShown	ds.w 1
+splitWinNt	ds.w 1			; the window shows the nametable from this PPU address, 0: none
+splitWinVram	ds.w 1			; from this VRAM address (its first row's)
+splitWinLen	ds.w 1			; for so many nametable bytes (rows * 32)
+irqInterp	ds.w 1			; recompiled: rcNmiInterp when the IRQ was taken (rcIrq, rcRti)
+splitBank	ds.w 4			; the split's tile set: the CHR-ROM 1 KB bank in each part, $FFFF: none yet
+mmc3RegsSplit	ds.b 8			; the CHR registers below the split
+sprHideY	ds.w 1			; OAM DMA: sprites from this Y on are hidden ($E7, or the split's)
+ppuCellAddr	ds.w 1			; the nametable byte ppuDrwCell draws (for the window)
+splitKeyOk	ds.w 1			; 1: splitKey holds what splitDone read last time, and what it set is so
+splitKey	ds.b 26			; (BG banks R0, R1 or R2-R5, mmc3RegsSplit R0-R5, the sprites' mmc3Regs,
+					; irqLine, splitV, splitCtrlX, ppuSprWide, vdpScrlY, ppuNTblBase)
+splitVarsEnd	equ *
+		finish
+		if splitVarsEnd>RAM_Fami_Split-RAM_Fami_Emu+$100
+		error "the split's variables run past RAM_Fami_Split's $100 bytes"
+		endif
+		endif
 sprTable2	equ vdpSprData2-vdpSprData
 
 ; ====================================================================
@@ -408,7 +480,11 @@ Video_RegList:
 		dc.b $04			; HBlank int on, HV Counter on
 		dc.b $64			; Display ON, VBlank int on
 		dc.b (($C000)>>10)		; ForeGrd at VRAM $C000 (%00xxx000)
+		if MMC3_IRQ
+		dc.b ((splitWinBase)>>10)	; Window  at splitWinBase
+		else
 		dc.b (($D000)>>10)		; Window  at VRAM $D000 (%00xxxxy0)
+		endif
 		dc.b (($E000)>>13)		; BackGrd at VRAM $E000 (%00000xxx)
 		dc.b (($BC00)>>9)		; Sprites at VRAM $BC00 (%0xxxxxxy)
 		dc.b $00			; Nothing
@@ -488,8 +564,7 @@ MD_Vint:
 		adda.w	d2,a0
 		if FPS
 		jsr	(fpsUpdate).l			; the counter's sprites, in that table
-		move.l	#$94019300,4(a6)		; all 64: the counter is in the last two
-		else
+		endif
 		move.w	vdpSprWords-vdpSprData(a0),d0	; the sprites listed
 		bne.s	.spr_words
 		moveq	#4,d0				; none yet
@@ -500,7 +575,6 @@ MD_Vint:
 		lsr.w	#8,d0
 		ori.w	#$9400,d0
 		move.w	d0,4(a6)
-		endif
 		move.w	#$0100,(z80_bus).l
 		move.l	a0,d0				; DMA source: the table
 		lsr.l	#1,d0
@@ -520,6 +594,26 @@ MD_Vint:
 .wait:		btst	#0,(z80_bus).l
 		bne.s	.wait
 		move.w	(sp)+,4(a6)
+		if FPS
+		move.l	#$94009308,4(a6)		; and the counter's two, which the last
+		move.l	a0,d0				; listed one links to (8 words)
+		addi.l	#fpsSprite*8,d0
+		lsr.l	#1,d0
+		move.w	#$9500,d1
+		move.b	d0,d1
+		move.w	d1,4(a6)
+		lsr.l	#8,d0
+		move.w	#$9600,d1
+		move.b	d0,d1
+		move.w	d1,4(a6)
+		lsr.l	#8,d0
+		andi.w	#$7F,d0
+		ori.w	#$9700,d0
+		move.w	d0,4(a6)
+		move.w	#$4000|(($BC00+fpsSprite*8)&$3FFF),4(a6)	; (the table at $BC00)
+		move.w	#(($BC00+fpsSprite*8)>>14)|$80,-(sp)
+		move.w	(sp)+,4(a6)
+		endif
 		tst.b	vdpPalDirty(a4)			; palette, if it changed
 		beq.s	.same_palette
 		sf	vdpPalDirty(a4)
@@ -535,6 +629,9 @@ MD_Vint:
 		jsr	hsApply				; horizontal scroll
 		if (NES_MAPPER=4)&&(NES_CHR8<>0)
 		jsr	(chrVblank).l			; MMC3: tiles that changed (chrUpdate)
+		if MMC3_IRQ
+		jsr	(splitVblank).l			; and below the IRQ's line: the window
+		endif
 		endif
 		bsr.w	apuUpdate			; needs the Z80 bus
 		move.w	#0,(z80_bus).l			; Release Z80
@@ -651,14 +748,36 @@ Fami_LoadRom:
 .clrvram:
 		move.l	d0,(a5)+
 		dbf	d1,.clrvram
+		lea	(RAM_Fami_PPU+$3F00).l,a5	; the palette entries: none written
+		moveq	#-1,d0				; yet (wrPPU_Data)
+		moveq	#32/4-1,d1
+.nopal:
+		move.l	d0,(a5)+
+		dbf	d1,.nopal
 		lea 	($C00000),a6
 		bsr	Fami_InitVideo
 
 		lea	(RAM_Fami_Emu).l,a3
 		if PRG_BANKED
+		if PRG_MODE1
+		move.l	#PRG_FRAMES+$8000,cpuPrgImg(a3)	; bank 1 at $A000 (R7) and 0
+		move.l	#PRG_FRAMES,prgFrameC(a3)	; at $C000 (R6) to begin with
+		else
 		move.l	#PRG_IMAGES,cpuPrgImg(a3) ; bank 0 at $8000 to begin with
+		endif
 		move.l	#$00020405,mmc3Regs(a3)	; MMC3: as the CHR copied below (the
 		move.l	#$06070001,mmc3Regs+4(a3) ; first 8 KB) and PRG image 0
+		if MMC3_IRQ
+		lea	(RAM_Fami_Split).l,a5	; no split yet (MMC3_IRQ)
+		moveq	#$100/4-1,d7
+.split_clr:
+		clr.l	(a5)+
+		dbf	d7,.split_clr
+		move.w	#$E7,sprHideY(a3)
+		move.w	#$FFFF,splitV(a3)
+		move.l	#$FFFFFFFF,splitBank(a3)
+		move.l	#$FFFFFFFF,splitBank+4(a3)
+		endif
 		move.w	#1,cpuWram(a3)
 		lea	(RAM_Fami_WRAM).l,a5	; and PRG RAM, cleared
 		moveq	#0,d7
@@ -675,7 +794,11 @@ Fami_LoadRom:
 		dbf	d1,.chr_cache
 		endif
 		movea.l	a0,a4			; CHR-ROM: after PRG-ROM (as romGrabPrg
-		adda.l	#$10+NES_PRG16*$4000,a4	; leaves a4)
+		if PRG_MODE1			; leaves a4), or right after the header
+		adda.l	#$10,a4			; (PRG mode 1: ROM_FILE)
+		else
+		adda.l	#$10+NES_PRG16*$4000,a4
+		endif
 		else
 		moveq	#0,d7			; PRG-ROM copy
 		move.b	4(a0),d7
@@ -801,6 +924,7 @@ emuStart:
 		move.w	#$8004,vdpReg00(a4)
 		move.w	#$8174,vdpReg01(a4)
 		move.w	#1,ppuAddrIncr(a4)		; $2000 is 0 at power on: +1
+		move.w	#$FFFF,ppuCtrlLast(a4)		; (none written yet)
 		move.w	#$4EF9,(RAM_EmuLoop).l		; JMP opcode
 		move.l	#emuLoop,(RAM_EmuLoop+2).l	; default emulation loop
 		moveq	#0,d0
@@ -878,6 +1002,10 @@ emuVint:
 doVint:
 		move.l	#emuVint,(RAM_EmuLoop+2).l
 		move.w	#1,cpuFamiVint(a4)
+		if MMC3_IRQ
+		move.w	cpuInIrq(a4),irqNmiSave(a4)	; (the NMI handler's writes are above the split)
+		clr.w	cpuInIrq(a4)
+		endif
 		bsr.w	ppuFrameStart
 
 		bsr	famiGetP		; Save PC and P (B clear)
@@ -905,8 +1033,12 @@ doVint:
 		lsl.w	#8,d6
 		move.b	(a0),d6
 		and.w	#$7FFF,d6
+		if PRG_MODE1
+		bsr.w	prgPc
+		else
 		movea.l	a1,a0
 		add.w	d6,a0
+		endif
 		jmp	emuVint
 
 		include	"emu/memory.asm"	; CPU memory map
@@ -937,7 +1069,12 @@ EndOfRom:
 ; ROM are here
 ; ----------------------------------------------------------------
 
+		if PRG_MODE1
+ROM_FILE:	binclude "out/nes_rom.bin",0,$10	; copied here by build.sh: its header,
+		binclude "out/nes_rom.bin",$10+NES_PRG16*$4000	; then CHR-ROM (PRG mode 1:
+		else					; its PRG is in PRG_FRAMES, below)
 ROM_FILE:	binclude "out/nes_rom.bin"	; copied here by build.sh
+		endif
 
 ; ----------------------------------------------------------------
 ; Banked PRG-ROM (mappers 2 and 4): a 32 KB image of $8000-$FFFF
@@ -947,7 +1084,24 @@ ROM_FILE:	binclude "out/nes_rom.bin"	; copied here by build.sh
 ; images are 32 KB aligned: a0's low 15 bits are the PC's (mos_JSR).
 ; ----------------------------------------------------------------
 
-		if PRG_BANKED
+		if PRG_MODE1
+; MMC3 in PRG mode 1 (PRG_MODE1): R7's 8 KB bank at $A000 and R6's at
+; $C000 switch apart, with the second to last bank at $8000 and the
+; last at $E000. A 32 KB frame for each bank, of the fixed banks and
+; the bank at both $A000 and $C000: the CPU runs code and reads PRG
+; through R7's (a1), but at $C000-$DFFF R6's (prgFrameC, prgPc). They
+; are 32 KB aligned too.
+		align $8000
+PRG_FRAMES:
+prgImage	set 0
+		rept NES_PRG16*2
+		binclude "out/nes_rom.bin",$10+(NES_PRG16*2-2)*$2000,$2000
+		binclude "out/nes_rom.bin",$10+prgImage*$2000,$2000
+		binclude "out/nes_rom.bin",$10+prgImage*$2000,$2000
+		binclude "out/nes_rom.bin",$10+(NES_PRG16*2-1)*$2000,$2000
+prgImage	set prgImage+1
+		endm
+		elseif PRG_BANKED
 		align $8000
 PRG_IMAGES:
 prgImage	set 0

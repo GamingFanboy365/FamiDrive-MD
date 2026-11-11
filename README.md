@@ -9,11 +9,13 @@ Nemul, originally made by Mairtrus. Credit to Mairtrus for the original work.
 
 - Runs on real hardware (the original Nemul did not)
 - Passes nestest's tests for all official 6502 opcodes
-- Mappers 0 (NROM), 2 (UxROM), 3 (CNROM) and 4 (MMC3, the way Super Mario Bros. 2 uses it), with
-  CHR-ROM or CHR-RAM, and PRG RAM at $6000-$7FFF for mappers 2 and 4
+- Mappers 0 (NROM), 2 (UxROM), 3 (CNROM) and 4 (MMC3, the ways Super Mario Bros. 2 and 3 use it),
+  with CHR-ROM or CHR-RAM, and PRG RAM at $6000-$7FFF for mappers 2 and 4
 - Working vertical scrolling using both scroll layers (the NES map height differs from the MD's)
 - Horizontal scroll changes partway down the screen (such as a still status bar above a scrolling
   level) use the MD's line scroll
+- A split at the MMC3's scanline interrupt, below which the game shows other nametable rows with
+  other tiles (such as Super Mario Bros. 3's status bar), uses the MD's window plane
 - Shows an error screen, instead of a black screen, for unsupported ROMs and 68000 crashes
 - Sound: the NES pulse, triangle and noise channels are played on the MD's PSG and YM2612
 
@@ -35,7 +37,9 @@ while the game runs. Games that use a lot of CPU run many times faster: Pinball'
 from about 3.5 to about 55 game frames per second, as fast as on a NES (which also drops frames
 when the game is busy). Super Mario Bros., Balloon Fight, Ice Climber and Excitebike run at full
 speed (60) while you play. Games with banked PRG-ROM (mappers 2 and 4) are translated a bank at a
-time: Super Mario Bros. 2 goes from about 6 to 60 game frames per second in most of its levels.
+time: Super Mario Bros. 2 goes from about 6 to 60 game frames per second in most of its levels, and
+Super Mario Bros. 3, whose MMC3 switches 8 KB banks at $A000 and $C000 apart, from about 6 to 60
+in World 1-1's quieter parts and while it scrolls, and to about 55-58 in its busiest moments.
 
 When a game's frame needs a little more time than an MD frame, its next NMI waits until the game
 is ready for it (up to a frame), so the game runs a little slower instead of at half speed. NMIs
@@ -66,9 +70,12 @@ hide or show it. Builds without `--fps` don't contain it.
 - CHR-ROM or CHR-RAM
 
 Anything else shows an error screen saying what isn't supported. MMC3 games work if they switch
-PRG-ROM at $8000-$BFFF in 16 KB pairs and don't use its scanline interrupt, as Super Mario Bros. 2
-does. Games that switch its 8 KB banks one at a time, or time a split screen with the interrupt
-(Super Mario Bros. 3's status bar), don't work yet.
+PRG-ROM at $8000-$BFFF in 16 KB pairs, as Super Mario Bros. 2 does, or put it in PRG mode 1 and
+switch 8 KB banks at $A000 and $C000 one at a time, as Super Mario Bros. 3 does. Its scanline
+interrupt is taken once a frame, when the NMI handler returns: what the interrupt handler sets up
+for the screen below the interrupt's line (other nametable rows, other CHR banks) shows in the MD's
+window plane, from the first whole cell row below that line. Effects that need more than one
+interrupt a frame show only the first.
 
 ### Checks
 
@@ -86,7 +93,7 @@ handheld's differences.
 | `md.asm` | ROM header, Mega Drive init and interrupts, NES ROM loading, emulator main loop |
 | `emu/cpu.asm` | 6502 CPU: opcode table and handlers |
 | `emu/memory.asm` | CPU memory map: RAM, PRG-ROM and mappers, APU/controller registers, PPU register reads |
-| `emu/ppu.asm` | PPU register writes, nametable and palette drawing, CHR conversion |
+| `emu/ppu.asm` | PPU register writes, nametable and palette drawing, CHR conversion, the split below the MMC3's scanline interrupt |
 | `emu/ppu_tables.asm` | Lookup tables for nametable drawing and CHR conversion |
 | `emu/vlines.asm` | Measures at startup how many lines the console draws a frame, and which line each V counter value means (clones such as AtGames' differ from a Mega Drive) |
 | `emu/apu.asm` | APU: NES sound translated to the PSG and YM2612 once per frame |
@@ -116,7 +123,7 @@ handheld's differences.
   drawing, so it goes by what the game does: sprite 0 hit is reported when the game polls for
   it, a poll that sees the hit flag clear marks the top of the screen, and delay loops count as
   the NES time they would take. Split-screen effects timed any other way can be off by a few
-  lines, and only horizontal splits are supported
+  lines, and only horizontal splits are supported, besides the MMC3 scanline interrupt's
 - Sound is approximate: no DMC (sample) channel, the PSG only plays 50% squares so pulse duty is
   approximated by volume, pulse notes below about 109 Hz play an octave up, and timing assumes
   an NTSC console
@@ -126,6 +133,16 @@ handheld's differences.
   to about 54-56 on a Mega Drive and 50-56 on the handheld, and on the handheld 2-1, 5-1 and 6-1
   to about 56-59. Interpreted, it runs at about a tenth of full speed, and its story screen
   garbles some text lines: its menu code assumes it never runs late
+- Super Mario Bros. 3 splits the screen more than once a frame in its levels with water along the
+  bottom or a water line, and in its spade bonus game: those show only the first split. Sprites
+  that are partly below its status bar's top line show whole or not at all. Recompiled, World
+  1-1 runs at 60 game frames per second where it's quiet and while it scrolls, and about 55-58
+  where several enemies are on screen (its status bar's split costs about 2-3 of those where it's
+  busiest), and the black screen before a level lasts about 50 frames (20 on a NES).
+  Interpreted, it runs at about a tenth of full speed and can't enter a level: its NMI handler
+  outlasts a frame, and the next NMI reads the pads again before the game takes the A button.
+  Interpreted, skipping its intro with Start while the curtain rises also leaves part of the
+  title screen undrawn
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its

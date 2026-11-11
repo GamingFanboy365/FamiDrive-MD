@@ -8,9 +8,24 @@ supported; for a ROM too broken to read here, this writes zeros.
 For an MMC3 game with CHR-ROM it also writes chr_md.bin next to OUT_ASM: the CHR-ROM as MD
 tiles, for the BG and then for sprites (CHR_MD in md.asm), which its bank switches copy
 instead of converting; then a word for each tile, its ID: the number of the first tile
-like it (CHR_ID), by which they tell the tiles that change (chrUpdate in emu/ppu.asm)."""
+like it (CHR_ID), by which they tell the tiles that change (chrUpdate in emu/ppu.asm).
+
+For an MMC3 game it also tells, from its code, whether it puts the MMC3 in PRG mode 1
+(8 KB banks at $A000 and $C000, as Super Mario Bros. 3: PRG_MODE1 in md.asm) and whether
+it turns the scanline IRQ on (MMC3_IRQ)."""
 import os
+import re
 import sys
+
+
+def mmc3_use(prg):
+    """(PRG mode 1, IRQ): in the code, an immediate value with bit 6 set stored to
+    $8000 (bank select: LDA/LDX/LDY #, STA/STX/STY), and a store to $E001 (IRQ
+    enable). (tools/recomp6502.py looks for the same.)"""
+    mode1 = any(m.group(1)[0] & 0x40 for m in re.finditer(rb'[\xA9\xA2\xA0](.)[\x8D\x8E\x8C]\x00\x80', prg, re.S))
+    irq = re.search(rb'[\x8D\x8E\x8C]\x01\xE0', prg) is not None
+    return mode1, irq
+
 
 rom = open(sys.argv[1], 'rb').read()
 mapper = prg16 = chr8 = 0
@@ -31,6 +46,9 @@ with open(sys.argv[2], 'w') as out:
     out.write('NES_MAPPER\tequ %d\n' % mapper)
     out.write('NES_PRG16\tequ %d\t\t; PRG-ROM in 16 KB banks\n' % prg16)
     out.write('NES_CHR8\tequ %d\t\t; CHR-ROM in 8 KB banks (0: CHR-RAM)\n' % chr8)
+    mode1, irq = mmc3_use(rom[16:16 + prg16 * 0x4000]) if mapper == 4 and prg16 else (False, False)
+    out.write('NES_MMC3_PRG1\tequ %d\t\t; MMC3 PRG mode 1: banks at $A000 and $C000\n' % mode1)
+    out.write('NES_MMC3_IRQ\tequ %d\t\t; MMC3 scanline IRQ\n' % irq)
 
 # MD tiles: 4 bits a pixel, the leftmost in the high bits (as ppuChrSpread in
 # emu/ppu_tables.asm makes them); NES colors 0-3, sprites' opaque ones +8
