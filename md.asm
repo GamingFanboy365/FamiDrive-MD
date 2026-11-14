@@ -570,26 +570,6 @@ MD_Vint:
 		move.w	#$8F02,4(a6)
 		move.l	#$40000010,4(a6)
 		move.l	(a0),(a6)
-		if MMC3_IRQ
-		move.w	partLine(a4),d0			; a strip of other rows above the split
-		bne.s	.part				; (splitNext): the line interrupt before
-		move.w	partLinePrev(a4),d0		; its first line sets the planes' vertical
-.part:							; scroll for it (MD_Hint)
-		move.w	d0,partOn(a4)
-		beq.s	.part_off
-		ori.w	#$8A00,d0
-		move.w	d0,4(a6)
-		bset	#4,vdpReg00+1(a4)		; line interrupts on
-		bne.s	.part_done
-		move.w	vdpReg00(a4),4(a6)
-		bra.s	.part_done
-.part_off:
-		bclr	#4,vdpReg00+1(a4)		; and off
-		beq.s	.part_done
-		move.w	vdpReg00(a4),4(a6)
-		move.w	#$8ADF,4(a6)
-.part_done:
-		endif
 		lea	vdpSprData(a4),a0		; its sprite table
 		adda.w	d2,a0
 		if FPS
@@ -661,6 +641,24 @@ MD_Vint:
 		jsr	(chrVblank).l			; MMC3: tiles that changed (chrUpdate)
 		if MMC3_IRQ
 		jsr	(splitVblank).l			; and below the IRQ's line: the window
+		move.w	partLine(a4),d0			; a strip of other rows above the split
+		bne.s	.part				; (splitNext): the line interrupt before
+		move.w	partLinePrev(a4),d0		; its first line sets the planes' vertical
+.part:							; scroll for it (MD_Hint). (After the
+		move.w	d0,partOn(a4)			; tiles: chrVblank has the time before
+		beq.s	.part_off			; the screen starts.)
+		ori.w	#$8A00,d0
+		move.w	d0,4(a6)
+		bset	#4,vdpReg00+1(a4)		; line interrupts on
+		bne.s	.part_done
+		move.w	vdpReg00(a4),4(a6)
+		bra.s	.part_done
+.part_off:
+		bclr	#4,vdpReg00+1(a4)		; and off
+		beq.s	.part_done
+		move.w	vdpReg00(a4),4(a6)
+		move.w	#$8ADF,4(a6)
+.part_done:
 		endif
 		endif
 		bsr.w	apuUpdate			; needs the Z80 bus

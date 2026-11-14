@@ -27,13 +27,20 @@ finished in #1 to #6.
   with R7 = $1D, 52 frames in), which is ignored, so it runs the wrong code
   from there (a black screen, with sound). PRG mode 1, 8 KB banks at $A000
   and $C000, is (Super Mario Bros. 3: PRG_FRAMES, `mmc3Prg1`), but a game
-  can't switch between the modes. The scanline IRQ is taken once a frame, when the
-  NMI handler returns, and what its handler sets up below its line shows in
-  the window plane, from the first whole cell row (`splitDone`). Not yet:
-  more IRQs a frame (Super Mario Bros. 3's 32-pixel partition, water line
-  and spade game: with the water line, as in World 3-2, the status bar
-  shows garbled), a horizontal scroll below the split, and other sprite
-  tiles below it (sprites there are hidden when the handler switches them).
+  can't switch between the modes. The scanline IRQ is taken when the NMI
+  handler returns, and again in the same frame where its handler leaves it
+  on (`splitNext`: Super Mario Bros. 3's 32-pixel partition, water line and
+  spade game), not by a count of lines: a handler's own time before it sets
+  the counter again isn't known, so an IRQ after a `$C001` reload is put at
+  the next cell row's first line. What the frame's last handler sets up
+  below its line shows in the window plane, from the first whole cell row
+  (`splitDone`); an earlier one's X scroll, `$2006` rows (one such strip a
+  frame, by a line interrupt: `MD_Hint`) and hidden sprites show down to the
+  next, its background tiles don't. The line interrupt's vertical scroll
+  is from the next line in Genesis Plus GX; on a console it may come a
+  line later. Not yet: a horizontal scroll below the last split, and other
+  sprite tiles below a split (sprites there are hidden when the handler
+  switches them).
   Recompiled, Super Mario Bros. 3's split costs about 4% of the time (2-3
   frames a second where it's busiest), most of it the handler's own code
   and its PPU and mapper writes: `splitDone` only works when something it

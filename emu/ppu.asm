@@ -1790,7 +1790,9 @@ chrDma:
 ; the window plane (cells at splitWinBase), with a tile set of its own
 ; (splitTiles), from the first whole MD cell row there. Sprites there
 ; are hidden (sprHideY) if it switched their tiles too (Super Mario
-; Bros. 3 does, to blank ones, in its levels).
+; Bros. 3 does, to blank ones, in its levels). A handler that leaves
+; the IRQ on is followed by another in the same frame (splitNext): the
+; window is the last one's.
 ; ----------------------------------------------------------------
 
 ; The IRQ is taken: the split begins with the CHR as it is, or for one
