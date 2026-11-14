@@ -23,18 +23,31 @@ finished in #1 to #6.
 - [ ] **Reset state.** The 6502 starts with SP = `$00` and I clear; after reset
   it should be SP = `$FD` with I set.
 - [ ] **MMC3: more of it.** In PRG mode 0, only R6 and R7 as a 16 KB pair are
-  supported (`mmc3Write`, PRG_IMAGES); PRG mode 1, 8 KB banks at $A000 and
-  $C000, is (Super Mario Bros. 3: PRG_FRAMES, `mmc3Prg1`), but a game can't
-  switch between the modes. The scanline IRQ is taken once a frame, when the
+  supported (`mmc3Write`, PRG_IMAGES): Mega Man 3 picks them apart (R6 = $18
+  with R7 = $1D, 52 frames in), which is ignored, so it runs the wrong code
+  from there (a black screen, with sound). PRG mode 1, 8 KB banks at $A000
+  and $C000, is (Super Mario Bros. 3: PRG_FRAMES, `mmc3Prg1`), but a game
+  can't switch between the modes. The scanline IRQ is taken once a frame, when the
   NMI handler returns, and what its handler sets up below its line shows in
   the window plane, from the first whole cell row (`splitDone`). Not yet:
   more IRQs a frame (Super Mario Bros. 3's 32-pixel partition, water line
-  and spade game), a horizontal scroll below the split, and other sprite
+  and spade game: with the water line, as in World 3-2, the status bar
+  shows garbled), a horizontal scroll below the split, and other sprite
   tiles below it (sprites there are hidden when the handler switches them).
   Recompiled, Super Mario Bros. 3's split costs about 4% of the time (2-3
   frames a second where it's busiest), most of it the handler's own code
   and its PPU and mapper writes: `splitDone` only works when something it
   reads changed.
+- [ ] **An NMI during the NMI handler.** A VBlank that comes while the NMI
+  handler runs is held until its RTI (`famiVInt`, `rcNmiDue`: `.late`), so
+  a slow frame doesn't look like a lag frame to the game. Life Force runs
+  the game in its handler and waits there for sprite 0's hit; on a stage's
+  first frame sprite 0 isn't up yet, and on a NES the next NMI, taken inside
+  the handler, ends the wait (its $1B says one is running). Here it waits
+  forever (a black screen after the title). With such an NMI let through
+  while sprite 0 is hidden, the game plays; its status bar, a split at
+  sprite 0 to other nametable rows at the bottom of the screen, doesn't
+  show.
 - [ ] **Other CHR switches.** MMC3 bank switches copy tiles made with the ROM
   (`chrUpdate`), but a new BG pattern table (`chrLoadBg`) and CNROM's 8 KB
   switches still convert every tile, which takes several frames.
