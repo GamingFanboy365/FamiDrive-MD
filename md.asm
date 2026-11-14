@@ -101,7 +101,8 @@ cpuFamiVint	ds.w 1;equ -$30
 cpuInputData	ds.w 2;equ -$28
 padState	ds.w 2			; pads as NES buttons, read each VBlank
 cpuModeDec	ds.w 1;equ -$22
-cpuFlag2	ds.w 1;equ -$20
+ppuSp0Wait	ds.w 1			; $2002 reads with sprite 0 hidden since the first from the same place (to 7);
+					; bit 15: the NMI handler waits there for its hit: the next NMI is taken in it (rdPPU_Status)
 cpuModeIntDis	ds.w 1;equ -$1E
 ppuNTblBase	ds.w 1;equ -$1A
 ppuChrBank	ds.w 1;equ -$18
@@ -968,10 +969,17 @@ famiVInt:
 		clr.w	FamiMdVint(a4)
 		move.w	#$80,ppuStatus(a4)
 		tst.w	cpuFamiVint(a4)		; in the NMI handler: the next NMI
-		bne.s	.late			; when it returns (mos_RTI)
+		beq.s	.first			; when it returns (mos_RTI), unless
+		bclr	#7,ppuSp0Wait(a4)	; the handler waits for a sprite 0
+		beq.s	.late			; hit that this NMI must end
+		tst.w	ppuNmiFlag(a4)		; (rdPPU_Status)
+		beq.s	.late
+		clr.w	vbLate(a4)
+		bra.s	.take
+.first:
 		tst.w	ppuNmiFlag(a4)
 		beq.s	emuVint
-
+.take:
 		jmp	doVint			; NMI: out of line, see after cpu.asm
 .late:
 		move.w	#1,vbLate(a4)
@@ -1001,11 +1009,14 @@ emuVint:
 ; Take the NMI (from famiVInt)
 doVint:
 		move.l	#emuVint,(RAM_EmuLoop+2).l
-		move.w	#1,cpuFamiVint(a4)
 		if MMC3_IRQ
+		tst.w	cpuFamiVint(a4)			; (one taken in the handler: saved already)
+		bne.s	.in_handler
 		move.w	cpuInIrq(a4),irqNmiSave(a4)	; (the NMI handler's writes are above the split)
 		clr.w	cpuInIrq(a4)
+.in_handler:
 		endif
+		addq.w	#1,cpuFamiVint(a4)		; (how many NMI handlers deep)
 		bsr.w	ppuFrameStart
 
 		bsr	famiGetP		; Save PC and P (B clear)
