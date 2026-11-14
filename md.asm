@@ -228,8 +228,16 @@ mmc3RegsSplit	ds.b 8			; the CHR registers below the split
 sprHideY	ds.w 1			; OAM DMA: sprites from this Y on are hidden ($E7, or the split's)
 ppuCellAddr	ds.w 1			; the nametable byte ppuDrwCell draws (for the window)
 splitKeyOk	ds.w 1			; 1: splitKey holds what splitDone read last time, and what it set is so
-splitKey	ds.b 26			; (BG banks R0, R1 or R2-R5, mmc3RegsSplit R0-R5, the sprites' mmc3Regs,
-					; irqLine, splitV, splitCtrlX, ppuSprWide, vdpScrlY, ppuNTblBase)
+splitKey	ds.b 28			; (BG banks R0, R1 or R2-R5, mmc3RegsSplit R0-R5, the sprites' mmc3Regs,
+					; irqLine, splitV, splitCtrlX, ppuSprWide, partHideY, vdpScrlY, ppuNTblBase)
+irqEn		ds.w 1			; in the IRQ handler: 1 while the IRQ is on ($E000, $E001 there): another
+irqCount	ds.w 1			; comes this frame, irqLatch lines on (splitNext); how many more have
+splitScrX	ds.w 1			; the IRQ handler's $2005 X scroll ($FFFF: none)
+partHideY	ds.w 1			; sprites hidden from this Y by an IRQ handler before the frame's last ($E7: none)
+partLine	ds.w 1			; such a handler's $2006 rows (splitNext): the MD line before their first (0: none),
+partLinePrev	ds.w 1			; the last game frame's,
+partVs		ds.l 1			; and the planes' vertical scroll from there (MD_Hint)
+partOn		ds.w 1			; this MD frame's line interrupt is still to set it (MD_Vint)
 splitVarsEnd	equ *
 		finish
 		if splitVarsEnd>RAM_Fami_Split-RAM_Fami_Emu+$100
@@ -561,6 +569,26 @@ MD_Vint:
 		move.w	#$8F02,4(a6)
 		move.l	#$40000010,4(a6)
 		move.l	(a0),(a6)
+		if MMC3_IRQ
+		move.w	partLine(a4),d0			; a strip of other rows above the split
+		bne.s	.part				; (splitNext): the line interrupt before
+		move.w	partLinePrev(a4),d0		; its first line sets the planes' vertical
+.part:							; scroll for it (MD_Hint)
+		move.w	d0,partOn(a4)
+		beq.s	.part_off
+		ori.w	#$8A00,d0
+		move.w	d0,4(a6)
+		bset	#4,vdpReg00+1(a4)		; line interrupts on
+		bne.s	.part_done
+		move.w	vdpReg00(a4),4(a6)
+		bra.s	.part_done
+.part_off:
+		bclr	#4,vdpReg00+1(a4)		; and off
+		beq.s	.part_done
+		move.w	vdpReg00(a4),4(a6)
+		move.w	#$8ADF,4(a6)
+.part_done:
+		endif
 		lea	vdpSprData(a4),a0		; its sprite table
 		adda.w	d2,a0
 		if FPS
@@ -677,8 +705,21 @@ MD_Vint:
 ; HBlank
 ; ----------------------------------------------------------------
 
+; ppuMeasureLines counts them. With MMC3's IRQ (MMC3_IRQ), one comes
+; on the line before a strip of other nametable rows begins (partLine,
+; from MD_Vint): the planes' vertical scroll for the strip, from the
+; next line on, and no more this frame.
 MD_Hint:
-		addq.w	#1,(RAM_HintCount).w	; only on while ppuMeasureLines runs
+		addq.w	#1,(RAM_HintCount).w
+		if MMC3_IRQ
+		tst.w	(RAM_Fami_Emu+partOn).l
+		beq.s	.done
+		clr.w	(RAM_Fami_Emu+partOn).l
+		move.l	#$40000010,($C00004).l
+		move.l	(RAM_Fami_Emu+partVs).l,($C00000).l
+		move.w	#$8AFF,($C00004).l
+.done:
+		endif
 		rte
 
 ; ====================================================================

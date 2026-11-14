@@ -578,8 +578,9 @@ mmc3Chr:
 ; MMC3's scanline IRQ (MMC3_IRQ): $C000 its line, $C001 reload (the
 ; counter isn't kept: the IRQ comes when the NMI handler returns, for
 ; the line $E001 set, see irqDue and splitDone), $E000 off, $E001
-; on. One is taken a frame: in the IRQ handler, $E000 and $E001 are
-; for the next, which the NMI handler sets. Recompiled code calls
+; on. In the IRQ handler, $E000 and $E001 say whether another comes
+; this frame, $C000's lines further down (irqEn: splitNext); the next
+; frame's first is the NMI handler's to set. Recompiled code calls
 ; these directly (value in d7).
 ; --------------------------------------------------------
 
@@ -601,17 +602,21 @@ mmc3WrIrqReload:
 
 mmc3WrIrqOff:
 		tst.w	cpuInIrq(a4)
-		bne.s	.done
+		bne.s	.in_irq
 		clr.w	irqOn(a4)
-.done:
+		emuNext
+.in_irq:
+		clr.w	irqEn(a4)
 		emuNext
 
 mmc3WrIrqOn:
 		tst.w	cpuInIrq(a4)
-		bne.s	.done
+		bne.s	.in_irq
 		move.w	#1,irqOn(a4)
 		move.w	irqLatch(a4),irqLine(a4)
-.done:
+		emuNext
+.in_irq:
+		move.w	#1,irqEn(a4)
 		emuNext
 		endif
 

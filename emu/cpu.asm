@@ -2220,8 +2220,10 @@ mos_RTI:
 		add.l 	d6,a0
 		endif
 		if MMC3_IRQ
-		tst.w	cpuInIrq(a4)		; the IRQ handler's (MMC3_IRQ): what's
-		beq.s	.not_irq		; below its line, as it set it
+		tst.w	cpuInIrq(a4)		; the IRQ handler's (MMC3_IRQ): the
+		beq.s	.not_irq		; next one this frame, if it left one
+		bsr.w	splitNext		; on (splitNext), or what's below its
+		bne.w	irqTake			; line, as it set it
 		clr.w	cpuInIrq(a4)
 		bsr.w	splitDone
 .not_irq:
