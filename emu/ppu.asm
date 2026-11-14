@@ -1811,16 +1811,20 @@ splitBegin:
 		clr.w	irqOn(a4)		; (the next frame's: the NMI handler sets it)
 		move.w	#1,cpuInIrq(a4)
 		move.w	#1,irqEn(a4)		; (on, as it came: the handler's $E000 ends it)
+		clr.w	irqReload(a4)
 		rts
 
 ; The IRQ handler returned. If it left the IRQ on, the next comes this
 ; frame, the latch's lines further down: Super Mario Bros. 3 takes one
 ; where a level's water line or the strip along its bottom begins, or
 ; for each row of its spade game, and each sets the next up, the last
-; for the status bar. The handler takes a few lines before it sets the
-; counter again, which aren't counted here: the next one's line is the
-; first of the next cell row (the window begins on one). What this
-; handler set is for the lines down to there, as far as the MD can
+; for the status bar. Left to count on, the counter takes the latch's
+; lines and one more (the spade game's rows, 53 lines each). Started
+; again with $C001 (irqReload), it counts from where the handler is by
+; then, a few lines on (the water line's and the strip's handlers wait
+; in delay loops first), which aren't counted here: that IRQ's line is
+; taken as the first of the next cell row, where the window can begin.
+; What this handler set is for the lines down to there, as far as the MD can
 ; show it: sprites hidden from its line if it switched their tiles
 ; (partHideY: splitDone, the OAM DMA), its X scroll as a split (hsCur),
 ; and the nametable rows its $2006 points at, for the first handler
@@ -1835,8 +1839,12 @@ splitNext:
 		bcc.w	.last
 		move.w	irqLine(a4),d6
 		add.w	irqLatch(a4),d6
-		addq.w	#8,d6			; (+1, and up to a cell row's first line)
+		addq.w	#1,d6
+		tst.w	irqReload(a4)
+		beq.s	.line
+		addq.w	#7,d6			; (up to a cell row's first line)
 		andi.w	#$FFF8,d6
+.line:
 		cmpi.w	#232,d6			; (the MD shows NES lines 8-231)
 		bcc.w	.last
 		movem.l	d0-d5/a5,-(sp)

@@ -597,7 +597,9 @@ mmc3WrIrq:
 
 mmc3WrIrqLatch:
 		move.b	d7,irqLatch+1(a4)
+		emuNext
 mmc3WrIrqReload:
+		move.w	cpuInIrq(a4),irqReload(a4)	; (in the IRQ handler: splitNext)
 		emuNext
 
 mmc3WrIrqOff:

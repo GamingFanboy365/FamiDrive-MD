@@ -232,6 +232,7 @@ splitKey	ds.b 28			; (BG banks R0, R1 or R2-R5, mmc3RegsSplit R0-R5, the sprites
 					; irqLine, splitV, splitCtrlX, ppuSprWide, partHideY, vdpScrlY, ppuNTblBase)
 irqEn		ds.w 1			; in the IRQ handler: 1 while the IRQ is on ($E000, $E001 there): another
 irqCount	ds.w 1			; comes this frame, irqLatch lines on (splitNext); how many more have
+irqReload	ds.w 1			; and 1: the handler wrote $C001, which starts the count again from there
 splitScrX	ds.w 1			; the IRQ handler's $2005 X scroll ($FFFF: none)
 partHideY	ds.w 1			; sprites hidden from this Y by an IRQ handler before the frame's last ($E7: none)
 partLine	ds.w 1			; such a handler's $2006 rows (splitNext): the MD line before their first (0: none),
