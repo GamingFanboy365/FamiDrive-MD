@@ -38,16 +38,22 @@ finished in #1 to #6.
   frames a second where it's busiest), most of it the handler's own code
   and its PPU and mapper writes: `splitDone` only works when something it
   reads changed.
-- [ ] **An NMI during the NMI handler.** A VBlank that comes while the NMI
-  handler runs is held until its RTI (`famiVInt`, `rcNmiDue`: `.late`), so
-  a slow frame doesn't look like a lag frame to the game. Life Force runs
-  the game in its handler and waits there for sprite 0's hit; on a stage's
-  first frame sprite 0 isn't up yet, and on a NES the next NMI, taken inside
-  the handler, ends the wait (its $1B says one is running). Here it waits
-  forever (a black screen after the title). With such an NMI let through
-  while sprite 0 is hidden, the game plays; its status bar, a split at
-  sprite 0 to other nametable rows at the bottom of the screen, doesn't
-  show.
+- [ ] **Life Force: what's left.** It plays now, recompiled (an NMI taken
+  in its NMI handler where it waits for a sprite 0 hit that can't come:
+  `rdPPU_Status`, `ppuSp0Wait`; its sprites off below the status bar's
+  split: `wrPPU_Mask`). Its first stage runs at about 47-51 game frames a
+  second: it does its whole frame in the NMI handler, which here takes
+  longer than an MD frame. Its vertical stage, as far as the attract demo
+  shows it, has no status bar (not looked into; only horizontal scroll
+  splits are supported). Sprite 0, a blue block at the status bar's left end, shows,
+  though its attributes put it behind the background. Only the first
+  stage and the demo were looked at.
+- [ ] **An NMI during the NMI handler, elsewhere.** A VBlank that comes
+  while the NMI handler runs is held until its RTI (`famiVInt`, `rcNmiDue`:
+  `.late`), so a slow frame here isn't a lag frame to the game. The one
+  let through is for a handler polling $2002 with sprite 0 hidden (Life
+  Force). A game that counts on one anywhere else (a handler that never
+  returns, say) still waits.
 - [ ] **Other CHR switches.** MMC3 bank switches copy tiles made with the ROM
   (`chrUpdate`), but a new BG pattern table (`chrLoadBg`) and CNROM's 8 KB
   switches still convert every tile, which takes several frames.
@@ -126,5 +132,5 @@ finished in #1 to #6.
 
 ## Cleanup
 
-- [ ] **Unused leftovers.** `cpuFlag2` is never read, and the `trap #2` in
-  `romGrabPrg` can't be reached now that `Fami_LoadRom` checks the PRG size.
+- [ ] **Unused leftovers.** The `trap #2` in `romGrabPrg` can't be reached
+  now that `Fami_LoadRom` checks the PRG size.

@@ -427,14 +427,24 @@ rcNmiDue:
 		clr.w	nmiWaitDue(a4)
 		move.w	#$80,ppuStatus(a4)
 		tst.w	cpuFamiVint(a4)		; already in the NMI handler: the
-		bne.w	.late			; next NMI when it returns (rcRti)
+		beq.s	.first			; next NMI when it returns (rcRti),
+		bclr	#7,ppuSp0Wait(a4)	; unless the handler waits for a
+		beq.w	.late			; sprite 0 hit that this NMI must end
+		tst.w	ppuNmiFlag(a4)		; (rdPPU_Status): taken in it, as on
+		beq.w	.late			; a NES
+		clr.w	vbLate(a4)
+		bra.s	.on
+.first:
 		tst.w	ppuNmiFlag(a4)
 		beq.w	.none
+.on:
 		move.w	d5,nmiHold(a4)
 		subq.w	#1,nmiCredit(a4)	; (one for each VBlank)
 		bpl.s	.take
 		clr.w	nmiCredit(a4)
 .take:
+		tst.w	cpuFamiVint(a4)		; (in the handler: the copy its own
+		bne.s	.fresh			; NMI came in is still to go back to)
 		tst.w	rcNestPc(a4)		; a copy's NMI whose handler went on
 		beq.s	.fresh			; elsewhere: what rcDispatch goes
 		move.l	a5,d6			; back to as it was before it
@@ -448,19 +458,24 @@ rcNmiDue:
 		addq.l	#4,sp			; not returning
 		bra.s	.go
 .nest:
-		move.l	a5,-(sp)		; a routine's copy: kept, with a5,
-		move.l	(RAM_RcStack).w,-(sp)	; under where rcDispatch goes back
-		move.l	sp,(RAM_RcStack).w	; to (and that, for rcRti)
+		move.l	a5,-(sp)		; a routine's copy: kept, with a5
+		move.l	rcNestPc(a4),-(sp)	; (and the copy the handler this one
+		move.l	(RAM_RcStack).w,-(sp)	; is taken in came in: rcNestPc and
+		move.l	sp,(RAM_RcStack).w	; rcNestSp), under where rcDispatch
+						; goes back to (and that, for rcRti)
 		move.w	d4,rcNestPc(a4)		; and where the RTI that comes back
 		move.l	d3,d6			; to it goes on
 		swap	d6
 		move.w	d6,rcNestSp(a4)
 .go:
-		move.w	#1,cpuFamiVint(a4)
 		if MMC3_IRQ
+		tst.w	cpuFamiVint(a4)			; (one taken in the handler: saved already)
+		bne.s	.in_handler
 		move.w	cpuInIrq(a4),irqNmiSave(a4)	; (the NMI handler's writes are above the split)
 		clr.w	cpuInIrq(a4)
+.in_handler:
 		endif
+		addq.w	#1,cpuFamiVint(a4)		; (how many NMI handlers deep)
 		jsr	ppuFrameStart
 		swap	d3			; push PC
 		move.w	d4,d6
@@ -506,7 +521,11 @@ rcRti:
 		bra.s	.resume
 .nmi:
 		endif
-		clr.w	cpuFamiVint(a4)
+		tst.w	cpuFamiVint(a4)
+		beq.s	.outer
+		subq.w	#1,cpuFamiVint(a4)	; of an NMI taken in the NMI handler
+		bne.w	.back			; (rcNmiDue): back in that handler
+.outer:
 		tst.w	nmiCredit(a4)
 		beq.s	.none_due
 		move.w	#1,nmiWaitDue(a4)
@@ -532,6 +551,7 @@ rcRti:
 		beq.s	rcIrq
 .resume:
 		endif
+.back:
 		tst.w	rcNestPc(a4)		; where a routine's copy took the NMI
 		beq.s	.dispatch		; (rcNmiIn), at the same 6502 stack:
 		cmp.w	rcNestPc(a4),d4		; back into the copy
@@ -540,16 +560,19 @@ rcRti:
 		swap	d6
 		cmp.w	rcNestSp(a4),d6
 		bne.s	.dispatch
-		clr.w	rcNestPc(a4)
 		movea.l	(RAM_RcStack).w,sp
 		move.l	(sp)+,(RAM_RcStack).w
+		move.l	(sp)+,rcNestPc(a4)	; (none, or the outer handler's)
 		movea.l	(sp)+,a5
 		rts
 .dispatch:
 		tst.w	rcNmiInterp(a4)		; taken while interpreting (rcInterpStep):
 		beq.w	rcDispatch		; go on interpreting there, as the code
-		clr.w	rcNmiInterp(a4)		; there may be translated but not an
-		tst.w	d4			; entry
+		tst.w	cpuFamiVint(a4)		; there may be translated but not an
+		bne.s	.interp			; entry (back in an outer NMI handler,
+		clr.w	rcNmiInterp(a4)		; either may have been: for its RTI too)
+.interp:
+		tst.w	d4
 		bpl.w	rcDispatch		; (in RAM: rcDispatch interprets it)
 		if PRG_MODE1
 		move.w	d4,d6

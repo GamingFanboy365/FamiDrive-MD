@@ -143,6 +143,9 @@ handheld's differences.
   outlasts a frame, and the next NMI reads the pads again before the game takes the A button.
   Interpreted, skipping its intro with Start while the curtain rises also leaves part of the
   title screen undrawn
+- Life Force (mapper 2) plays recompiled, at about 47-51 game frames per second in its first
+  stage. Its vertical stage shows no status bar (seen in the attract demo, not looked into yet),
+  and only its first stage and the demo were tried
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its

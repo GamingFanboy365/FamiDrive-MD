@@ -147,10 +147,25 @@ rdPPU_Status:
 	; Other reads, such as resetting the address latch before $2006
 	; writes, see it as it is. Scroll changes after the hit are splits
 	; (ppuXChanged), timed from sprite 0's line.
+	;
+	; With sprite 0 hidden there is no hit this frame. A game that runs
+	; in its NMI handler and waits there for the hit (Life Force, on a
+	; stage's first frame: its sprites go up at the handler's start,
+	; sprite 0 among them only from the next) waits on a NES until the
+	; next VBlank's NMI, which it takes in the handler; that one does
+	; the frame's work and ends the wait. Elsewhere an NMI waits for
+	; the handler's RTI (rcNmiDue, famiVInt: a slow frame here is no lag
+	; frame to the game). So reads with sprite 0 hidden are counted
+	; while they come from the same place (ppuSp0Wait; a $2006 write
+	; between two, as after a read for the latch, starts again), and
+	; after 8 in a row, a loop, each one in the NMI handler with NMIs
+	; on and a VBlank come since the handler began asks for that NMI at
+	; the loop's next check (ppuSp0Wait's bit 15, which the check
+	; clears).
 		move.w	#$2700,sr
 		move.w	ppuSp0Ypos(a4),d4
 		cmpi.w	#$EF,d4
-		bcc.w	.no_hit
+		bcc.w	.hidden
 		move.l	d5,-(sp)
 		move.l	4(sp),d5		; the caller's return address, plus the
 		add.l	a0,d5			; 6502 PC when interpreted: which read
@@ -215,6 +230,36 @@ rdPPU_Status:
 		move.w	d7,ppuRdLast(a4)
 		move.w	#$2000,sr
 		rts
+
+; Sprite 0 is hidden: does the NMI handler wait here for its hit?
+.hidden:
+		move.l	(sp),d4			; where this read is (as above)
+		add.l	a0,d4
+		cmp.l	ppuRdSite(a4),d4
+		beq.s	.hid_again
+		move.l	d4,ppuRdSite(a4)
+		clr.w	ppuSp0Wait(a4)
+		bra.w	.no_hit
+.hid_again:
+		cmpi.w	#7,ppuSp0Wait(a4)	; (7 more from there, or asked already)
+		bcc.s	.hid_loop
+		addq.w	#1,ppuSp0Wait(a4)
+		bra.w	.no_hit
+.hid_loop:
+		tst.w	cpuFamiVint(a4)
+		beq.w	.no_hit
+		tst.w	ppuNmiFlag(a4)
+		beq.w	.no_hit
+		move.w	FamiMdVint(a4),d6	; (a VBlank since: one due, held back
+		or.w	vbLate(a4),d6		; or due where the game waits)
+		or.w	nmiWaitDue(a4),d6
+		beq.w	.no_hit
+		bset	#7,ppuSp0Wait(a4)
+		move.w	#1,FamiMdVint(a4)
+		if RECOMP=0
+		move.l	#emuLoop,(RAM_EmuLoop+2).l	; (the loop checks for it again)
+		endif
+		bra.w	.no_hit
 ; ----------------------------------------------------------------
 
 rdPPU_OamData:

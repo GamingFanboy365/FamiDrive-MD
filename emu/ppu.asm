@@ -121,9 +121,21 @@ wrPPU_Mask:
 	; The VDP side waits for VBlank: a game running slower than the NES
 	; can write $2001 (rendering off for its VRAM updates) mid-screen,
 	; which on the MD would blank the lines being drawn.
+	; A write in the NMI handler once the game saw sprite 0's hit is for
+	; the lines below it, not the screen: Life Force, which runs in its
+	; handler, turns the sprites off there for its status bar, and on
+	; again at its next NMI. Taken for the screen's at a VBlank that
+	; came before that, its sprites were gone, for as long as VBlanks
+	; came there. The screen keeps the one before the hit.
+		tst.w	cpuFamiVint(a4)
+		beq.s	.screen
+		cmpi.w	#2,ppuSp0State(a4)
+		beq.s	.below
+.screen:
 		move.b	d7,d6
 		ori.w	#$8000,d6
 		move.w	d6,ppuMaskNew(a4)
+.below:
 		emuNext
 
 ; ----------------------------------------------------------------
@@ -445,6 +457,7 @@ ppuFrameStart:
 		clr.w	hsCurN(a4)
 		clr.w	ppuSp0State(a4)
 		clr.l	ppuRdSite(a4)
+		clr.w	ppuSp0Wait(a4)
 		clr.w	ppuScrollSet(a4)
 		move.w	(sp)+,sr
 		movem.l	(sp)+,d0/d5/a0-a1
