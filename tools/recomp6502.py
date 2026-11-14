@@ -3452,8 +3452,9 @@ class Gen:
 			if i.decided == 'taken':
 				return
 		elif i.m in ('JMP', 'RTS', 'RTI', 'BRK') or (i.m == 'JSR' and i.arg not in self.callable and
-							     (i.table or i.arg not in self.ext_routines)):
-			return
+							     (i.table or i.arg not in self.ext_routines) and
+							     not self.dyn_target(i)):
+			return			# (a JSR that leaves: one to a copy comes back here)
 		f = i.pc + i.n
 		if k + 1 >= len(pcs) or pcs[k + 1] != f:
 			self.e(*(['jmp %s' % self.lab(f)] if f in self.insns else ['jmp %s' % lab(f)] if f in self.ext else
