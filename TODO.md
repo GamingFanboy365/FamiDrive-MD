@@ -67,8 +67,15 @@ finished in #1 to #6.
 
 ## Sound
 
-- [ ] **DMC channel.** Sample playback (`$4010`-`$4013`) and direct output
-  (`$4011`) are ignored. Sample playback could use the YM2612 DAC.
+- [ ] **DMC channel (on hold for now).** Sample playback (`$4010`-`$4013`)
+  and direct output (`$4011`) are ignored. Sample playback could use the
+  YM2612 DAC: the Z80 only runs its startup stub and channel 6 is free, so
+  a small Z80 player could decode the samples from the ROM. Open questions:
+  the 68000 takes the Z80's bus each VBlank (sound writes, DMA), which
+  would make samples stutter; the fastest sample rates are tight for a
+  Z80; and how the DAC sounds on an AtGames handheld isn't known. Of the
+  games tried, Super Mario Bros. 3 plays samples (its drums); Mega Man 3
+  and Life Force don't.
 - [ ] **Low pulse notes.** Pulse notes below the PSG's range (about 109 Hz)
   fold up an octave in `apuPulseOut`. They could move to a spare FM channel.
 - [ ] **Pulse duty.** The PSG only plays 50% squares; 12.5%/25% pulses lose
