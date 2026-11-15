@@ -2404,7 +2404,10 @@ nmiTailEnd:
 ; handler's work then left for it), NMIs are held as for the handler's
 ; until it puts another there: on a NES that work is done long before
 ; the next NMI, which would come into it here and do it again, and
-; switch its banks away. One that came meanwhile comes then.
+; switch its banks away. Not one that came meanwhile then, but the next
+; VBlank's: Mega Man 3 puts its bank back before it marks its switch
+; done ($F6), and the handler's work, which an NMI there would find it
+; in, would leave the sound work to it again, and so on each frame.
 ; ----------------------------------------------------------------
 nmiTailR6:
 		tst.b	nmiTail(a4)
@@ -2422,10 +2425,6 @@ nmiTailR6:
 		beq.s	.handler
 		cmp.b	nmiTailBank+1(a4),d7	; the game's: done with that bank?
 		beq.s	.done
-		cmpi.b	#1,nmiTail(a4)		; (one came meanwhile: now)
-		beq.s	.no_vblank
-		move.w	#1,FamiMdVint(a4)
-.no_vblank:
 		clr.b	nmiTail(a4)
 		clr.b	nmiTailMain(a4)
 		rts
