@@ -527,6 +527,15 @@ def jump_tables(prg, insns, foreign=None, loads=None):
 					pairs.append((table_load(insns[j]), table_load(i), 1))
 					break
 	found, rts = set(), set()
+	# a return address pushed as constants, LDA #hi / PHA / LDA #lo / PHA, for
+	# the routine jumped to next to return to (Mega Man 3: JMP ($0000))
+	for pc in order:
+		run = [insns.get(pc), insns.get(pc + 2), insns.get(pc + 3), insns.get(pc + 5)]
+		if all(run) and [(x.m, x.mode) for x in run] == [('LDA', 'imm'), ('PHA', None), ('LDA', 'imm'), ('PHA', None)]:
+			a = ((run[0].arg << 8 | run[2].arg) + 1) & 0xFFFF
+			if plausible_code(prg, a):
+				found.add(a)
+				rts.add(a)
 	for l, h, add in pairs:
 		if not (prg.const(l) and prg.const(h)):
 			if not (prg.const(l) or prg.const(h)) and prg.region(l) == prg.region(h):
@@ -3870,19 +3879,33 @@ def prg8_units(rom, extra):
 	output and the units."""
 	homes = slot_homes(rom)
 	fixed = Prg(rom, 'F')
-	slots = [Prg(rom, (s, b)) for s in 'AC' for b in sorted(homes) if homes[b] == s]
+	# (a bank with no sign of code, mostly data, in both slots: only where
+	# the fixed code goes there, whatever bank is there, and its bytes look
+	# like code for longer, as Mega Man 3's stage banks' routine at $9C00:
+	# its translated code's table takes 32 KB)
+	slots = [Prg(rom, (s, b)) for s in 'AC' for b in sorted(homes) if homes[b] in (s, None)]
+	data = {b.unit for b in slots if homes[b.unit[1]] is None}
 	fixed.peers = slots
 	for b in slots:
 		b.peers = [fixed] + [p for p in slots if p.slot != b.slot]
 	r6 = fixed.r6
 	win = {'F': tuple((lo, hi + 1) for lo, hi in fixed.regions), 'A': ((0xA000, 0xC000),), 'C': ((r6, r6 + 0x2000),)}
 	into = {s: set() for s in 'FAC'}
+	fin = {s: set() for s in 'AC'}		# (where the fixed code goes)
 	tab = {b.unit: set() for b in slots}	# and into each bank, from its jump tables other units load
+
+	def entries(b):
+		if b.unit in data:
+			return {a for a in fin[b.slot] if code_at(b, a, 24)}
+		return {a for a in into[b.slot] if code_at(b, a)} | tab[b.unit]
 	while True:
 		uf = analyze(fixed, extra, into['F'])
-		us = [uf] + [analyze(b, [], sorted({a for a in into[b.slot] if code_at(b, a)} | tab[b.unit])) for b in slots]
+		us = [uf] + [analyze(b, [], sorted(entries(b))) for b in slots]
 		new = {s: set() for s in 'FAC'}
 		newtab = {b.unit: set() for b in slots}
+		for s in 'AC':
+			for lo, hi in win[s]:
+				fin[s] |= outside(uf, lo, hi)
 		for u in us:
 			for s in 'FAC':
 				for lo, hi in win[s] if s != u['slot'] else ():
@@ -3901,6 +3924,9 @@ def prg8_units(rom, extra):
 			into[s] |= new[s]
 		for k in tab:
 			tab[k] |= newtab[k]
+	# (a data bank's few instructions aren't worth their table: interpreted)
+	us = [u if k == 0 or slots[k - 1].unit not in data or len(u['insns']) >= 16 else analyze(slots[k - 1], [], [])
+	      for k, u in enumerate(us)]
 	# flags live where one unit's code goes to another's (as for banks
 	# at $8000, main)
 	ents = [into['F']] + [u['entries'] for u in us[1:]]
