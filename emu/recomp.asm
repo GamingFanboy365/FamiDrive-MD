@@ -515,6 +515,11 @@ rcRti:
 		bne.s	.nmi			; below its line, as it set it
 		tst.w	cpuInIrq(a4)
 		beq.s	.resume
+		jsr	splitNext		; the next one this frame, if the handler
+		beq.s	.irq_last		; left one on
+		move.w	irqInterp(a4),rcNmiInterp(a4)
+		bra.w	rcIrq
+.irq_last:
 		clr.w	cpuInIrq(a4)
 		jsr	splitDone
 		move.w	irqInterp(a4),rcNmiInterp(a4)	; (on as the NMI handler's RTI went)

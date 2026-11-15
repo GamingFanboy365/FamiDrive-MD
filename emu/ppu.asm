@@ -183,8 +183,13 @@ ppuMaskApply:
 wrPPU_Scroll:
 		if MMC3_IRQ
 		tst.w	cpuInIrq(a4)		; in the IRQ handler: below its line,
-		beq.s	.main			; where the window doesn't scroll
-		eori.w	#1,ppuAddrLatch(a4)
+		beq.s	.main			; where the window doesn't scroll (its
+		eori.w	#1,ppuAddrLatch(a4)	; X is kept: if another IRQ follows,
+		beq.s	.irq_y			; the lines between scroll, splitNext)
+		move.w	d7,d4
+		andi.w	#$FF,d4
+		move.w	d4,splitScrX(a4)
+.irq_y:
 		emuNext
 .main:
 		endif
@@ -369,6 +374,9 @@ ppuLine:
 ppuMeasureLines:
 		movem.l	d0-d7/a0-a5,-(sp)
 		lea	(RAM_Fami_Emu).l,a4
+		if MMC3_IRQ
+		clr.w	partOn(a4)		; (MD_Hint: only counts here)
+		endif
 		move.w	#$8144,4(a6)		; display on (all black), no VBlank interrupts
 		move.w	#$8A63,4(a6)		; line interrupts every 100 lines
 		move.w	#$8014,4(a6)		; on
@@ -459,6 +467,10 @@ ppuFrameStart:
 		clr.l	ppuRdSite(a4)
 		clr.w	ppuSp0Wait(a4)
 		clr.w	ppuScrollSet(a4)
+		if MMC3_IRQ
+		move.w	partLine(a4),partLinePrev(a4)	; (a strip above the split: until this
+		clr.w	partLine(a4)			; frame's IRQs set it again, MD_Vint)
+		endif
 		move.w	(sp)+,sr
 		movem.l	(sp)+,d0/d5/a0-a1
 		rts
@@ -1778,18 +1790,171 @@ chrDma:
 ; the window plane (cells at splitWinBase), with a tile set of its own
 ; (splitTiles), from the first whole MD cell row there. Sprites there
 ; are hidden (sprHideY) if it switched their tiles too (Super Mario
-; Bros. 3 does, to blank ones, in its levels).
+; Bros. 3 does, to blank ones, in its levels). A handler that leaves
+; the IRQ on is followed by another in the same frame (splitNext): the
+; window is the last one's.
 ; ----------------------------------------------------------------
 
-; The IRQ is taken: the split begins with the CHR as it is
+; The IRQ is taken: the split begins with the CHR as it is, or for one
+; after the frame's first (splitNext; cpuInIrq is still set), as the
+; handler before it left it
 splitBegin:
-		move.w	#$FFFF,splitV(a4)
-		move.w	#$FFFF,splitCtrlX(a4)
+		tst.w	cpuInIrq(a4)
+		bne.s	.next
 		move.l	mmc3Regs(a4),mmc3RegsSplit(a4)
 		move.l	mmc3Regs+4(a4),mmc3RegsSplit+4(a4)
+		move.w	#$E7,partHideY(a4)
+		clr.w	irqCount(a4)
+.next:
+		move.w	#$FFFF,splitV(a4)
+		move.w	#$FFFF,splitCtrlX(a4)
+		move.w	#$FFFF,splitScrX(a4)
 		move.w	#1,splitSeen(a4)
-		clr.w	irqOn(a4)		; (one a frame: the NMI handler sets it)
+		clr.w	irqOn(a4)		; (the next frame's: the NMI handler sets it)
 		move.w	#1,cpuInIrq(a4)
+		move.w	#1,irqEn(a4)		; (on, as it came: the handler's $E000 ends it)
+		clr.w	irqReload(a4)
+		rts
+
+; The IRQ handler returned. If it left the IRQ on, the next comes this
+; frame, the latch's lines further down: Super Mario Bros. 3 takes one
+; where a level's water line or the strip along its bottom begins, or
+; for each row of its spade game, and each sets the next up, the last
+; for the status bar. Left to count on, the counter takes the latch's
+; lines and one more (the spade game's rows, 53 lines each). Started
+; again with $C001 (irqReload), it counts from where the handler is by
+; then, a few lines on (the water line's and the strip's handlers wait
+; in delay loops first), which aren't counted here: that IRQ's line is
+; taken as the first of the next cell row, where the window can begin.
+; What this handler set is for the lines down to there, as far as the MD can
+; show it: sprites hidden from its line if it switched their tiles
+; (partHideY: splitDone, the OAM DMA), its X scroll as a split (hsCur),
+; and the nametable rows its $2006 points at, for the first handler
+; that has one, with the planes' vertical scroll set at its line
+; (partLine, partVs: MD_Vint, MD_Hint), not its tiles. Up to 4 a frame.
+; Out: Z clear - another IRQ is taken now (irqLine is its line), Z set -
+; this was the frame's last (splitDone)
+splitNext:
+		tst.w	irqEn(a4)
+		beq.w	.last
+		cmpi.w	#3,irqCount(a4)
+		bcc.w	.last
+		move.w	irqLine(a4),d6
+		add.w	irqLatch(a4),d6
+		addq.w	#1,d6
+		tst.w	irqReload(a4)
+		beq.s	.line
+		addq.w	#7,d6			; (up to a cell row's first line)
+		andi.w	#$FFF8,d6
+.line:
+		cmpi.w	#232,d6			; (the MD shows NES lines 8-231)
+		bcc.w	.last
+		movem.l	d0-d5/a5,-(sp)
+		move.w	sr,-(sp)
+		move.w	#$2700,sr
+		move.w	irqLine(a4),d5		; this handler's line: what it set is
+		move.w	d6,irqLine(a4)		; from there on
+		addq.w	#1,irqCount(a4)
+	; sprites: hidden from its line if it switched their tiles (as splitDone)
+		move.b	ppuChrBank+1(a4),d0
+		move.b	mmc3Select+1(a4),d1
+		eor.b	d1,d0
+		lea	mmc3Regs+2(a4),a5	; the sprites' half: R2-R5,
+		moveq	#4-1,d2
+		tst.b	d0
+		bpl.s	.spr_banks
+		lea	mmc3Regs(a4),a5		; or R0, R1
+		moveq	#2-1,d2
+.spr_banks:
+		move.b	(a5)+,d3
+		cmp.b	mmc3RegsSplit-mmc3Regs-1(a5),d3
+		dbne	d2,.spr_banks
+		beq.s	.spr_shown
+		move.w	d5,d3
+		subq.w	#4,d3			; 8x8: 4 lines up
+		tst.w	ppuSprWide(a4)
+		beq.s	.spr_y
+		subq.w	#4,d3			; 8x16: 8
+.spr_y:
+		cmp.w	partHideY(a4),d3
+		bcc.s	.spr_shown
+		move.w	d3,partHideY(a4)
+.spr_shown:
+	; its $2006 rows: plane A's (nametables 0 and 1) or B's (2 and 3)
+	; scroll that puts their first line at this one, and the other
+	; plane's that puts its blank rows there (as wrPPU_Scroll)
+		move.w	splitV(a4),d0
+		cmpi.w	#$FFFF,d0
+		beq.s	.no_rows
+		tst.w	partLine(a4)		; (one strip a frame)
+		bne.s	.no_rows
+		move.w	d0,d1
+		lsr.w	#5,d1
+		andi.w	#31,d1
+		cmpi.w	#30,d1
+		bcc.s	.no_rows
+		lsl.w	#3,d1			; the row's first line in its plane,
+		move.w	d0,d2
+		rol.w	#4,d2
+		andi.w	#7,d2			; and fine Y
+		add.w	d2,d1
+		move.w	d5,d2
+		subq.w	#8,d2			; NES line L is MD line L-8
+		subq.w	#1,d2			; (the line interrupt's: the one before)
+		ble.s	.no_rows
+		move.w	d2,partLine(a4)
+		addq.w	#1,d2
+		sub.w	d2,d1
+		move.w	d1,d3
+		addi.w	#$110,d3
+		btst	#11,d0
+		beq.s	.plane_a
+		exg	d1,d3
+.plane_a:
+		move.w	d1,partVs(a4)
+		move.w	d3,partVs+2(a4)
+.no_rows:
+	; its X scroll, with its $2000's nametable X or the frame's: a split
+	; from its line, if that isn't the scroll there already
+		move.w	splitScrX(a4),d4
+		bmi.s	.no_scroll
+		move.w	ppuTX(a4),d3
+		andi.w	#$100,d3
+		move.w	splitCtrlX(a4),d2
+		bmi.s	.nt_x
+		move.w	d2,d3
+		lsl.w	#8,d3
+.nt_x:
+		or.w	d3,d4
+		neg.w	d4
+		subq.w	#8,d5			; NES line L is MD line L-8
+		bpl.s	.line_ok
+		moveq	#0,d5
+.line_ok:
+		lea	hsCur(a4),a5
+		move.w	hsCurN(a4),d0
+		move.w	hsTopCur(a4),d3		; the scroll before it
+		tst.w	d0
+		beq.s	.before
+		move.w	d0,d3
+		lsl.w	#2,d3
+		move.w	-2(a5,d3.w),d3
+.before:
+		cmp.w	d3,d4
+		beq.s	.no_scroll
+		cmpi.w	#8,d0
+		bcc.s	.no_scroll
+		lsl.w	#2,d0
+		move.w	d5,(a5,d0.w)
+		move.w	d4,2(a5,d0.w)
+		addq.w	#1,hsCurN(a4)
+.no_scroll:
+		move.w	(sp)+,sr
+		movem.l	(sp)+,d0-d5/a5
+		moveq	#1,d6
+		rts
+.last:
+		moveq	#0,d6
 		rts
 
 ; The IRQ handler returned: the window and tile set for what it set.
@@ -1833,6 +1998,9 @@ splitDone:
 		cmp.w	(a5)+,d1
 		bne.s	.changed
 		move.w	ppuSprWide(a4),d1
+		cmp.w	(a5)+,d1
+		bne.s	.changed
+		move.w	partHideY(a4),d1
 		cmp.w	(a5)+,d1
 		bne.s	.changed
 		cmpi.w	#$FFFF,splitV(a4)	; (with no $2006: the frame's scroll)
@@ -2007,6 +2175,10 @@ splitDone:
 		bls.s	.spr_ok
 		move.w	#$E7,d5
 .spr_ok:
+		cmp.w	partHideY(a4),d5	; (or from an IRQ before this one's
+		bls.s	.spr_part		; line: splitNext)
+		move.w	partHideY(a4),d5
+.spr_part:
 		move.w	d5,sprHideY(a4)
 .done:
 		lea	splitKey(a4),a5		; what it read, for next time (in the
@@ -2030,6 +2202,7 @@ splitDone:
 		move.w	splitV(a4),(a5)+
 		move.w	splitCtrlX(a4),(a5)+
 		move.w	ppuSprWide(a4),(a5)+
+		move.w	partHideY(a4),(a5)+
 		move.l	vdpScrlY(a4),(a5)+
 		move.w	ppuNTblBase(a4),(a5)+
 		move.w	#1,splitKeyOk(a4)
@@ -2039,7 +2212,7 @@ splitDone:
 .no_window:
 		clr.w	splitShow(a4)		; (the handler didn't move the PPU)
 		clr.w	splitWinNt(a4)
-		move.w	#$E7,sprHideY(a4)
+		move.w	partHideY(a4),sprHideY(a4)	; ($E7, or an IRQ's before this one)
 		bra.s	.done
 
 ; ----------------------------------------------------------------

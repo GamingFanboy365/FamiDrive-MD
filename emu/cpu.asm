@@ -2220,8 +2220,10 @@ mos_RTI:
 		add.l 	d6,a0
 		endif
 		if MMC3_IRQ
-		tst.w	cpuInIrq(a4)		; the IRQ handler's (MMC3_IRQ): what's
-		beq.s	.not_irq		; below its line, as it set it
+		tst.w	cpuInIrq(a4)		; the IRQ handler's (MMC3_IRQ): the
+		beq.s	.not_irq		; next one this frame, if it left one
+		bsr.w	splitNext		; on (splitNext), or what's below its
+		bne.w	irqTake			; line, as it set it
 		clr.w	cpuInIrq(a4)
 		bsr.w	splitDone
 .not_irq:
@@ -2238,11 +2240,12 @@ mos_RTI:
 ; off ($2001): the MMC3 counts the lines the PPU draws, and a game may
 ; be drawing to VRAM (the handler's $2006 would move its address).
 ; Not at a PLP or RTI: those come anywhere in the game's code, and the
-; handler may count on what's in the switched banks then. One a game
-; frame (the handler's RTI doesn't take one an NMI in it set: that
-; would leave no time for the game's own work, where the interpreter
-; is slow). Its PPU and CHR writes only go to what's below its line
-; (cpuInIrq, splitBegin, splitDone).
+; handler may count on what's in the switched banks then. The NMI
+; handler's is the frame's first (the IRQ handler's RTI doesn't take
+; one an NMI in it set: that would leave no time for the game's own
+; work, where the interpreter is slow); a handler that leaves the IRQ
+; on gets the next at its RTI (splitNext). Its PPU and CHR writes only
+; go to what's below its line (cpuInIrq, splitBegin, splitDone).
 ; ----------------------------------------------------------------
 
 irqDue:

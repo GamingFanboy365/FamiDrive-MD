@@ -72,10 +72,12 @@ hide or show it. Builds without `--fps` don't contain it.
 Anything else shows an error screen saying what isn't supported. MMC3 games work if they switch
 PRG-ROM at $8000-$BFFF in 16 KB pairs, as Super Mario Bros. 2 does, or put it in PRG mode 1 and
 switch 8 KB banks at $A000 and $C000 one at a time, as Super Mario Bros. 3 does. Its scanline
-interrupt is taken once a frame, when the NMI handler returns: what the interrupt handler sets up
-for the screen below the interrupt's line (other nametable rows, other CHR banks) shows in the MD's
-window plane, from the first whole cell row below that line. Effects that need more than one
-interrupt a frame show only the first.
+interrupt is taken when the NMI handler returns, and again in the same frame, up to four times, when
+its handler leaves it on for a line further down. What the frame's last handler sets up for the
+screen below its line (other nametable rows, other CHR banks) shows in the MD's window plane, from
+the first whole cell row below that line. What an earlier one sets up is for the lines down to the
+next: its horizontal scroll, other nametable rows (the planes' vertical scroll, set by a line
+interrupt), and sprites hidden if it switched their tiles, but not other background tiles.
 
 ### Checks
 
@@ -134,8 +136,9 @@ handheld's differences.
   to about 56-59. Interpreted, it runs at about a tenth of full speed, and its story screen
   garbles some text lines: its menu code assumes it never runs late
 - Super Mario Bros. 3 splits the screen more than once a frame in its levels with water along the
-  bottom or a water line, and in its spade bonus game: those show only the first split. Sprites
-  that are partly below its status bar's top line show whole or not at all. Recompiled, World
+  bottom or a water line, and in its spade bonus game: of those, World 3-2, 3-3 and the spade game
+  were tried. Sprites that are partly below its status bar's top line, or a water line, show
+  whole or not at all. Recompiled, World
   1-1 runs at 60 game frames per second where it's quiet and while it scrolls, and about 55-58
   where several enemies are on screen (its status bar's split costs about 2-3 of those where it's
   busiest), and the black screen before a level lasts about 50 frames (20 on a NES).
