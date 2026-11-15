@@ -22,12 +22,11 @@ finished in #1 to #6.
   to `$0100` like PLP and RTS do.
 - [ ] **Reset state.** The 6502 starts with SP = `$00` and I clear; after reset
   it should be SP = `$FD` with I set.
-- [ ] **MMC3: more of it.** In PRG mode 0, only R6 and R7 as a 16 KB pair are
-  supported (`mmc3Write`, PRG_IMAGES): Mega Man 3 picks them apart (R6 = $18
-  with R7 = $1D, 52 frames in), which is ignored, so it runs the wrong code
-  from there (a black screen, with sound). PRG mode 1, 8 KB banks at $A000
-  and $C000, is (Super Mario Bros. 3: PRG_FRAMES, `mmc3Prg1`), but a game
-  can't switch between the modes. The scanline IRQ is taken when the NMI
+- [ ] **MMC3: more of it.** R6's and R7's 8 KB banks are switched one at a
+  time where the game's code does that (PRG_FRAMES, `mmc3Prg1`: in PRG mode 1,
+  at $C000 and $A000, as Super Mario Bros. 3; in mode 0, at $8000 and $A000,
+  as Mega Man 3), and as a 16 KB pair otherwise (PRG_IMAGES, as Super Mario
+  Bros. 2), but a game can't switch between the modes. The scanline IRQ is taken when the NMI
   handler returns, and again in the same frame where its handler leaves it
   on (`splitNext`: Super Mario Bros. 3's 32-pixel partition, water line and
   spade game), not by a count of lines: a handler's own time before it sets
@@ -45,6 +44,14 @@ finished in #1 to #6.
   frames a second where it's busiest), most of it the handler's own code
   and its PPU and mapper writes: `splitDone` only works when something it
   reads changed.
+- [ ] **Mega Man 3: what's left.** It plays now (MMC3 PRG mode 0 with 8 KB
+  banks apart; NMIs held while its NMI handler's sound work after its RTI
+  runs, or the game's own code does that work: NMI_TAIL, `nmiTailStart`,
+  `nmiTailEnd`, `nmiTailR6`). Recompiled, Top Man's stage runs at about 29
+  game frames a second so far: the game's own frame outlasts an MD frame
+  there. Interpreted (about 12), its title screen misses some tiles. Only
+  Top Man's stage was tried. The recompiler takes some of its banks' data
+  for code (its unofficial opcode warnings).
 - [ ] **Life Force: what's left.** It plays now, recompiled (an NMI taken
   in its NMI handler where it waits for a sprite 0 hit that can't come:
   `rdPPU_Status`, `ppuSp0Wait`; its sprites off below the status bar's

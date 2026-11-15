@@ -9,7 +9,8 @@ Nemul, originally made by Mairtrus. Credit to Mairtrus for the original work.
 
 - Runs on real hardware (the original Nemul did not)
 - Passes nestest's tests for all official 6502 opcodes
-- Mappers 0 (NROM), 2 (UxROM), 3 (CNROM) and 4 (MMC3, the ways Super Mario Bros. 2 and 3 use it),
+- Mappers 0 (NROM), 2 (UxROM), 3 (CNROM) and 4 (MMC3, the ways Super Mario Bros. 2 and 3 and
+  Mega Man 3 use it),
   with CHR-ROM or CHR-RAM, and PRG RAM at $6000-$7FFF for mappers 2 and 4
 - Working vertical scrolling using both scroll layers (the NES map height differs from the MD's)
 - Horizontal scroll changes partway down the screen (such as a still status bar above a scrolling
@@ -70,8 +71,9 @@ hide or show it. Builds without `--fps` don't contain it.
 - CHR-ROM or CHR-RAM
 
 Anything else shows an error screen saying what isn't supported. MMC3 games work if they switch
-PRG-ROM at $8000-$BFFF in 16 KB pairs, as Super Mario Bros. 2 does, or put it in PRG mode 1 and
-switch 8 KB banks at $A000 and $C000 one at a time, as Super Mario Bros. 3 does. Its scanline
+PRG-ROM at $8000-$BFFF in 16 KB pairs, as Super Mario Bros. 2 does, or switch its two 8 KB banks one
+at a time, at $A000 and $C000 in PRG mode 1, as Super Mario Bros. 3 does, or at $8000 and $A000 in
+PRG mode 0, as Mega Man 3 does (but not both modes in one game). Its scanline
 interrupt is taken when the NMI handler returns, and again in the same frame, up to four times, when
 its handler leaves it on for a line further down. What the frame's last handler sets up for the
 screen below its line (other nametable rows, other CHR banks) shows in the MD's window plane, from
@@ -149,6 +151,9 @@ handheld's differences.
 - Life Force (mapper 2) plays recompiled, at about 47-51 game frames per second in its first
   stage. Its vertical stage shows no status bar (seen in the attract demo, not looked into yet),
   and only its first stage and the demo were tried
+- Mega Man 3 (MMC3) plays recompiled, so far at about 29 game frames per second in Top Man's
+  stage (its title screen at 60), the only stage tried. Interpreted, it runs at about
+  12, and its title screen misses some of its tiles
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its
