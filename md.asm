@@ -77,9 +77,18 @@ RAM_EmuLoop	ds.w 3
 RAM_RcStack	ds.l 1			; recompiled code: stack at dispatch (emu/recomp.asm)
 RAM_HintCount	ds.w 1			; line interrupts taken (MD_Hint, ppuMeasureLines)
 		finish
-nmiTail		equ $FFC		; NMI_TAIL, by a4, bytes: not 0 from the NMI handler's RTI to another address
-nmiRetSp	equ $FFD		; than the NMI came at (nmiRetPc, a word) until an RTS to that one with the
-nmiRetPc	equ $FFE		; stack as the RTI left it (nmiRetSp); counts the VBlanks come since, from 1
+
+; NMI_TAIL: NMIs held while the NMI handler's work after its RTI runs,
+; or the same work in the game's own code (mos_RTI, mmc3Prg1, mos_RTS,
+; famiVInt). By a4 too, in the RAM after the NES's.
+		struct RAM_Fami_RAM+$800-RAM_Fami_Emu
+nmiTail		ds.b 1			; not 0 while NMIs are held: counts the VBlanks come since, from 1
+nmiTailMain	ds.b 1			; and not 0 if it's the game's code that does the handler's work
+nmiRetSp	ds.b 1			; held until an RTS that leaves the stack above this
+		ds.b 1
+nmiRetPc	ds.w 1			; where the NMI came (doVint): an RTI to elsewhere goes on to its work
+nmiTailBank	ds.w 1			; $100 + the first bank that work put in R6, 0: none seen yet
+		finish
 
 ; The end of an emulated instruction's routine and of a handler: on to
 ; the interpreter's loop (RAM_EmuLoop). In a recompiled build a return:
@@ -1047,6 +1056,7 @@ famiVInt:
 		cmpi.b	#17,nmiTail(a4)		; VBlanks, NMIs as they come again)
 		bcs.s	.late
 		clr.b	nmiTail(a4)
+		clr.b	nmiTailMain(a4)
 		bra.s	.take
 		endif
 

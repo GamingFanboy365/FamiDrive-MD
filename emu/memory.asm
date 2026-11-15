@@ -636,6 +636,12 @@ mmc3WrIrqOn:
 ; --------------------------------------------------------
 
 mmc3Prg1:
+		if NMI_TAIL
+		cmpi.w	#6,d5
+		bne.s	.not_r6
+		bsr.w	nmiTailR6		; (emu/cpu.asm)
+.not_r6:
+		endif
 		moveq	#0,d6
 		move.b	d7,d6
 		andi.w	#prgBank8Mask,d6

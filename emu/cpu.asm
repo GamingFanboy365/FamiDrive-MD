@@ -2197,12 +2197,14 @@ mos_RTI:
 		sub.l	a1,d4			; handler changed its return address,
 		ori.w	#$8000,d4		; to go on with its work there, and
 		cmp.w	nmiRetPc(a4),d4		; the next NMI waits for that to
-		beq.s	.no_tail		; return (famiVInt), an RTS to
-		move.b	#1,nmiTail(a4)		; nmiRetPc with the stack as it is
-		move.l	d3,d4			; now (mos_RTS). Mega Man 3 runs its
-		swap	d4			; sound code that way, which a second
-		move.b	d4,nmiRetSp(a4)		; NMI must not come into: it would
-.no_tail:					; switch the first's banks away
+		beq.s	.no_tail		; return (famiVInt), an RTS that
+		move.b	#1,nmiTail(a4)		; leaves the stack as it is now
+		clr.b	nmiTailMain(a4)		; (mos_RTS). Mega Man 3 runs its
+		move.l	d3,d4			; sound code that way, which a second
+		swap	d4			; NMI must not come into: it would
+		subq.b	#1,d4			; switch the first's banks away
+		move.b	d4,nmiRetSp(a4)
+.no_tail:
 		endif
 		tst.w	vbLate(a4)		; a VBlank came while the handler ran:
 		beq.s	.on_time		; the next NMI now, not a frame later
@@ -2345,15 +2347,55 @@ mos_RTS:
 		emuNext
 		if NMI_TAIL
 .tail:
-		cmp.w	nmiRetPc(a4),d6		; what the NMI handler left for after
-		bne.s	.not_tail		; its RTI (mos_RTI) returns to where
-		move.l	d3,d4			; the NMI came: NMIs again, from the
-		swap	d4			; next VBlank (not one that came
-		cmp.b	nmiRetSp(a4),d4		; meanwhile, at once: the code it
-		bne.s	.not_tail		; comes back to, which the game's
-		clr.b	nmiTail(a4)		; frames are made in, would never get
-		clr.w	vbLate(a4)		; to run where this takes a frame)
-		bra.s	.not_tail
+		move.l	d3,d4			; NMIs held (NMI_TAIL): this RTS leaves
+		swap	d4			; the work they're held for?
+		cmp.b	nmiRetSp(a4),d4
+		bls.s	.not_tail
+		clr.b	nmiTail(a4)
+		tst.b	nmiTailMain(a4)
+		bne.s	.main
+		clr.w	vbLate(a4)		; the NMI handler's (mos_RTI), back
+		bra.s	.not_tail		; where the NMI came: NMIs again, from
+.main:						; the next VBlank (not one that came
+		clr.b	nmiTailMain(a4)		; meanwhile, at once: the code it
+		tst.w	vbLate(a4)		; comes back to, which the game's
+		beq.s	.not_tail		; frames are made in, would never get
+		clr.w	vbLate(a4)		; to run where this takes a frame).
+		move.w	#1,FamiMdVint(a4)	; The game's (nmiTailR6): one that
+		bra.s	.not_tail		; came meanwhile now
+
+; NMI_TAIL: R6 gets the bank in d7.b (mmc3Prg1). The NMI handler's work
+; after its RTI switches banks; the first it puts in R6 is noted, and
+; if the game's own code puts that one there (Mega Man 3 does its sound
+; work there itself when an NMI came as it switched banks, which the
+; handler's work then left for it), NMIs are held as for the handler's,
+; until an RTS out of the routine that did (mos_RTS): on a NES that
+; work is done long before the next NMI, which would come into it here
+; and do it again, and switch its banks away.
+nmiTailR6:
+		tst.b	nmiTail(a4)
+		bne.s	.held
+		move.w	nmiTailBank(a4),d4
+		beq.s	.done
+		cmp.b	d7,d4
+		bne.s	.done
+		move.b	#1,nmiTail(a4)
+		st	nmiTailMain(a4)
+		move.l	d3,d4
+		swap	d4
+		move.b	d4,nmiRetSp(a4)
+.done:
+		rts
+.held:
+		tst.b	nmiTailMain(a4)		; (the handler's work: its first)
+		bne.s	.done
+		tst.w	nmiTailBank(a4)
+		bne.s	.done
+		moveq	#0,d4
+		move.b	d7,d4
+		addi.w	#$100,d4
+		move.w	d4,nmiTailBank(a4)
+		rts
 		endif
 ; ----------------------------------------------------------------
 
