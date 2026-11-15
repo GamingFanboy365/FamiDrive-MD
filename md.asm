@@ -79,14 +79,14 @@ RAM_HintCount	ds.w 1			; line interrupts taken (MD_Hint, ppuMeasureLines)
 		finish
 
 ; NMI_TAIL: NMIs held while the NMI handler's work after its RTI runs,
-; or the same work in the game's own code (mos_RTI, mmc3Prg1, mos_RTS,
-; famiVInt). By a4 too, in the RAM after the NES's.
+; or the same work in the game's own code (emu/cpu.asm: nmiTailStart,
+; nmiTailEnd, nmiTailR6). By a4 too, in the RAM after the NES's.
 		struct RAM_Fami_RAM+$800-RAM_Fami_Emu
-nmiTail		ds.b 1			; not 0 while NMIs are held: counts the VBlanks come since, from 1
+nmiTail		ds.b 1			; not 0 while NMIs are held: 1 + the VBlanks come since (MD_Vint)
 nmiTailMain	ds.b 1			; and not 0 if it's the game's code that does the handler's work
-nmiRetSp	ds.b 1			; held until an RTS that leaves the stack above this
+nmiRetSp	ds.b 1			; the stack the handler's work ends with (as its RTI left it)
 		ds.b 1
-nmiRetPc	ds.w 1			; where the NMI came (doVint): an RTI to elsewhere goes on to its work
+nmiRetPc	ds.w 1			; where the NMI came (doVint, rcNmiDue): an RTI to elsewhere goes on to its work
 nmiTailBank	ds.w 1			; $100 + the first bank that work put in R6, 0: none seen yet
 		finish
 
@@ -700,6 +700,14 @@ MD_Vint:
 		else
 		move.w	#1,FamiMdVint(a4)
 		endif
+		if NMI_TAIL
+		tst.b	nmiTail(a4)			; NMIs held: the VBlanks since
+		beq.s	.no_tail			; (famiVInt, rcNmiDue)
+		addq.b	#1,nmiTail(a4)
+		bcc.s	.no_tail
+		st	nmiTail(a4)
+.no_tail:
+		endif
 		move.w	#1,FamiPPUVint(a4)
 
 	; The game's code didn't run meanwhile: its frame's clock (vNmi,
@@ -1043,8 +1051,8 @@ famiVInt:
 		beq.s	emuVint
 		if NMI_TAIL
 		tst.b	nmiTail(a4)		; what the handler left for after its
-		bne.s	.tail			; RTI still runs: the next NMI when
-		endif				; that returns (mos_RTS)
+		bne.s	.tail			; RTI still runs (nmiTailStart,
+		endif				; nmiTailR6)
 .take:
 		jmp	doVint			; NMI: out of line, see after cpu.asm
 .late:
@@ -1052,9 +1060,9 @@ famiVInt:
 		bra.s	emuVint
 		if NMI_TAIL
 .tail:
-		addq.b	#1,nmiTail(a4)		; (unless it never does: after 16
-		cmpi.b	#17,nmiTail(a4)		; VBlanks, NMIs as they come again)
-		bcs.s	.late
+		cmpi.b	#17,nmiTail(a4)		; no NMI for this VBlank (as on a
+		bcs.w	emuVint			; NES, where the work is long done),
+						; unless after 16 it never ends
 		clr.b	nmiTail(a4)
 		clr.b	nmiTailMain(a4)
 		bra.s	.take

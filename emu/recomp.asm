@@ -12,12 +12,14 @@
 ; Banked PRG (PRG_BANKED): each bank's code has its own rcTable,
 ; for $8000-$BFFF while it's at $8000 (rcCurTable, set by
 ; prgSwitch); the fixed bank's rcTable is for $C000-$FFFF.
-; MMC3 in PRG mode 1 (PRG_8K): a bank's code at $A000 has an
-; rcTable for $A000-$BFFF (rcCurTable, less $8000) and one at $C000
-; for $C000-$DFFF (rcCurTableC), set by rcPrgSlot; the fixed code's
-; is for $8000-$9FFF, then $E000-$FFFF. Translated code reads PRG
-; through R7's frame (a1, a0 = a1+$8000), but at $C000-$DFFF
-; through R6's (prgFrameC, rcFrameC = prgFrameC+$8000).
+; MMC3 with 8 KB banks apart (PRG_8K): a bank's code at $A000 has an
+; rcTable for $A000-$BFFF (rcCurTable, less $8000) and one at R6's
+; place (PRG_R6: $C000 in PRG mode 1, $8000 in mode 0) for its 8 KB
+; (rcCurTableC), set by rcPrgSlot; the fixed code's is for $8000-
+; $9FFF, then $E000-$FFFF (mode 1), or $C000-$FFFF (mode 0): each
+; by the address's low 14 bits. Translated code reads PRG through
+; R7's frame (a1, a0 = a1+$8000), but in R6's 8 KB through R6's
+; (prgFrameC, rcFrameC = prgFrameC+$8000).
 ; Translated code reads and writes PRG RAM at rcWram+addr(a4).
 ; ----------------------------------------------------------------
 
@@ -35,7 +37,7 @@ rcStart:
 		dbf	d5,.ret_cache
 		if PRG_8K
 		moveq	#7,d5			; the code of R7's bank at $A000 and
-		move.l	a1,d6			; of R6's at $C000 (and rcFrameC)
+		move.l	a1,d6			; of R6's (and rcFrameC)
 		bsr.s	.slot
 		moveq	#6,d5
 		move.l	prgFrameC(a4),d6
@@ -80,15 +82,24 @@ rcDispatch:
 		move.w	d4,d5
 		bpl.s	.ram			; below $8000
 		lsl.w	#2,d5			; the offset in 8 KB, x 4 (and bit 15
-		bcs.s	.c_e			; for $A000 and $E000); out went bit
-		bmi.s	.a			; 14 (C) and bit 13 is bit 15 (N)
+		if PRG_R6=$C000			; for $A000 and $E000); out went bit
+		bcs.s	.c_e			; 14 (C) and bit 13 is bit 15 (N)
+		bmi.s	.a
+		else
+		bcs.s	.fixed			; ($C000-$FFFF)
+		bmi.s	.a
+		movea.l	rcCurTableC(a4),a5	; $8000-$9FFF: R6's bank's code
+		bra.s	.look
+		endif
 .fixed:
 		lea	(rcTable).l,a5		; $8000-$9FFF, $E000-$FFFF: the fixed code
-		bra.s	.look
+		bra.s	.look			; (mode 0: $C000-$FFFF)
+		if PRG_R6=$C000
 .c_e:
 		bmi.s	.fixed
 		movea.l	rcCurTableC(a4),a5	; $C000-$DFFF: R6's bank's code
 		bra.s	.look
+		endif
 .a:
 		movea.l	rcCurTable(a4),a5	; $A000-$BFFF: R7's (less $8000)
 .look:
@@ -176,15 +187,24 @@ rcInterpStep:					; and returns: emuNext)
 		moveq	#0,d5			; translated? (as rcDispatch)
 		move.w	d4,d5
 		lsl.w	#2,d5
+		if PRG_R6=$C000
 		bcs.s	.c_e
 		bmi.s	.a
+		else
+		bcs.s	.fixed
+		bmi.s	.a
+		movea.l	rcCurTableC(a4),a5
+		bra.s	.look
+		endif
 .fixed:
 		lea	(rcTable).l,a5
 		bra.s	.look
+		if PRG_R6=$C000
 .c_e:
 		bmi.s	.fixed
 		movea.l	rcCurTableC(a4),a5
 		bra.s	.look
+		endif
 .a:
 		movea.l	rcCurTable(a4),a5	; (less $8000: its rcSafe at $7FFC)
 		move.l	(a5,d5.l),d6
@@ -280,7 +300,27 @@ rcInterpStep:					; and returns: emuNext)
 ; a5 - its cache + 2: the first address before, its code at (a5)
 ; ----------------------------------------------------------------
 
-		if PRG_8K
+		if PRG_8K&&(PRG_R6=$8000)
+; MMC3 PRG mode 0, 8 KB banks apart: the fixed code's RTSs
+; (rcDispatchCF) keep none to $8000-$BFFF, an $A000 bank's
+; (rcDispatchCA) none to $8000-$9FFF, an $8000 bank's (rcDispatchCC)
+; none to $A000-$BFFF.
+rcDispatchCF:
+		btst	#14,d4
+		beq.w	rcDispatch
+		bra.s	rcDispatchC
+rcDispatchCA:
+		move.w	d4,d5			; (as rcDispatch: C bit 14, N bit 13)
+		lsl.w	#2,d5
+		bcs.s	rcDispatchC
+		bpl.w	rcDispatch		; $8000-$9FFF
+		bra.s	rcDispatchC
+rcDispatchCC:
+		move.w	d4,d5
+		lsl.w	#2,d5
+		bcs.s	rcDispatchC
+		bmi.w	rcDispatch		; $A000-$BFFF
+		elseif PRG_8K
 ; MMC3 PRG mode 1: the fixed code's RTSs (rcDispatchCF) keep none
 ; to $A000-$DFFF, an $A000 bank's (rcDispatchCA) none to $C000-
 ; $DFFF, a $C000 bank's (rcDispatchCC) none to $A000-$BFFF.
@@ -320,15 +360,24 @@ rcDispatchC:
 		move.w	d4,d5
 		if PRG_8K
 		lsl.w	#2,d5			; (as rcDispatch)
+		if PRG_R6=$C000
 		bcs.s	.c_e
 		bmi.s	.a
+		else
+		bcs.s	.fixed
+		bmi.s	.a
+		movea.l	rcCurTableC(a4),a5
+		bra.s	.look
+		endif
 .fixed:
 		lea	(rcTable).l,a5
 		bra.s	.look
+		if PRG_R6=$C000
 .c_e:
 		bmi.s	.fixed
 		movea.l	rcCurTableC(a4),a5
 		bra.s	.look
+		endif
 .a:
 		movea.l	rcCurTable(a4),a5
 .look:
@@ -437,6 +486,17 @@ rcNmiDue:
 .first:
 		tst.w	ppuNmiFlag(a4)
 		beq.w	.none
+		if NMI_TAIL
+		tst.b	nmiTail(a4)		; what the NMI handler left for after
+		beq.s	.on			; its RTI (rcTailStart), or the game's
+		cmpi.b	#17,nmiTail(a4)		; code doing it (nmiTailR6), still
+		bcc.s	.tail_done		; runs: the NMI waits until it's done
+		rts				; (as on a NES, where it's long done:
+.tail_done:					; nmiTailEnd, nmiTailR6), unless after
+						; 16 VBlanks it never is
+		clr.b	nmiTail(a4)
+		clr.b	nmiTailMain(a4)
+		endif
 .on:
 		move.w	d5,nmiHold(a4)
 		subq.w	#1,nmiCredit(a4)	; (one for each VBlank)
@@ -468,6 +528,12 @@ rcNmiDue:
 		swap	d6
 		move.w	d6,rcNestSp(a4)
 .go:
+		if NMI_TAIL
+		tst.w	cpuFamiVint(a4)			; where the handler's RTI comes back
+		bne.s	.nested				; to, unless it goes on elsewhere
+		move.w	d4,nmiRetPc(a4)			; (rcRti)
+.nested:
+		endif
 		if MMC3_IRQ
 		tst.w	cpuFamiVint(a4)			; (one taken in the handler: saved already)
 		bne.s	.in_handler
@@ -500,6 +566,26 @@ rcNmiDue:
 		clr.w	nmiCredit(a4)		; NMIs off: none due
 		rts
 
+		if NMI_TAIL
+; ----------------------------------------------------------------
+; The NMI handler's RTI (rcRti), to d4: not to where the NMI came, the
+; handler changed its return address, to go on with its work there, and
+; the next NMI waits for that to return (rcNmiDue, nmiTailEnd), as
+; nmiTailStart has it for the interpreter (emu/cpu.asm)
+; ----------------------------------------------------------------
+
+rcTailStart:
+		cmp.w	nmiRetPc(a4),d4
+		beq.s	.no_tail
+		move.b	#1,nmiTail(a4)
+		clr.b	nmiTailMain(a4)
+		move.l	d3,d6
+		swap	d6
+		move.b	d6,nmiRetSp(a4)
+.no_tail:
+		rts
+		endif
+
 ; ----------------------------------------------------------------
 ; RTI, after the 6502 code popped P and the PC (d4)
 ;
@@ -531,6 +617,9 @@ rcRti:
 		subq.w	#1,cpuFamiVint(a4)	; of an NMI taken in the NMI handler
 		bne.w	.back			; (rcNmiDue): back in that handler
 .outer:
+		if NMI_TAIL
+		bsr.w	rcTailStart
+		endif
 		tst.w	nmiCredit(a4)
 		beq.s	.none_due
 		move.w	#1,nmiWaitDue(a4)
@@ -674,10 +763,15 @@ rcRead16:
 		tst.w	d6
 		bpl.s	.io
 		if PRG_8K
+		if PRG_R6=$C000
 		cmpi.w	#$C000,d6		; $C000-$DFFF: R6's bank, through
 		bcs.s	.prg			; rcFrameC
 		cmpi.w	#$E000,d6
 		bcc.s	.prg
+		else
+		cmpi.w	#$A000,d6		; $8000-$9FFF: R6's bank, through
+		bcc.s	.prg			; rcFrameC
+		endif
 		movea.l	rcFrameC(a4),a5
 		move.b	(a5,d6.w),d7
 		rts
@@ -816,8 +910,8 @@ rcDelay:
 
 		if PRG_8K
 ; ----------------------------------------------------------------
-; MMC3 PRG mode 1: R6 or R7 picked a bank (mmc3Prg1, rcStart): the
-; code of that bank at $C000 or at $A000 (rcCurTableC, rcCurTable)
+; MMC3, 8 KB banks: R6 or R7 picked a bank (mmc3Prg1, rcStart): the
+; code of that bank at PRG_R6 or at $A000 (rcCurTableC, rcCurTable)
 ; and the copies of its routines other code calls (rcCurCallC,
 ; rcCurCallA: tools/recomp6502.py, Gen.dyn_call), and for R6 rcFrameC.
 ; Each bank's record (rcBankRecsC, rcBankRecsA: tools/recomp6502.py,

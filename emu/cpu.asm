@@ -2193,18 +2193,7 @@ mos_RTI:
 .outer:
 		move.l	#emuLoop,(RAM_EmuLoop+2).l
 		if NMI_TAIL
-		move.l	a0,d4			; not to where the NMI came: the
-		sub.l	a1,d4			; handler changed its return address,
-		ori.w	#$8000,d4		; to go on with its work there, and
-		cmp.w	nmiRetPc(a4),d4		; the next NMI waits for that to
-		beq.s	.no_tail		; return (famiVInt), an RTS that
-		move.b	#1,nmiTail(a4)		; leaves the stack as it is now
-		clr.b	nmiTailMain(a4)		; (mos_RTS). Mega Man 3 runs its
-		move.l	d3,d4			; sound code that way, which a second
-		swap	d4			; NMI must not come into: it would
-		subq.b	#1,d4			; switch the first's banks away
-		move.b	d4,nmiRetSp(a4)
-.no_tail:
+		bsr.w	nmiTailStart
 		endif
 		tst.w	vbLate(a4)		; a VBlank came while the handler ran:
 		beq.s	.on_time		; the next NMI now, not a frame later
@@ -2333,8 +2322,8 @@ mos_RTS:
 		swap	d3
 		addq.w	#1,d6
 		if NMI_TAIL
-		tst.b	nmiTail(a4)
-		bne.s	.tail
+		tst.b	nmiTail(a4)		; the end of the NMI handler's work
+		bne.s	.tail			; after its RTI?
 .not_tail:
 		endif
 		and.l	#$7FFF,d6
@@ -2347,31 +2336,76 @@ mos_RTS:
 		emuNext
 		if NMI_TAIL
 .tail:
-		move.l	d3,d4			; NMIs held (NMI_TAIL): this RTS leaves
-		swap	d4			; the work they're held for?
-		cmp.b	nmiRetSp(a4),d4
-		bls.s	.not_tail
-		clr.b	nmiTail(a4)
-		tst.b	nmiTailMain(a4)
-		bne.s	.main
-		clr.w	vbLate(a4)		; the NMI handler's (mos_RTI), back
-		bra.s	.not_tail		; where the NMI came: NMIs again, from
-.main:						; the next VBlank (not one that came
-		clr.b	nmiTailMain(a4)		; meanwhile, at once: the code it
-		tst.w	vbLate(a4)		; comes back to, which the game's
-		beq.s	.not_tail		; frames are made in, would never get
-		clr.w	vbLate(a4)		; to run where this takes a frame).
-		move.w	#1,FamiMdVint(a4)	; The game's (nmiTailR6): one that
-		bra.s	.not_tail		; came meanwhile now
+		move.w	d6,d4
+		bsr.s	nmiTailEnd
+		bra.s	.not_tail
+		endif
 
-; NMI_TAIL: R6 gets the bank in d7.b (mmc3Prg1). The NMI handler's work
+		if NMI_TAIL
+; ----------------------------------------------------------------
+; NMI_TAIL: the NMI handler's RTI (mos_RTI), not to where the NMI came:
+; the handler changed its return address, to go on with its work there,
+; and NMIs wait (famiVInt, rcNmiDue) until that returns there, with the
+; stack as it is now (nmiTailEnd). Mega Man 3 runs its sound code that
+; way, which a second NMI must not come into: it would switch the
+; first's banks away. (rcTailStart in emu/recomp.asm does the same.)
+; ----------------------------------------------------------------
+
+nmiTailStart:
+		move.l	a0,d4
+		sub.l	a1,d4
+		ori.w	#$8000,d4
+		cmp.w	nmiRetPc(a4),d4
+		beq.s	.no_tail
+		move.b	#1,nmiTail(a4)
+		clr.b	nmiTailMain(a4)
+		move.l	d3,d4
+		swap	d4
+		move.b	d4,nmiRetSp(a4)
+.no_tail:
+		rts
+
+; ----------------------------------------------------------------
+; NMI_TAIL: an RTS to d4.w, leaving the stack in d3 (mos_RTS, and the
+; RTS that ends the handler's work in translated code: Gen.tail_rts in
+; tools/recomp6502.py). If it's the end of the NMI handler's work, back
+; where the NMI came with the stack as its RTI left it, NMIs come again:
+; recompiled, one that came meanwhile now; interpreted, from the next
+; VBlank (not one that came meanwhile, at once: the code it comes back
+; to, which the game's frames are made in, would never get to run where
+; this takes a frame). d5 is lost.
+; ----------------------------------------------------------------
+
+nmiTailEnd:
+		tst.b	nmiTailMain(a4)
+		bne.s	.not_end
+		cmp.w	nmiRetPc(a4),d4
+		bne.s	.not_end
+		move.l	d3,d5
+		swap	d5
+		cmp.b	nmiRetSp(a4),d5
+		bne.s	.not_end
+		if RECOMP
+		cmpi.b	#1,nmiTail(a4)
+		beq.s	.no_vblank
+		move.w	#1,FamiMdVint(a4)
+.no_vblank:
+		endif
+		clr.b	nmiTail(a4)
+.not_end:
+		rts
+
+; ----------------------------------------------------------------
+; NMI_TAIL: R6 gets the bank in d7.b (mmc3Prg1, Gen.prg1_switch in
+; tools/recomp6502.py; d4 is lost). The NMI handler's work
 ; after its RTI switches banks; the first it puts in R6 is noted, and
 ; if the game's own code puts that one there (Mega Man 3 does its sound
 ; work there itself when an NMI came as it switched banks, which the
-; handler's work then left for it), NMIs are held as for the handler's,
-; until an RTS out of the routine that did (mos_RTS): on a NES that
-; work is done long before the next NMI, which would come into it here
-; and do it again, and switch its banks away.
+; handler's work then left for it), NMIs are held as for the handler's
+; until it puts another there: on a NES that work is done long before
+; the next NMI, which would come into it here and do it again, and
+; switch its banks away. One that came meanwhile comes then.
+; ----------------------------------------------------------------
 nmiTailR6:
 		tst.b	nmiTail(a4)
 		bne.s	.held
@@ -2381,15 +2415,22 @@ nmiTailR6:
 		bne.s	.done
 		move.b	#1,nmiTail(a4)
 		st	nmiTailMain(a4)
-		move.l	d3,d4
-		swap	d4
-		move.b	d4,nmiRetSp(a4)
 .done:
 		rts
 .held:
-		tst.b	nmiTailMain(a4)		; (the handler's work: its first)
-		bne.s	.done
-		tst.w	nmiTailBank(a4)
+		tst.b	nmiTailMain(a4)
+		beq.s	.handler
+		cmp.b	nmiTailBank+1(a4),d7	; the game's: done with that bank?
+		beq.s	.done
+		cmpi.b	#1,nmiTail(a4)		; (one came meanwhile: now)
+		beq.s	.no_vblank
+		move.w	#1,FamiMdVint(a4)
+.no_vblank:
+		clr.b	nmiTail(a4)
+		clr.b	nmiTailMain(a4)
+		rts
+.handler:
+		tst.w	nmiTailBank(a4)		; the handler's work: its first
 		bne.s	.done
 		moveq	#0,d4
 		move.b	d7,d4
