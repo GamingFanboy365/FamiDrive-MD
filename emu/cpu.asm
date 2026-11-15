@@ -717,7 +717,7 @@ mos_BRK:
 		lsl.w	#8,d6
 		move.b	(a5),d6
 		and.w	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l	a1,a0
@@ -1301,7 +1301,7 @@ mos_JMP_abs:
 		lsl.w	#8,d6
 		move.b	(a0),d6
 		and.l	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l a1,a0
@@ -1332,7 +1332,7 @@ mos_JMP_ind:
 		emuNext
 .to_rom:
 		and.l	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l a1,a0
@@ -1363,7 +1363,7 @@ mos_JSR:
 		swap	d3
 		
 		and.l	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l a1,a0
@@ -1908,13 +1908,18 @@ rmwWrite:
 		lsr.w	#8,d6
 		bra.w	addr_Write
 
-		if PRG_MODE1
-; MMC3 PRG mode 1 (PRG_MODE1, PRG_FRAMES): a0 for the code at $8000 +
-; d6.w ($0000-$7FFF), in R6's frame for $C000-$DFFF, else in R7's (a1)
+		if PRG_8K
+; MMC3, 8 KB banks (PRG_8K, PRG_FRAMES): a0 for the code at $8000 +
+; d6.w ($0000-$7FFF), in R6's frame for R6's 8 KB (PRG_R6), else in
+; R7's (a1)
 prgPc:
 		movea.l	a1,a0
-		btst	#14,d6			; $C000-$DFFF: bits 14, 13 = 1, 0
+		btst	#14,d6			; R6's: bits 14, 13 = 1, 0 at $C000
+		if PRG_R6=$C000			; (PRG mode 1), or 0, 0 at $8000
 		beq.s	.frame
+		else
+		bne.s	.frame
+		endif
 		btst	#13,d6
 		bne.s	.frame
 		movea.l	prgFrameC(a4),a0
@@ -2175,7 +2180,7 @@ mos_RTI:
 		swap	d3
 		bsr	famiSetP
 		and.l	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l a1,a0
@@ -2187,6 +2192,18 @@ mos_RTI:
 		emuNext
 .outer:
 		move.l	#emuLoop,(RAM_EmuLoop+2).l
+		if NMI_TAIL
+		move.l	a0,d4			; not to where the NMI came: the
+		sub.l	a1,d4			; handler changed its return address,
+		ori.w	#$8000,d4		; to go on with its work there, and
+		cmp.w	nmiRetPc(a4),d4		; the next NMI waits for that to
+		beq.s	.no_tail		; return (famiVInt), an RTS to
+		move.b	#1,nmiTail(a4)		; nmiRetPc with the stack as it is
+		move.l	d3,d4			; now (mos_RTS). Mega Man 3 runs its
+		swap	d4			; sound code that way, which a second
+		move.b	d4,nmiRetSp(a4)		; NMI must not come into: it would
+.no_tail:					; switch the first's banks away
+		endif
 		tst.w	vbLate(a4)		; a VBlank came while the handler ran:
 		beq.s	.on_time		; the next NMI now, not a frame later
 		clr.w	vbLate(a4)
@@ -2213,7 +2230,7 @@ mos_RTI:
 		swap	d3
 		bsr	famiSetP
 		and.l	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l a1,a0
@@ -2289,7 +2306,7 @@ irqTake:
 		lsl.w	#8,d6
 		move.b	(a0),d6
 		and.w	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l	a1,a0
@@ -2313,14 +2330,31 @@ mos_RTS:
 		move.b	d4,d6
 		swap	d3
 		addq.w	#1,d6
+		if NMI_TAIL
+		tst.b	nmiTail(a4)
+		bne.s	.tail
+.not_tail:
+		endif
 		and.l	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l a1,a0
 		add.l 	d6,a0
 		endif
 		emuNext
+		if NMI_TAIL
+.tail:
+		cmp.w	nmiRetPc(a4),d6		; what the NMI handler left for after
+		bne.s	.not_tail		; its RTI (mos_RTI) returns to where
+		move.l	d3,d4			; the NMI came: NMIs again, from the
+		swap	d4			; next VBlank (not one that came
+		cmp.b	nmiRetSp(a4),d4		; meanwhile, at once: the code it
+		bne.s	.not_tail		; comes back to, which the game's
+		clr.b	nmiTail(a4)		; frames are made in, would never get
+		clr.w	vbLate(a4)		; to run where this takes a frame)
+		bra.s	.not_tail
+		endif
 ; ----------------------------------------------------------------
 
 mos_SBC_imm:

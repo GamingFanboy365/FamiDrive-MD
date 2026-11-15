@@ -12,7 +12,7 @@
 ; Banked PRG (PRG_BANKED): each bank's code has its own rcTable,
 ; for $8000-$BFFF while it's at $8000 (rcCurTable, set by
 ; prgSwitch); the fixed bank's rcTable is for $C000-$FFFF.
-; MMC3 in PRG mode 1 (PRG_MODE1): a bank's code at $A000 has an
+; MMC3 in PRG mode 1 (PRG_8K): a bank's code at $A000 has an
 ; rcTable for $A000-$BFFF (rcCurTable, less $8000) and one at $C000
 ; for $C000-$DFFF (rcCurTableC), set by rcPrgSlot; the fixed code's
 ; is for $8000-$9FFF, then $E000-$FFFF. Translated code reads PRG
@@ -33,7 +33,7 @@ rcStart:
 		clr.w	(a5)+
 		move.l	#rcDispatch,(a5)+
 		dbf	d5,.ret_cache
-		if PRG_MODE1
+		if PRG_8K
 		moveq	#7,d5			; the code of R7's bank at $A000 and
 		move.l	a1,d6			; of R6's at $C000 (and rcFrameC)
 		bsr.s	.slot
@@ -75,7 +75,7 @@ rcStart:
 
 rcDispatch:
 		movea.l	(RAM_RcStack).w,sp
-		if PRG_MODE1
+		if PRG_8K
 		moveq	#0,d5
 		move.w	d4,d5
 		bpl.s	.ram			; below $8000
@@ -166,7 +166,7 @@ rcDispatch:
 
 rcInterp:					; (each instruction's routine is called,
 rcInterpStep:					; and returns: emuNext)
-		if PRG_MODE1
+		if PRG_8K
 		move.l	a0,d4			; 6502 address of the next instruction:
 		cmpi.l	#$400000,d4		; in PRG (not RAM), a0's low 15 bits
 		bcc.s	.in_ram			; (its frame is 32 KB aligned)
@@ -280,7 +280,7 @@ rcInterpStep:					; and returns: emuNext)
 ; a5 - its cache + 2: the first address before, its code at (a5)
 ; ----------------------------------------------------------------
 
-		if PRG_MODE1
+		if PRG_8K
 ; MMC3 PRG mode 1: the fixed code's RTSs (rcDispatchCF) keep none
 ; to $A000-$DFFF, an $A000 bank's (rcDispatchCA) none to $C000-
 ; $DFFF, a $C000 bank's (rcDispatchCC) none to $A000-$BFFF.
@@ -318,7 +318,7 @@ rcDispatchC:
 		movea.l	(RAM_RcStack).w,sp
 		moveq	#0,d5
 		move.w	d4,d5
-		if PRG_MODE1
+		if PRG_8K
 		lsl.w	#2,d5			; (as rcDispatch)
 		bcs.s	.c_e
 		bmi.s	.a
@@ -579,7 +579,7 @@ rcRti:
 .interp:
 		tst.w	d4
 		bpl.w	rcDispatch		; (in RAM: rcDispatch interprets it)
-		if PRG_MODE1
+		if PRG_8K
 		move.w	d4,d6
 		andi.w	#$7FFF,d6
 		bsr.w	prgPc
@@ -673,7 +673,7 @@ rcRead16:
 .not_ram:
 		tst.w	d6
 		bpl.s	.io
-		if PRG_MODE1
+		if PRG_8K
 		cmpi.w	#$C000,d6		; $C000-$DFFF: R6's bank, through
 		bcs.s	.prg			; rcFrameC
 		cmpi.w	#$E000,d6
@@ -814,7 +814,7 @@ rcDelay:
 		move.w	d5,vNmi(a4)
 		rts
 
-		if PRG_MODE1
+		if PRG_8K
 ; ----------------------------------------------------------------
 ; MMC3 PRG mode 1: R6 or R7 picked a bank (mmc3Prg1, rcStart): the
 ; code of that bank at $C000 or at $A000 (rcCurTableC, rcCurTable)
