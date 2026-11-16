@@ -325,7 +325,9 @@ def inline_table_routine(prg, f):
 	through a pointer (a "jump engine")? Then the bytes after each JSR
 	to it are a table of addresses, not code. (It may keep a byte on the
 	stack meanwhile, once it has pulled one: Mega Man 3's sound code's
-	pushes the pointer's low byte, PHA, and pulls it back, PLA.)"""
+	pushes the pointer's low byte, PHA, and pulls it back, PLA. And it
+	may step the pointer's high byte when its index wraps: a branch over
+	an INC zp, as Konami's does.)"""
 	pulls, pc = 0, f
 	for _ in range(24):
 		op = prg.byte(pc) if pc >= 0x8000 else None
@@ -338,6 +340,8 @@ def inline_table_routine(prg, f):
 			pulls -= 1
 		elif m == 'JMP' and mode == 'ind':
 			return pulls >= 2
+		elif mode == 'rel' and prg.byte(pc + 1) == 2 and prg.byte(pc + 2) == 0xE6:
+			pass				# (over an INC zp)
 		elif m in ('RTS', 'RTI', 'BRK', 'JSR', 'JMP', 'PHA', 'PHP', 'TSX', 'TXS') or mode == 'rel':
 			return False
 		pc += SIZE[mode]
@@ -369,13 +373,32 @@ def engine_pattern2(prg, f):
 	direct jump too (Gen.emit_engine_call)."""
 	b = [prg.byte(f + k) for k in range(23)] if f >= 0x8000 and f + 23 <= 0x10000 else []
 	if len(b) < 23 or None in b or b[:5] != [0x0A, 0xA8, 0xC8, 0x68, 0x85]:
-		return None
+		return engine_pattern3(prg, f)
 	z = b[5]
 	want = [0x0A, 0xA8, 0xC8, 0x68, 0x85, z, 0x68, 0x85, (z + 1) & 0xFF, 0xB1, z, 0x48, 0xC8, 0xB1, z,
 		0x85, (z + 1) & 0xFF, 0x68, 0x85, z, 0x6C, z, 0x00]
 	if b != want or z == 0xFF:
 		return None
 	return 'one', z
+
+
+def engine_pattern3(prg, f):
+	"""('keep', (zp1, zp2, zy)) if the routine at f is the jump engine
+	that keeps Y: ASL A, STY zy, TAY, INY, PLA, STA zp1, PLA, STA zp1+1,
+	LDA (zp1),Y, STA zp2, INY, BNE +2, INC zp1+1, LDA (zp1),Y, LDY zy,
+	STA zp2+1, JMP (zp2) (Konami's: Tiny Toon Adventures' at $D05A). It
+	leaves the return address in zp1, the entry in zp2, its high byte in
+	A, Y as it was (and in zy, unless that's zp2+1), N and Z from Y. A
+	JSR to it becomes a direct jump too (Gen.emit_engine_call)."""
+	b = [prg.byte(f + k) for k in range(29)] if f >= 0x8000 and f + 29 <= 0x10000 else []
+	if len(b) < 29 or None in b or b[:2] != [0x0A, 0x84]:
+		return None
+	zy, z1, z2 = b[2], b[7], b[14]
+	want = [0x0A, 0x84, zy, 0xA8, 0xC8, 0x68, 0x85, z1, 0x68, 0x85, (z1 + 1) & 0xFF, 0xB1, z1, 0x85, z2,
+		0xC8, 0xD0, 0x02, 0xE6, (z1 + 1) & 0xFF, 0xB1, z1, 0xA4, zy, 0x85, (z2 + 1) & 0xFF, 0x6C, z2, 0x00]
+	if b != want or 0xFF in (z1, z2) or len({z1, z1 + 1, z2, z2 + 1}) < 4 or zy in (z1, z1 + 1, z2):
+		return None
+	return 'keep', (z1, z2, zy)
 
 
 def mul_pattern(prg, f):
@@ -1307,11 +1330,12 @@ class Gen:
 		needn't be stored in d3."""
 		if self.fast and 'ptr' in self.fast:
 			return False		# keep d3 right for exits into the normal copy
-		pc = i.pc + i.n
+		pc, k = i.pc + i.n, i
 		while True:
 			n = self.insns.get(pc)
-			if n is None or pc in self.targets:
-				return False
+			if n is None or pc in self.targets or any(q in self.insns for q in range(k.pc + 1, k.pc + k.n)):
+				return False		# (or an instruction decoded inside one: its code goes between)
+			k = n
 			if n.m in ('ROL', 'ROR', 'ADC'):
 				return n.mode in ('acc', 'imm', 'zp') or (n.mode == 'abs' and n.arg < 0x2000)
 			if not self.x_safe(n):
@@ -2538,8 +2562,24 @@ class Gen:
 		t = self.engine_table(i)
 		ret = i.pc + 2
 		g, jw, jt = self.tag('Jg', i.pc), self.tag('Jw', i.pc), self.tag('Jt', i.pc)
-		self.e('cmpi.b #%d,d0' % len(t), 'bcc.w ' + g)	# not in the table: the engine
-		if z1 == 'one':			# (engine_pattern2: the entry in zp, its low byte in A)
+		n = min(len(t), 127) if z1 == 'keep' else len(t)	# (engine_pattern3's 128th: zp1+1 stepped)
+		self.e('cmpi.b #%d,d0' % n, 'bcc.w ' + g)	# not in the table: the engine
+		if z1 == 'keep':		# (engine_pattern3: Y kept, N and Z from it)
+			k1, k2, ky = z2
+			if k1 & 1:		# the return address it pulled, in zp1
+				self.e('move.b #$%02X,$%02X(a2)' % (ret & 0xFF, k1), 'move.b #$%02X,$%02X(a2)' % (ret >> 8, k1 + 1))
+			else:
+				self.e('move.w #$%04X,$%02X(a2)' % ((ret & 0xFF) << 8 | ret >> 8, k1))
+			self.e('moveq #0,d6', 'move.b d0,d6', 'add.w d6,d6', 'lea %s(pc),a5' % jw)	# ASL A
+			if k2 & 1:		# the entry in zp2, and its high byte in A
+				self.e('move.b (a5,d6.w),$%02X(a2)' % k2, 'move.b 1(a5,d6.w),d0', 'move.b d0,$%02X(a2)' % (k2 + 1))
+			else:
+				self.e('move.w (a5,d6.w),d5', 'move.w d5,$%02X(a2)' % k2, 'move.b d5,d0')
+			if ky != k2 + 1:	# (Y's copy, where the entry's high byte doesn't go)
+				self.e('move.b d2,$%02X(a2)' % ky)
+			if i.live_out & (N | Z | C):	# N and Z from Y (LDY zy); C from ASL: 0
+				self.e('tst.b d2', 'move sr,d5', 'andi.w #$C,d5', 'andi.b #$E2,d3', 'or.b d5,d3')
+		elif z1 == 'one':		# (engine_pattern2: the entry in zp, its low byte in A)
 			self.e('moveq #0,d6', 'move.b d0,d6', 'add.w d6,d6',	# ASL A, TAY
 			       'move.b d6,d2', 'addq.b #2,d2',			# two INY
 			       'lea %s(pc),a5' % jw, 'move.b (a5,d6.w),d0')

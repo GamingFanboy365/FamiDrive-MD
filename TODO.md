@@ -78,6 +78,17 @@ finished in #1 to #6.
   splits are supported). Sprite 0, a blue block at the status bar's left end, shows,
   though its attributes put it behind the background. Only the first
   stage and the demo were looked at.
+- [ ] **Deja Vu: a background pattern table switched mid-screen.** Its NMI
+  handler sets table 0 for the picture and, after a sprite 0 hit, table 1
+  for the menu below it. Each switch converts the whole BG table again
+  (`chrLoadBg`, about 2.4 MD frames), so after its file menu it crawls and
+  shows nothing. Both tables should stay converted, and the rows below the
+  split come from the other (the window plane, as for MMC3's splits).
+- [ ] **Jump tables read too far.** After a JSR to a jump engine,
+  `inline_table` takes entries until one doesn't look like code (up to 128);
+  some of Tiny Toon Adventures' run on into the code after them, which is
+  then translated from wrong places too (its unofficial opcode warnings).
+  An entry that points just past its table could end it.
 - [ ] **An NMI during the NMI handler, elsewhere.** A VBlank that comes
   while the NMI handler runs is held until its RTI (`famiVInt`, `rcNmiDue`:
   `.late`), so a slow frame here isn't a lag frame to the game. The one
