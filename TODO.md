@@ -134,17 +134,18 @@ finished in #1 to #6.
 
 ## Recompiler
 
-- [ ] **More speed.** Recompiled Pinball plays as fast as on a NES, but its
-  attract demo runs at about 93%. Next steps: `(zp),Y` reads through RAM
+- [ ] **More speed.** Recompiled Pinball plays as fast as on a NES, and its
+  attract demo at about 99.5%. Next steps: `(zp),Y` reads through RAM
   pointers outside versioned loops take a slow path (placing NES RAM next to
   the PRG copy would let one `(a0,d6.w)` read both); versioning loops that
   call routines; keeping hot zero-page variables in registers.
 - [ ] **Banked games' calls into banks.** The fixed bank's code calls a
   bank's code, and returns into it, through `rcDispatch` (a few times a
   frame in Super Mario Bros. 2): which bank is at $8000 isn't known where
-  the fixed bank calls it. Super Mario Bros. 2 still slows in the busiest
-  moments of some levels (World 4-1 to about 54-56 frames a second on a
-  Mega Drive, 50-56 on an AtGames handheld); what's left is spread out:
+  the fixed bank calls it. Super Mario Bros. 2 runs at 60 while you play,
+  as far as tried, but slows for a moment (to about 51-57 frames a second,
+  on a Mega Drive and an AtGames handheld) as the player dies or goes to
+  another area; what's left is spread out:
   calls that keep the 6502's return address (its object handlers, reached
   through its jump engine, leave with PLA PLA RTS, so they get no copies),
   nametable writes, the sound, sprite conversion and copying the tiles
@@ -188,9 +189,11 @@ finished in #1 to #6.
 
 ## Hardware
 
-- [ ] **Test on real hardware.** Everything so far was tested in emulators
-  (Genesis Plus GX, and BlastEm for the 6-button pad fix), not on a real
-  console or the AtGames units this project targets.
+- [ ] **Test on an original Mega Drive.** Changes are tested in emulators
+  (Genesis Plus GX, and BlastEm for the 6-button pad fix). An AtGames
+  Genesis handheld has run the hardware test ROM (`tools/hwtest`) and
+  FamiDrive, which its results led to the handheld's fixes for; an
+  original Mega Drive hasn't.
 
 ## Cleanup
 
