@@ -1339,10 +1339,11 @@ class Gen:
 				rp, rc = self.tag('Rp', i.pc), self.tag('Rc', i.pc)
 				if self.prg.r6 == 0xC000:
 					prg += ['cmpi.w #$C000,d6', 'bcs.s ' + rp, 'cmpi.w #$E000,d6', 'bcs.w ' + rc, rp + ':']
-				else:
-					prg += ['cmpi.w #$A000,d6', 'bcs.w ' + rc]
-				self.stubs += [rc + ':', '\t\tmovea.l rcFrameC(a4),a5', '\t\tmove.b (a5,d6.w),%s' % r,
-					       '\t\tjmp ' + rd]
+					self.stubs += [rc + ':', '\t\tmovea.l rcFrameC(a4),a5', '\t\tmove.b (a5,d6.w),%s' % r,
+						       '\t\tjmp ' + rd]
+				else:		# (in line: reads there are as common as at $A000-$FFFF)
+					prg += ['cmpi.w #$A000,d6', 'bcc.s ' + rp, 'movea.l rcFrameC(a4),a5',
+						'move.b (a5,d6.w),%s' % r, 'bra.s ' + rd, rp + ':']
 			return self.indy_addr(a) + prg + ['move.b (a0,d6.w),%s' % r, rd + ':'], r
 		if m == 'indx':
 			return self.indx_addr(a) + ['jsr rcRead16'], 'd7'

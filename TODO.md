@@ -47,9 +47,17 @@ finished in #1 to #6.
 - [ ] **Mega Man 3: what's left.** It plays now (MMC3 PRG mode 0 with 8 KB
   banks apart; NMIs held while its NMI handler's sound work after its RTI
   runs, or the game's own code does that work: NMI_TAIL, `nmiTailStart`,
-  `nmiTailEnd`, `nmiTailR6`). Recompiled, Top Man's stage runs at about 29
-  game frames a second so far: the game's own frame outlasts an MD frame
-  there. Interpreted (about 12), its title screen misses some tiles. Only
+  `nmiTailEnd`, `nmiTailR6`). Recompiled, Top Man's stage runs at 30 game
+  frames a second so far: NMIs come each frame, but the game's main task
+  finishes its frame in every other one (its yield, $FF21, runs once each
+  two NMIs). A game frame there takes about 1.3 MD frames of work: the main
+  task's, about a whole MD frame, and each NMI's (its handler, its sound
+  driver, about 21,500 68000 cycles, and FamiDrive's PPU, APU and sprite
+  work), together about 38% of one. 60 would need about a quarter less.
+  The biggest single parts: the sprite routine's loop at $F230 (about 10%
+  of the time; six (zp),Y reads through two pointers a turn, which a loop's
+  fast copy, `version_plan`, can't take: it has one register for one), the
+  sound driver (18%), bank switches ($FF6B, 14 a frame, 5%). Interpreted (about 12), its title screen misses some tiles. Only
   Top Man's stage was tried. The recompiler takes some of its banks' data
   for code (its unofficial opcode warnings).
 - [ ] **Life Force: what's left.** It plays now, recompiled (an NMI taken
