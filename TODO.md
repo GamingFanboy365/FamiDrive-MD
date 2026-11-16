@@ -50,16 +50,20 @@ finished in #1 to #6.
   `nmiTailEnd`, `nmiTailR6`). Recompiled, Top Man's stage runs at 30 game
   frames a second so far: NMIs come each frame, but the game's main task
   finishes its frame in every other one (its yield, $FF21, runs once each
-  two NMIs). A game frame there takes about 1.3 MD frames of work: the main
-  task's, about a whole MD frame, and each NMI's (its handler, its sound
-  driver, about 21,500 68000 cycles, and FamiDrive's PPU, APU and sprite
-  work), together about 38% of one. 60 would need about a quarter less.
-  The biggest single parts: the sprite routine's loop at $F230 (about 10%
-  of the time; six (zp),Y reads through two pointers a turn, which a loop's
-  fast copy, `version_plan`, can't take: it has one register for one), the
-  sound driver (18%), bank switches ($FF6B, 14 a frame, 5%). Interpreted (about 12), its title screen misses some tiles. Only
-  Top Man's stage was tried. The recompiler takes some of its banks' data
-  for code (its unofficial opcode warnings).
+  two NMIs). A game frame there takes about 1.2 MD frames of work (with each
+  NMI held until the game waits for it: 320 lines from the NMI to its frame
+  done on average, 12% of frames within one MD frame), the main task's and
+  each NMI's (its handler, its sound driver, and FamiDrive's PPU, APU and
+  sprite work). 60 would need about a fifth less. Its sound driver's jump
+  engine ($8023: `engine_pattern2`) and multiply ($8006: `rcMul8`) are
+  translated directly now, and its sprite routine's loop at $F230 reads
+  through both its pointers. The biggest parts left: the sound driver
+  (about a tenth of the work), bank switches ($FF6B, about 25 a frame: its
+  callers push a return address because its sound path, rarely taken,
+  leaves its copy), and calls and returns in general. Interpreted (about
+  12), its title screen misses some tiles. Only Top Man's stage was tried.
+  The recompiler takes some of its banks' data for code (its unofficial
+  opcode warnings).
 - [ ] **Life Force: what's left.** It plays now, recompiled (an NMI taken
   in its NMI handler where it waits for a sprite 0 hit that can't come:
   `rdPPU_Status`, `ppuSp0Wait`; its sprites off below the status bar's

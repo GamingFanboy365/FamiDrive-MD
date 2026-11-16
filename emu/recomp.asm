@@ -908,6 +908,46 @@ rcDelay:
 		move.w	d5,vNmi(a4)
 		rts
 
+; ----------------------------------------------------------------
+; A JSR to a routine that multiplies hi by m into hi:lo, shifting and
+; adding eight times (tools/recomp6502.py: mul_pattern, emit_mul_call):
+; the product, and what the routine leaves besides. A is hi:lo's high
+; byte as it last added m (the multiplier's lowest 1 bit: hi:lo is then
+; the product shifted down as far as that bit is up), 0 if it never
+; did; V from that add's high byte, which crosses $80 only if hi:lo
+; went from below $8000 to $8000 or more; as it was if it never added.
+; Y is 0, N clear and Z set (DEY), C clear (the product fits 16 bits).
+;
+; d6.w - hi, the multiplier (in: 0-255; out: the product)
+; d5.w - m (0-255; kept)
+; ----------------------------------------------------------------
+
+rcMul8:
+		andi.b	#$E2,d3			; N, Z, C (and X) clear, then Z set
+		ori.b	#4,d3
+		moveq	#0,d2
+		tst.w	d6
+		beq.s	.none			; never added: A 0, V kept
+		move.w	d6,d7
+		moveq	#-1,d4
+.low:		addq.w	#1,d4			; the multiplier's lowest 1 bit
+		lsr.w	#1,d7
+		bcc.s	.low
+		mulu	d5,d6
+		move.w	d6,d7
+		lsr.w	d4,d7			; hi:lo as it last added m
+		move.w	d7,d0
+		lsr.w	#8,d0			; A
+		bclr	#1,d3
+		tst.w	d7
+		bpl.s	.v
+		sub.w	d5,d7
+		bmi.s	.v
+		bset	#1,d3			; V: from below $8000 to $8000 or more
+.v:		rts
+.none:		moveq	#0,d0
+		rts
+
 		if PRG_8K
 ; ----------------------------------------------------------------
 ; MMC3, 8 KB banks: R6 or R7 picked a bank (mmc3Prg1, rcStart): the
