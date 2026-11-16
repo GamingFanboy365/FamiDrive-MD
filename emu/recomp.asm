@@ -601,7 +601,7 @@ rcRti:
 		tst.w	cpuFamiVint(a4)		; the IRQ handler's (MMC3_IRQ): what's
 		bne.s	.nmi			; below its line, as it set it
 		tst.w	cpuInIrq(a4)
-		beq.s	.resume
+		beq.w	.resume
 		jsr	splitNext		; the next one this frame, if the handler
 		beq.s	.irq_last		; left one on
 		move.w	irqInterp(a4),rcNmiInterp(a4)
@@ -610,7 +610,7 @@ rcRti:
 		clr.w	cpuInIrq(a4)
 		jsr	splitDone
 		move.w	irqInterp(a4),rcNmiInterp(a4)	; (on as the NMI handler's RTI went)
-		bra.s	.resume
+		bra.w	.resume
 .nmi:
 		endif
 		tst.w	cpuFamiVint(a4)
@@ -646,6 +646,7 @@ rcRti:
 		beq.s	.resume
 		tst.w	cpuModeIntDis(a4)
 		beq.s	rcIrq
+		move.w	#1,irqHeld(a4)		; (the I flag: ppuFrameStart)
 .resume:
 		endif
 .back:

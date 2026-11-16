@@ -2261,13 +2261,16 @@ irqDue:
 		beq.s	.none
 		tst.w	ppuMaskOn(a4)		; (the MMC3 counts lines only while the
 		beq.s	.none			; PPU draws them)
-		tst.w	cpuModeIntDis(a4)
-		bne.s	.none
 		tst.w	cpuInIrq(a4)
 		bne.s	.none
+		tst.w	cpuModeIntDis(a4)
+		bne.s	.held
 		tst.w	cpuFamiVint(a4)
 		beq.s	irqTake
 .none:
+		emuNext
+.held:
+		move.w	#1,irqHeld(a4)		; (the I flag: ppuFrameStart)
 		emuNext
 
 irqTake:

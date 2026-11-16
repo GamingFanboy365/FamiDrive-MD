@@ -35,11 +35,23 @@ finished in #1 to #6.
   below its line shows in the window plane, from the first whole cell row
   (`splitDone`); an earlier one's X scroll, `$2006` rows (one such strip a
   frame, by a line interrupt: `MD_Hint`) and hidden sprites show down to the
-  next, its background tiles don't. The line interrupt's vertical scroll
+  next, its background tiles don't. If the last points the PPU at no rows,
+  the window shows those of the last that did, from its line (`winV`), and
+  if one leaves the background off, the window is blank from its line, and
+  the planes under the window too (`splitBlank`; what it pointed the PPU at
+  after turning it off is for `$2007`). The line interrupt's vertical scroll
   is from the next line in Genesis Plus GX; on a console it may come a
   line later. Not yet: a horizontal scroll below the last split, and other
   sprite tiles below a split (sprites there are hidden when the handler
   switches them).
+  The IRQ comes earlier in the frame than on a NES, so a handler's `$2000`
+  increment is only kept for its own `$2007` writes, and one that a late
+  VBlank or the I flag holds off just doesn't come that frame: the window
+  stays as the last one left it, unless the I flag held it off as the NMI
+  handler returned two frames running (`irqHeld`, `splitMiss`: Code Name:
+  Viper turns it on every frame, but off its stages keeps the I flag set).
+  Tiny Toon Adventures runs its game in its NMI handler, which often
+  outlasts an MD frame, so its IRQ is skipped in many frames.
   Recompiled, Super Mario Bros. 3's split costs about 4% of the time (2-3
   frames a second where it's busiest), most of it the handler's own code
   and its PPU and mapper writes: `splitDone` only works when something it
@@ -78,14 +90,14 @@ finished in #1 to #6.
   splits are supported). Sprite 0, a blue block at the status bar's left end, shows,
   though its attributes put it behind the background. Only the first
   stage and the demo were looked at.
-- [ ] **Code Name: Viper's status bar.** Its IRQ handler runs three times a
-  frame: the first points the PPU at the status bar's rows ($2006) and
-  switches all the CHR banks to it, the second, 5 lines on, switches R0
-  and R1 again, the third, 24 lines on, turns rendering off. The window
-  shows the last one's split (blank), and an earlier one's tiles don't
-  show, so the status bar has the level's. A handler that only switches
-  CHR could go with the split before it, and one that only turns
-  rendering off end the window there.
+- [ ] **Code Name: Viper: what's left.** Its IRQ handler runs three times a
+  frame: the first points the PPU at the status bar's rows (`$2006`) and
+  switches all the CHR banks to blank ones, the second, 5 lines on,
+  switches R0 and R1 to its font, and the third, 24 lines on, turns the
+  background off and writes a column of the level (`$2000` with +32, then
+  `$2007`). The window shows the first one's rows with the font, from the
+  first whole cell row, 2 lines lower than on a NES. Only its first stage
+  was tried.
 - [ ] **Jump tables read too far.** After a JSR to a jump engine,
   `inline_table` takes entries until one doesn't look like code (up to 128);
   some of Tiny Toon Adventures' run on into the code after them, which is

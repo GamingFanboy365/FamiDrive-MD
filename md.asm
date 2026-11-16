@@ -248,8 +248,9 @@ mmc3RegsSplit	ds.b 8			; the CHR registers below the split
 sprHideY	ds.w 1			; OAM DMA: sprites from this Y on are hidden ($E7, or the split's)
 ppuCellAddr	ds.w 1			; the nametable byte ppuDrwCell draws (for the window)
 splitKeyOk	ds.w 1			; 1: splitKey holds what splitDone read last time, and what it set is so
-splitKey	ds.b 28			; (BG banks R0, R1 or R2-R5, mmc3RegsSplit R0-R5, the sprites' mmc3Regs,
-					; irqLine, splitV, splitCtrlX, ppuSprWide, partHideY, vdpScrlY, ppuNTblBase)
+splitKey	ds.b 30			; (BG banks R0, R1 or R2-R5, mmc3RegsSplit R0-R5, the sprites' mmc3Regs,
+					; irqLine, splitV, splitCtrlX, ppuSprWide, partHideY, splitBlank, vdpScrlY,
+					; ppuNTblBase)
 irqEn		ds.w 1			; in the IRQ handler: 1 while the IRQ is on ($E000, $E001 there): another
 irqCount	ds.w 1			; comes this frame, irqLatch lines on (splitNext); how many more have
 irqReload	ds.w 1			; and 1: the handler wrote $C001, which starts the count again from there
@@ -258,9 +259,22 @@ partHideY	ds.w 1			; sprites hidden from this Y by an IRQ handler before the fra
 partLine	ds.w 1			; such a handler's $2006 rows (splitNext): the MD line before their first (0: none),
 partLinePrev	ds.w 1			; the last game frame's,
 partVs		ds.l 1			; and the planes' vertical scroll from there (MD_Hint)
+partLineNew	ds.w 1			; partLine and partVs as this game frame's IRQ handlers set them so far:
+partVsNew	ds.l 1			; splitDone takes them, or blanks the planes under the window
 partOn		ds.w 1			; this MD frame's line interrupt is still to set it (MD_Vint)
 splitChrBank	ds.w 1			; the BG pattern table below the split (bit 7), as ppuChrBank (splitDone)
 sp0Due		ds.w 1			; (byte) a $2000 write after sprite 0's hit switched it (wrPPU_Ctrl: sp0Split)
+winLine		ds.w 1			; an IRQ handler's $2006 rows before the frame's last (splitNext): its line,
+winV		ds.w 1			; the address ($FFFF: none) and its $2000 nametable X bit, for the window
+winCtrlX	ds.w 1			; if the last writes none (splitDone)
+splitBlank	ds.w 1			; an IRQ handler turned the background off ($2001) at this line ($FFFF: none)
+splitWinFill	ds.w 1			; the window's blank cells after splitWinLen's (below splitBlank)
+splitOffV	ds.w 1			; splitV, splitCtrlX and splitChrBank as an IRQ handler turned the background
+splitOffCtrlX	ds.w 1			; off (splitBlank): the split's, if it's still off as the handler returns
+splitOffChr	ds.w 1			; (splitNext)
+irqHeld		ds.w 1			; 1: the I flag held the IRQ off as the NMI handler returned (irqDue, rcRti)
+irqIncrSave	ds.w 1			; ppuAddrIncr as the frame's first IRQ handler began: again once the last returns
+splitMiss	ds.w 1			; 1: the game frame before took no IRQ, as the I flag held it off (ppuFrameStart)
 splitVarsEnd	equ *
 		finish
 		if splitVarsEnd>RAM_Fami_Split-RAM_Fami_Emu+$100
@@ -853,6 +867,8 @@ Fami_LoadRom:
 		dbf	d7,.split_clr
 		move.w	#$E7,sprHideY(a3)
 		move.w	#$FFFF,splitV(a3)
+		move.w	#$FFFF,winV(a3)
+		move.w	#$FFFF,splitBlank(a3)
 		move.l	#$FFFFFFFF,splitBank(a3)
 		move.l	#$FFFFFFFF,splitBank+4(a3)
 		endif

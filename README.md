@@ -81,7 +81,10 @@ its handler leaves it on for a line further down. What the frame's last handler 
 screen below its line (other nametable rows, other CHR banks) shows in the MD's window plane, from
 the first whole cell row below that line. What an earlier one sets up is for the lines down to the
 next: its horizontal scroll, other nametable rows (the planes' vertical scroll, set by a line
-interrupt), and sprites hidden if it switched their tiles, but not other background tiles.
+interrupt), and sprites hidden if it switched their tiles, but not other background tiles. If the
+last one points the PPU at no other rows, the window shows the rows an earlier one pointed it at,
+from that one's line, with the tiles as the last one leaves them, and if it turns the background
+off, the screen is blank from its line (as Code Name: Viper's status bar does both).
 
 ### Checks
 
@@ -163,8 +166,8 @@ handheld's differences.
 - Deja Vu (MMC3) plays recompiled at full speed, as far as its first rooms were tried. The menu
   and text below its picture use the other BG pattern table, switched after a sprite 0 hit:
   shown in the window plane, from the first whole 8-line row there
-- Code Name: Viper (MMC3) plays recompiled, but its status bar shows the level's tiles (see
-  TODO.md)
+- Code Name: Viper (MMC3) plays recompiled, as far as its first stage was tried. Its status bar shows
+  2 lines lower than on a NES (from the first whole 8-line row below its split)
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its

@@ -32,10 +32,16 @@ wrPPU_Table:	dc.w wrPPU_Ctrl-wrPPU_Table ; $2000
 
 wrPPU_Ctrl:
 		if MMC3_IRQ
-		tst.w	cpuInIrq(a4)		; in the IRQ handler: only the
-		beq.s	.main			; nametable X bit and the BG table,
-		move.w	d7,d6			; for the rows below its line
-		lsl.b	#3,d6			; (splitDone; bit 4 -> bit 7)
+		tst.w	cpuInIrq(a4)		; in the IRQ handler: the VRAM
+		beq.s	.main			; increment (Code Name: Viper writes a
+		moveq	#1,d6			; column there), and for the rows below
+		btst	#2,d7			; its line (splitDone) the nametable X
+		beq.s	.irq_incr		; bit and the BG table
+		moveq	#$20,d6
+.irq_incr:
+		move.w	d6,ppuAddrIncr(a4)
+		move.w	d7,d6
+		lsl.b	#3,d6			; (bit 4 -> bit 7)
 		andi.w	#$80,d6
 		move.w	d6,splitChrBank(a4)
 		andi.w	#1,d7
@@ -140,8 +146,20 @@ wrPPU_Ctrl:
 
 wrPPU_Mask:
 		if MMC3_IRQ
-		tst.w	cpuInIrq(a4)		; (in the IRQ handler: below its line,
-		beq.s	.main			; not the frame's)
+		tst.w	cpuInIrq(a4)		; in the IRQ handler: below its line,
+		beq.s	.main			; not the frame's: the background off
+		btst	#3,d7			; from its line on (splitBlank: Code
+		bne.s	.irq_on			; Name: Viper turns it off under its
+		tst.w	splitBlank(a4)		; status bar, to write to VRAM), and
+		bpl.s	.irq_done		; the split's rows, nametable X and BG
+		move.w	irqLine(a4),splitBlank(a4)	; table as they are now, for if it's
+		move.w	splitV(a4),splitOffV(a4)	; still off when the handler returns
+		move.w	splitCtrlX(a4),splitOffCtrlX(a4)	; (splitNext); or on again, as
+		move.w	splitChrBank(a4),splitOffChr(a4)	; it was
+		emuNext
+.irq_on:
+		move.w	#$FFFF,splitBlank(a4)
+.irq_done:
 		emuNext
 .main:
 		endif
@@ -482,15 +500,26 @@ ppuFrameStart:
 		move.l	vdpScrlX(a4),hsTopCur(a4)
 		if MMC3_IRQ
 		tst.w	splitSeen(a4)		; the last game frame took no IRQ, and
-		bne.s	.split			; none waits (one may come late, see
-		tst.w	irqOn(a4)		; irqDue): no split
-		bne.s	.split
+		bne.s	.split_seen		; none waits (one may come late, see
+		tst.w	irqOn(a4)		; irqDue: after a CLI, or the next
+		beq.s	.no_split		; frame's if a late VBlank was taken
+		tst.w	irqHeld(a4)		; first), or the I flag held it off as
+		beq.s	.split_seen		; the NMI handler returned in this frame
+		tst.w	splitMiss(a4)		; and the one before (Code Name: Viper
+		bne.s	.no_split		; turns it on each frame, but keeps the
+		move.w	#1,splitMiss(a4)	; I flag set off its stages): no split
+		bra.s	.split
+.no_split:
 		clr.w	splitShow(a4)
 		clr.w	splitWinNt(a4)
 		move.w	#$E7,sprHideY(a4)
 		clr.w	splitKeyOk(a4)		; (splitDone: it sets them again)
+		bra.s	.split
+.split_seen:
+		clr.w	splitMiss(a4)
 .split:
 		clr.w	splitSeen(a4)
+		clr.w	irqHeld(a4)
 		endif
 		clr.w	hsCurN(a4)
 		clr.w	ppuSp0State(a4)
@@ -500,6 +529,7 @@ ppuFrameStart:
 		if MMC3_IRQ
 		move.w	partLine(a4),partLinePrev(a4)	; (a strip above the split: until this
 		clr.w	partLine(a4)			; frame's IRQs set it again, MD_Vint)
+		clr.w	partLineNew(a4)
 		endif
 		move.w	(sp)+,sr
 		movem.l	(sp)+,d0/d5/a0-a1
@@ -1822,7 +1852,9 @@ chrDma:
 ; are hidden (sprHideY) if it switched their tiles too (Super Mario
 ; Bros. 3 does, to blank ones, in its levels). A handler that leaves
 ; the IRQ on is followed by another in the same frame (splitNext): the
-; window is the last one's.
+; window is the last one's, or with no rows of its own, the rows of the
+; last that pointed the PPU at some, and blank from where one turned the
+; background off (Code Name: Viper's status bar).
 ; ----------------------------------------------------------------
 
 ; The IRQ is taken: the split begins with the CHR as it is, or for one
@@ -1836,10 +1868,17 @@ splitBegin:
 		move.w	ppuChrBank(a4),splitChrBank(a4)	; (a $2000 write there may change it)
 		move.w	#$E7,partHideY(a4)
 		clr.w	irqCount(a4)
+		clr.w	partLineNew(a4)
+		move.w	#$FFFF,winV(a4)
+		move.w	#$FFFF,splitBlank(a4)
+		move.w	ppuAddrIncr(a4),irqIncrSave(a4)	; (splitNext)
 .next:
 		move.w	#$FFFF,splitV(a4)
 		move.w	#$FFFF,splitCtrlX(a4)
 		move.w	#$FFFF,splitScrX(a4)
+		move.w	#$FFFF,splitOffV(a4)	; (with the background off since an
+		move.w	#$FFFF,splitOffCtrlX(a4)	; earlier handler: none of its
+		move.w	splitChrBank(a4),splitOffChr(a4)	; own, splitNext)
 		move.w	#1,splitSeen(a4)
 		clr.w	irqOn(a4)		; (the next frame's: the NMI handler sets it)
 		move.w	#1,cpuInIrq(a4)
@@ -1860,6 +1899,8 @@ sp0Split:
 		move.w	#$FFFF,splitV(a4)	; the screen's scroll
 		move.w	#$FFFF,splitCtrlX(a4)
 		move.w	#$FFFF,splitScrX(a4)
+		move.w	#$FFFF,winV(a4)
+		move.w	#$FFFF,splitBlank(a4)
 		move.w	#$E7,partHideY(a4)
 		move.w	#1,splitSeen(a4)	; (this game frame has one: ppuFrameStart)
 		move.w	ppuSp0Ypos(a4),irqLine(a4)	; from the line after sprite 0's
@@ -1881,10 +1922,20 @@ sp0Split:
 ; (partHideY: splitDone, the OAM DMA), its X scroll as a split (hsCur),
 ; and the nametable rows its $2006 points at, for the first handler
 ; that has one, with the planes' vertical scroll set at its line
-; (partLine, partVs: MD_Vint, MD_Hint), not its tiles. Up to 4 a frame.
+; (partLineNew, partVsNew: partLine and partVs once the last returns,
+; splitDone; MD_Vint, MD_Hint), not its tiles. Up to 4 a frame.
+; If it left the background off (splitBlank), what it pointed the PPU
+; at once it had turned it off is for $2007, not the split: Code Name:
+; Viper writes a column of its level that way below its status bar.
 ; Out: Z clear - another IRQ is taken now (irqLine is its line), Z set -
 ; this was the frame's last (splitDone)
 splitNext:
+		tst.w	splitBlank(a4)
+		bmi.s	.bg_on
+		move.w	splitOffV(a4),splitV(a4)
+		move.w	splitOffCtrlX(a4),splitCtrlX(a4)
+		move.w	splitOffChr(a4),splitChrBank(a4)
+.bg_on:
 		tst.w	irqEn(a4)
 		beq.w	.last
 		cmpi.w	#3,irqCount(a4)
@@ -1932,11 +1983,16 @@ splitNext:
 .spr_shown:
 	; its $2006 rows: plane A's (nametables 0 and 1) or B's (2 and 3)
 	; scroll that puts their first line at this one, and the other
-	; plane's that puts its blank rows there (as wrPPU_Scroll)
+	; plane's that puts its blank rows there (as wrPPU_Scroll), for
+	; splitDone to set (partLineNew, partVsNew); and for the window if
+	; the frame's last handler writes none (winV)
 		move.w	splitV(a4),d0
 		cmpi.w	#$FFFF,d0
 		beq.s	.no_rows
-		tst.w	partLine(a4)		; (one strip a frame)
+		move.w	d5,winLine(a4)
+		move.w	d0,winV(a4)
+		move.w	splitCtrlX(a4),winCtrlX(a4)
+		tst.w	partLineNew(a4)		; (one strip a frame)
 		bne.s	.no_rows
 		move.w	d0,d1
 		lsr.w	#5,d1
@@ -1952,7 +2008,7 @@ splitNext:
 		subq.w	#8,d2			; NES line L is MD line L-8
 		subq.w	#1,d2			; (the line interrupt's: the one before)
 		ble.s	.no_rows
-		move.w	d2,partLine(a4)
+		move.w	d2,partLineNew(a4)
 		addq.w	#1,d2
 		sub.w	d2,d1
 		move.w	d1,d3
@@ -1961,8 +2017,8 @@ splitNext:
 		beq.s	.plane_a
 		exg	d1,d3
 .plane_a:
-		move.w	d1,partVs(a4)
-		move.w	d3,partVs+2(a4)
+		move.w	d1,partVsNew(a4)
+		move.w	d3,partVsNew+2(a4)
 .no_rows:
 	; its X scroll, with its $2000's nametable X or the frame's: a split
 	; from its line, if that isn't the scroll there already
@@ -2004,13 +2060,73 @@ splitNext:
 		moveq	#1,d6
 		rts
 .last:
-		moveq	#0,d6
+		move.w	irqIncrSave(a4),ppuAddrIncr(a4)	; (the handlers' $2000 increment
+		moveq	#0,d6			; was for their own $2007 writes: they
+		rts				; come earlier here than on a NES)
+
+; The IRQ handler returned: the window and tile set for what it set
+; (splitWindow), and the strip above it (splitNext) from the next MD
+; frame on (MD_Vint, MD_Hint). A last handler that points the PPU at no
+; rows of its own ($2006) shows those of the frame's last one that did,
+; from that one's line, with the CHR as the last leaves it: Code Name:
+; Viper's first points the PPU at its status bar's rows and switches
+; all the CHR banks, the second, 5 lines on, switches R0 and R1 again
+; for the rest of it, and the third, 24 lines on, turns the background
+; off (splitBlank) to write a column to VRAM. Under a window of an
+; earlier handler's rows, or with blank rows, the planes are blank
+; (their rows 32-59) from the window's first line, in place of that
+; handler's strip if it had one, or with none: they would show through
+; the window's transparent pixels.
+splitDone:
+		cmpi.w	#$FFFF,splitV(a4)
+		bne.s	.own
+		cmpi.w	#$FFFF,winV(a4)
+		beq.s	.own
+		move.w	winLine(a4),irqLine(a4)
+		move.w	winV(a4),splitV(a4)
+		move.w	winCtrlX(a4),splitCtrlX(a4)
+.own:
+		bsr.w	splitWindow
+		move.w	sr,-(sp)
+		move.w	#$2700,sr
+		movem.l	d0-d2,-(sp)
+		move.w	partLineNew(a4),d0	; the strip (splitNext),
+		move.l	partVsNew(a4),d1
+		tst.w	splitWinNt(a4)		; or under the window, if it shows an
+		beq.s	.strip			; earlier handler's rows or blank ones,
+		tst.w	splitBlank(a4)		; the planes blank
+		bpl.s	.planes
+		cmpi.w	#$FFFF,winV(a4)
+		beq.s	.strip
+		move.w	winLine(a4),d2
+		cmp.w	irqLine(a4),d2
+		bne.s	.strip
+.planes:
+		tst.w	d0			; (that handler's strip, or none)
+		beq.s	.planes_line
+		move.w	irqLine(a4),d2
+		subi.w	#9,d2			; (its line, as splitNext puts it)
+		cmp.w	d0,d2
+		bne.s	.strip
+.planes_line:
+		moveq	#$1F,d2
+		and.w	splitShow(a4),d2	; the window's first row
+		lsl.w	#3,d2
+		subq.w	#1,d2			; (the line before it)
+		ble.s	.strip
+		move.w	d2,d0
+		move.l	#$01000100,d1
+.strip:
+		move.w	d0,partLine(a4)
+		move.l	d1,partVs(a4)
+		movem.l	(sp)+,d0-d2
+		move.w	(sp)+,sr
 		rts
 
-; The IRQ handler returned: the window and tile set for what it set.
-; If nothing it reads changed since last time (splitKey: it's the same
-; most frames), what it set then is still so: nothing to do.
-splitDone:
+; The window and tile set. If nothing it reads changed since last time
+; (splitKey: it's the same most frames), what it set then is still so:
+; nothing to do.
+splitWindow:
 		move.w	sr,-(sp)
 		move.w	#$2700,sr
 		tst.w	splitKeyOk(a4)
@@ -2051,6 +2167,9 @@ splitDone:
 		cmp.w	(a5)+,d1
 		bne.s	.changed
 		move.w	partHideY(a4),d1
+		cmp.w	(a5)+,d1
+		bne.s	.changed
+		move.w	splitBlank(a4),d1
 		cmp.w	(a5)+,d1
 		bne.s	.changed
 		cmpi.w	#$FFFF,splitV(a4)	; (with no $2006: the frame's scroll)
@@ -2181,6 +2300,25 @@ splitDone:
 		bls.s	.rows
 		move.w	d4,d2
 .rows:
+		moveq	#0,d4			; blank cells: none, or from the first
+		move.w	splitBlank(a4),d3	; row all below the line where the
+		bmi.s	.no_blank		; background was turned off (splitBlank)
+		lsr.w	#3,d3			; to the screen's bottom
+		cmpi.w	#28,d3
+		bcc.s	.no_blank
+		sub.w	d1,d3			; (the window's rows above it)
+		bpl.s	.above
+		moveq	#0,d3
+.above:
+		cmp.w	d3,d2
+		bls.s	.fill
+		move.w	d3,d2
+.fill:
+		moveq	#28,d4
+		sub.w	d1,d4
+		sub.w	d2,d4
+		lsl.w	#5,d4
+.no_blank:
 		lsl.w	#5,d2			; nametable bytes
 		move.w	d1,d3			; VRAM: row * 64
 		lsl.w	#6,d3
@@ -2192,11 +2330,14 @@ splitDone:
 		cmp.w	splitWinVram(a4),d3
 		bne.s	.draw
 		cmp.w	splitWinLen(a4),d2
+		bne.s	.draw
+		cmp.w	splitWinFill(a4),d4
 		beq.s	.drawn
 .draw:
 		move.w	d0,splitWinNt(a4)
 		move.w	d3,splitWinVram(a4)
 		move.w	d2,splitWinLen(a4)
+		move.w	d4,splitWinFill(a4)
 		bsr.w	ppuWinRedraw
 .drawn:
 	; sprites from the window's line on: hidden if the handler switched
@@ -2229,6 +2370,17 @@ splitDone:
 		bls.s	.spr_part		; line: splitNext)
 		move.w	partHideY(a4),d5
 .spr_part:
+		move.w	splitBlank(a4),d3	; (or from where the background was
+		bmi.s	.spr_shown		; turned off, the line after the
+		subq.w	#3,d3			; handler's: more than half below it)
+		tst.w	ppuSprWide(a4)
+		beq.s	.spr_off
+		subq.w	#4,d3
+.spr_off:
+		cmp.w	d5,d3
+		bcc.s	.spr_shown
+		move.w	d3,d5
+.spr_shown:
 		move.w	d5,sprHideY(a4)
 .done:
 		lea	splitKey(a4),a5		; what it read, for next time (in the
@@ -2253,6 +2405,7 @@ splitDone:
 		move.w	splitCtrlX(a4),(a5)+
 		move.w	ppuSprWide(a4),(a5)+
 		move.w	partHideY(a4),(a5)+
+		move.w	splitBlank(a4),(a5)+
 		move.l	vdpScrlY(a4),(a5)+
 		move.w	ppuNTblBase(a4),(a5)+
 		move.w	#1,splitKeyOk(a4)
@@ -2275,7 +2428,7 @@ ppuWinRedraw:
 		move.w	sr,-(sp)
 		move.w	#$2700,sr
 		move.w	splitWinNt(a4),d0	; PPU address
-		beq.s	.done
+		beq.w	.done
 		move.w	splitWinLen(a4),d1	; bytes
 		move.w	splitWinVram(a4),d2
 		andi.w	#$3FFF,d2
@@ -2283,6 +2436,7 @@ ppuWinRedraw:
 		move.w	d2,4(a6)
 		move.w	#splitWinBase>>14,4(a6)
 		subq.w	#1,d1
+		bmi.s	.fill			; (none: all blank)
 .cell:
 		move.w	d0,d2			; its attribute byte: nametable, $3C0,
 		andi.w	#$2C00,d2		; row / 4 * 8, column / 4
@@ -2314,6 +2468,13 @@ ppuWinRedraw:
 		move.w	d5,(a6)
 		addq.w	#1,d0
 		dbf	d1,.cell
+.fill:
+		move.w	splitWinFill(a4),d1	; then blank ones (splitBlank: the
+		beq.s	.done			; planes are blank there too, splitDone)
+		subq.w	#1,d1
+.blank:
+		move.w	#$300,(a6)
+		dbf	d1,.blank
 .done:
 		move.w	(sp)+,sr
 		movem.l	(sp)+,d0-d6
