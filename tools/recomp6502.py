@@ -1319,8 +1319,9 @@ class Gen:
 				return ['move.w %s,d4' % r] + (['addq.w #1,d4'] if a & 1 else []) + \
 				       ['jsr rcReadPad'], 'd7'
 			return ['move.w #$%04X,d6' % a, 'add.w %s,d6' % r, 'jsr rcRead16'], 'd7'
-		if m == 'indy' and self.fast and 'ptr' in self.fast:
-			return [], self.ix(0, 'd2', 'a5')	# pointer checked and loaded into a5
+		if m == 'indy' and self.fast and 'ptr' in self.fast:	# pointer checked and loaded into a5
+			two = self.fast['ptrz'][1:] == [a]		# (the second: a1)
+			return [], self.ix(0, 'd2', 'a1' if two else 'a5')
 		if m == 'indy':
 			rn, rs, rd = (self.tag(x, i.pc) for x in ('Rn', 'Rs', 'Rd'))
 			r = dst or 'd7'
@@ -1381,6 +1382,10 @@ class Gen:
 		if a + self.index_hi(i) < 0x800:
 			if a < 0x80:
 				return [], self.ix(a, r)
+			if self.fast and 'ptr' in self.fast:	# (a5 holds the pointer)
+				if 'off' in self.fast and self.fast['off'][r]:
+					raise Unroll
+				return ['move.w %s,d6' % r, 'addi.w #$%04X,d6' % a], '(a2,d6.w)'
 			return self.a5_ix(a, r, '$%04X' % a)
 		if self.fast and 'off' in self.fast and self.fast['off'][r]:
 			raise Unroll
@@ -1587,8 +1592,8 @@ class Gen:
 			base, reg = int(ea[1:ea.index('(')], 16), ea[-5:-3]
 			vals = [p - base for p in ptr if 0 <= p - base <= 255]
 		chk = []
-		for v in vals:
-			chk += ['cmpi.b #$%02X,%s' % (v, reg), 'beq.w %s' % self.olab(i.pc)]
+		for v in vals:			# (d6: the whole RAM address)
+			chk += ['cmpi.%s #$%02X,%s' % ('w' if reg == 'd6' else 'b', v, reg), 'beq.w %s' % self.olab(i.pc)]
 		return setup + chk, ea, post
 
 	def dst_plain(self, i):
@@ -2840,7 +2845,11 @@ class Gen:
 		writes gets a second, fast copy: a guard at its entry loads the
 		pointer into a5 once and checks the index registers' ranges, so
 		zp,X needs no wrap-around and stores can't hit the pointer.
-		Stores the guard couldn't clear check their address instead."""
+		Stores the guard couldn't clear check their address instead.
+		Through two pointers (Mega Man 3's sprite loop), the second goes
+		in a1, which translated code can always make again from a0: so
+		only where nothing else in the loop uses a1, and every way out
+		of the copy makes it again first (copy_of)."""
 		t = b.arg
 		body, pc = [], t
 		while pc <= b.pc and pc in self.insns:
@@ -2849,17 +2858,18 @@ class Gen:
 		if pc != b.pc + 2:
 			return None
 		W = ('STA', 'STX', 'STY', 'INC', 'DEC', 'ASL', 'LSR', 'ROL', 'ROR')
-		ptr = None
+		ptrz = []			# the pointers' low bytes' addresses
 		for i in body:
 			if i.m in ('JSR', 'JMP', 'RTS', 'RTI', 'BRK', 'PHA', 'PLA', 'PHP', 'PLP', 'TXS'):
 				return None
 			if i.mode == 'rel' and i is not b and i.arg <= i.pc:
 				return None
 			if i.mode == 'indy':
-				if i.m == 'STA' or ptr not in (None, i.arg):
+				if i.m == 'STA' or (i.arg not in ptrz and len(ptrz) == 2):
 					return None
-				ptr = i.arg
-		if ptr is None:
+				if i.arg not in ptrz:
+					ptrz.append(i.arg)
+		if not ptrz:
 			return None
 		# the furthest index the (zp),Y reads reach, from the registers at
 		# entry (emit_versioned): Y if the loop doesn't change it; Y plus
@@ -2876,7 +2886,7 @@ class Gen:
 			reach = 'Y counts'
 		elif cnt is not None and cnt.m == 'DEX' and xs == [cnt] and len(ys) == 1 and ys[0].m == 'INY':
 			reach = 'Y + X'
-		ptrs = [ptr, (ptr + 1) & 0xFF]
+		ptrs = [a for p in ptrz for a in (p, (p + 1) & 0xFF)]
 		for i in body:
 			if i.m in W and (i.mode == 'zp' or (i.mode == 'abs' and i.arg < 0x2000)) \
 			   and i.arg & 0x7FF in ptrs:
@@ -2931,10 +2941,13 @@ class Gen:
 			if runs and len(runs) <= 2:
 				guard[r] = runs
 				direct |= {i.pc for i, base, zp, wr in acc[r] if zp}
-			else:
-				check |= {i.pc for i, base, zp, wr in acc[r] if wr}
-		plan = {'t': t, 'b': b, 'body': body, 'pcs': {i.pc for i in body}, 'ptr': ptrs,
+			else:			# (a store whose addresses can't reach the pointers needn't check)
+				check |= {i.pc for i, base, zp, wr in acc[r] if wr and
+					  (zp or any(base <= p <= base + 255 for p in alias))}
+		plan = {'t': t, 'b': b, 'body': body, 'pcs': {i.pc for i in body}, 'ptr': ptrs, 'ptrz': ptrz,
 			'direct': direct, 'check': check, 'guard': guard, 'reach': reach}
+		if len(ptrz) == 2:
+			return plan		# (not unrolled, nor a $2007 run: one pointer only)
 		# $2007 stores and no other PPU access, X or Y counting the turns
 		# down (one DEX or DEY all that changes it), and no way out but
 		# the last turn (no branch to the BNE either: its copy for entries
@@ -3173,7 +3186,30 @@ class Gen:
 			self.ccr_d3 = None
 		if fast and any((',a5' in l or ('jsr' in l and 'rcNmi' not in l)) and '(a5 kept)' not in l for l in fast):
 			fast = None
+		if fast and len(plan['ptrz']) == 2:
+			fast = self.a1_exits(fast, '%sA1_%04X' % (base, t))
 		return fast
+
+	def a1_exits(self, fast, name):
+		"""A two pointer fast copy (version_plan): None if anything in it
+		but the second pointer's reads uses a1, or checks for an NMI (whose
+		handler would read PRG through a1); else its lines with each way
+		out (to a label not its own) through a stub that makes a1 again."""
+		if any('rcNmi' in l or re.sub(r'\(a1,d2\.w\)', '', l).find('a1') >= 0 for l in fast):
+			return None
+		own = {l.split(':')[0].strip() for l in fast if re.match(r'\s*[A-Za-z_][A-Za-z0-9_]*:', l)}
+		stubs, out = {}, []
+		for l in fast:
+			m = re.match(r'^(\s+)(b[a-z]{2}\.[sw]|jmp|bra\.[sw])\s+\(?([A-Za-z_][A-Za-z0-9_]*)\)?(\.l)?\s*$', l)
+			if m and m.group(3) not in own:
+				to = m.group(3)
+				stub = stubs.setdefault(to, '%s_%d' % (name, len(stubs)))
+				op = m.group(2) if m.group(2).startswith('b') and m.group(2) != 'bra.s' else 'jmp'
+				l = '%s%s %s' % (m.group(1), op.replace('.s', '.w'), stub)
+			out.append(l)
+		for to, stub in stubs.items():
+			out += [stub + ':', '\t\tlea -$8000(a0),a1', '\t\tjmp ' + to]
+		return out
 
 	def emit_versioned(self, plan):
 		"""Guard and fast copy of a loop, placed where code falls into
@@ -3189,8 +3225,10 @@ class Gen:
 			return False
 		slow = self.lab(t)
 		v = self.fast['prefix'] if self.fast else ''
-		g = [v + 'V_%04X:' % t, '\t\tmove.b $%02X(a2),-(sp)' % plan['ptr'][1], '\t\tmove.w (sp)+,d6',
-		     '\t\tmove.b $%02X(a2),d6' % plan['ptr'][0]]
+		def load(zp):
+			return ['\t\tmove.b $%02X(a2),-(sp)' % ((zp + 1) & 0xFF), '\t\tmove.w (sp)+,d6',
+				'\t\tmove.b $%02X(a2),d6' % zp]
+		g = [v + 'V_%04X:' % t] + load(plan['ptrz'][0])
 		for r, runs in plan['guard'].items():
 			reg = 'd1' if r == 'X' else 'd2'
 			def within(lo, hi):
@@ -3203,35 +3241,45 @@ class Gen:
 				g += ['\t\tcmpi.b #$%02X,%s' % (runs[0][1], reg), '\t\tbhi.s %s' % hi_lab]
 				g += within(runs[0][0], 255) + ['\t\tbra.s %s' % ok_lab, hi_lab + ':']
 				g += within(runs[1][0], runs[1][1]) + [ok_lab + ':']
-		# d7: the last byte the reads reach (version_plan's reach), in the
-		# same memory as the first (d6)
-		y = '%sVY_%04X' % (v, t)
-		g += {'Y': ['\t\tmoveq #0,d7', '\t\tmove.b d2,d7'],
-		      'Y counts': ['\t\tmoveq #0,d7', '\t\tmove.b d2,d7', '\t\tbne.s ' + y,
-				   '\t\tmove.w #$FF,d7', y + ':'],		# (Y = 0: 256 turns)
-		      'Y + X': ['\t\tmoveq #0,d7', '\t\tmove.b d1,d7', '\t\tbeq.w ' + slow,	# (X = 0: 256 turns)
-				'\t\tmoveq #0,d5', '\t\tmove.b d2,d5', '\t\tadd.w d5,d7',
-				'\t\tcmpi.w #$100,d7', '\t\tbcc.w ' + slow],		# (Y would wrap)
-		      None: ['\t\tmove.w #$FF,d7']}[plan['reach']]
-		g += ['\t\tadd.w d6,d7', '\t\tbcs.w ' + slow]	# (not past $FFFF)
-		g += ['\t\tcmpi.w #$800,d7', '\t\tbcs.s %sVR_%04X' % (v, t)]	# RAM
-		if self.prg.banked:		# PRG RAM
-			g += ['\t\tcmpi.w #$6000,d6', '\t\tbcs.w %s' % slow,
-			      '\t\tcmpi.w #$8000,d7', '\t\tbcs.s %sVW_%04X' % (v, t)]
-		g += ['\t\tcmpi.w #$8000,d6', '\t\tbcs.w %s' % slow]		# PRG
-		if self.prg.prg8:		# R7's frame (a0) but in R6's 8 KB: R6's
-			ok = '%sVP_%04X' % (v, t)
-			if self.prg.r6 == 0xC000:
-				g += ['\t\tcmpi.w #$C000,d7', '\t\tbcs.s ' + ok, '\t\tcmpi.w #$E000,d6', '\t\tbcc.s ' + ok,
-				      '\t\tcmpi.w #$C000,d6', '\t\tbcs.w %s' % slow, '\t\tcmpi.w #$E000,d7', '\t\tbcc.w %s' % slow]
-			else:
-				g += ['\t\tcmpi.w #$A000,d6', '\t\tbcc.s ' + ok, '\t\tcmpi.w #$A000,d7', '\t\tbcc.w %s' % slow]
-			g += ['\t\tmovea.l rcFrameC(a4),a5', '\t\tadda.w d6,a5', '\t\tbra.s %sF_%04X' % (v, t), ok + ':']
-		g += ['\t\tlea (a0,d6.w),a5', '\t\tbra.s %sF_%04X' % (v, t)]
-		if self.prg.banked:
-			g += ['%sVW_%04X:' % (v, t), '\t\tlea (RAM_Fami_WRAM-$6000).l,a5', '\t\tadda.w d6,a5',
-			      '\t\tbra.s %sF_%04X' % (v, t)]
-		g += ['%sVR_%04X:' % (v, t), '\t\tlea (a2,d6.w),a5']
+		# each pointer's guard: its reads' first byte (d6) and last (d7:
+		# version_plan's reach) in the same memory, and the pointer there in
+		# a5 (the second: a1)
+		F = '%sF_%04X' % (v, t)
+		for k, zp in enumerate(plan['ptrz']):
+			x = '' if k == 0 else str(k)
+			reg = 'a5' if k == 0 else 'a1'
+			nxt = F if k == len(plan['ptrz']) - 1 else '%sVB_%04X' % (v, t)
+			if k:
+				g += load(zp)
+			y = '%sVY%s_%04X' % (v, x, t)
+			g += {'Y': ['\t\tmoveq #0,d7', '\t\tmove.b d2,d7'],
+			      'Y counts': ['\t\tmoveq #0,d7', '\t\tmove.b d2,d7', '\t\tbne.s ' + y,
+					   '\t\tmove.w #$FF,d7', y + ':'],		# (Y = 0: 256 turns)
+			      'Y + X': ['\t\tmoveq #0,d7', '\t\tmove.b d1,d7', '\t\tbeq.w ' + slow,	# (X = 0: 256 turns)
+					'\t\tmoveq #0,d5', '\t\tmove.b d2,d5', '\t\tadd.w d5,d7',
+					'\t\tcmpi.w #$100,d7', '\t\tbcc.w ' + slow],		# (Y would wrap)
+			      None: ['\t\tmove.w #$FF,d7']}[plan['reach']]
+			g += ['\t\tadd.w d6,d7', '\t\tbcs.w ' + slow]	# (not past $FFFF)
+			g += ['\t\tcmpi.w #$800,d7', '\t\tbcs.s %sVR%s_%04X' % (v, x, t)]	# RAM
+			if self.prg.banked:		# PRG RAM
+				g += ['\t\tcmpi.w #$6000,d6', '\t\tbcs.w %s' % slow,
+				      '\t\tcmpi.w #$8000,d7', '\t\tbcs.s %sVW%s_%04X' % (v, x, t)]
+			g += ['\t\tcmpi.w #$8000,d6', '\t\tbcs.w %s' % slow]		# PRG
+			if self.prg.prg8:		# R7's frame (a0) but in R6's 8 KB: R6's
+				ok = '%sVP%s_%04X' % (v, x, t)
+				if self.prg.r6 == 0xC000:
+					g += ['\t\tcmpi.w #$C000,d7', '\t\tbcs.s ' + ok, '\t\tcmpi.w #$E000,d6', '\t\tbcc.s ' + ok,
+					      '\t\tcmpi.w #$C000,d6', '\t\tbcs.w %s' % slow, '\t\tcmpi.w #$E000,d7', '\t\tbcc.w %s' % slow]
+				else:
+					g += ['\t\tcmpi.w #$A000,d6', '\t\tbcc.s ' + ok, '\t\tcmpi.w #$A000,d7', '\t\tbcc.w %s' % slow]
+				g += ['\t\tmovea.l rcFrameC(a4),%s' % reg, '\t\tadda.w d6,%s' % reg, '\t\tbra.s ' + nxt, ok + ':']
+			g += ['\t\tlea (a0,d6.w),%s' % reg, '\t\tbra.s ' + nxt]
+			if self.prg.banked:
+				g += ['%sVW%s_%04X:' % (v, x, t), '\t\tlea (RAM_Fami_WRAM-$6000).l,%s' % reg, '\t\tadda.w d6,%s' % reg,
+				      '\t\tbra.s ' + nxt]
+			g += ['%sVR%s_%04X:' % (v, x, t), '\t\tlea (a2,d6.w),%s' % reg]
+			if nxt != F:
+				g += [nxt + ':']
 		nt = pal = None
 		if 'ppu' in plan and 'unroll' not in plan:
 			nt = self.copy_of(plan, None, 'nt')
@@ -3723,6 +3771,85 @@ class Gen:
 					self.out += ['\t\tmove.w #$%04X,d4' % v, '\t\tjmp rcDispatch']
 
 
+SHIFTS = ('lsl', 'lsr', 'asl', 'asr', 'rol', 'ror', 'roxl', 'roxr')
+
+
+def max_size(l):
+	"""The most bytes a line of 68000 code can take (short_branches): its
+	opcode word and each operand's extension words, or the 68000's
+	longest, 10 bytes, for anything not plainly an instruction."""
+	t = l.split(';')[0].strip()
+	if not t:
+		return 0
+	if re.match(r'^[A-Za-z_][A-Za-z0-9_]*:$', t):
+		return 0
+	m = re.match(r'^([a-z]+)(?:\.([bwls]))?(?:\s+(.*))?$', t)
+	if not m:
+		return 10
+	op, sz, args = m.group(1), m.group(2), (m.group(3) or '').strip()
+	if op in ('dc', 'ds', 'rept', 'endm', 'align', 'if', 'else', 'elseif', 'endif', 'include', 'binclude', 'even',
+		  'org', 'phase', 'dephase', 'set', 'equ'):
+		return 1000		# (not code: no branch across it)
+	n = 2
+	if op.startswith('b') and op not in ('btst', 'bset', 'bclr', 'bchg'):
+		return 2 if sz == 's' else 4
+	if op in ('dbf', 'dbra') or (op.startswith('db') and len(op) == 4):
+		return 4
+	ops, depth, cur = [], 0, ''
+	for ch in args:
+		if ch == ',' and depth == 0:
+			ops.append(cur); cur = ''
+			continue
+		depth += ch == '('
+		depth -= ch == ')'
+		cur += ch
+	if cur:
+		ops.append(cur)
+	for o in ops:
+		o = o.strip()
+		if o.startswith('#'):
+			if op in ('moveq', 'addq', 'subq') or op in SHIFTS:
+				continue
+			n += 4 if sz == 'l' else 2
+		elif re.match(r'^(d[0-7]|a[0-7]|sp|sr|ccr|usp|\((a[0-7]|sp)\)\+?|-\((a[0-7]|sp)\))$', o):
+			continue
+		elif re.match(r'^\(.*\)\.w$', o):
+			n += 2
+		elif re.match(r'^[-$A-Za-z0-9_+*]*\((a[0-7]|sp|pc)(,[ad][0-7]\.[wl])?\)$', o):
+			n += 2
+		else:
+			n += 4			# an absolute address (long, at most)
+	return min(n, 10)
+
+
+def short_branches(out):
+	"""Bcc.w to a label near enough becomes Bcc.s: when not taken it's
+	4 cycles less (and 2 bytes). Near enough: no more than 126 bytes away
+	at the most each line between may take (max_size), and no *+n
+	offsets around, which count on the sizes."""
+	labpos = {}
+	for k, l in enumerate(out):
+		m = re.match(r'\s*([A-Za-z_][A-Za-z0-9_]*):', l)
+		if m:
+			labpos.setdefault(m.group(1), k)
+	pat = re.compile(r'^(\s+)b(eq|ne|cs|cc|mi|pl|vs|vc|ge|lt|gt|le|hi|ls)\.w\s+([A-Za-z_][A-Za-z0-9_]*)\s*$')
+	res = list(out)
+	for k, l in enumerate(out):
+		m = pat.match(l)
+		if not m:
+			continue
+		t = labpos.get(m.group(3))
+		if t is None or abs(t - k) > 48:
+			continue
+		lo, hi = (k + 1, t) if t > k else (t, k)
+		if any('*+' in x or '*-' in x for x in out[max(0, lo - 4):hi + 4]):
+			continue
+		span = sum(max_size(x) for x in out[lo:hi])
+		if (t > k and span <= 126) or (t <= k and span + 2 <= 126):
+			res[k] = '%sb%s.s %s' % (m.group(1), m.group(2), m.group(3))
+	return res
+
+
 def long_jumps(out):
 	"""JMP/JSR to labels in the translated code with absolute long
 	addresses. Left to it, the assembler picks absolute short for labels
@@ -4078,7 +4205,7 @@ def main():
 		       ['\t\tdc.l B%d_rcTable' % n for n in range(len(banks))]
 	with open(sys.argv[2], 'w') as f:
 		f.write('; generated by tools/recomp6502.py from %s -- do not publish\n' % sys.argv[1].split('/')[-1])
-		f.write('\n'.join(long_jumps(out)) + '\n')
+		f.write('\n'.join(short_branches(long_jumps(out))) + '\n')
 	print('recomp6502: %d instructions, %d bytes of 6502 code, %d loops versioned%s' %
 	      (sum(len(u['insns']) for u, g in units), sum(i.n for u, g in units for i in u['insns'].values()),
 	       sum(len(g.versioned) for u, g in units), '' if NEST[0] else ', NMIs leave routine copies (nest_ok)'))
