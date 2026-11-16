@@ -135,7 +135,7 @@ finished in #1 to #6.
 ## Recompiler
 
 - [ ] **More speed.** Recompiled Pinball plays as fast as on a NES, but its
-  attract demo runs at about 93%. Next steps: `(zp),Y` reads through RAM
+  attract demo runs at about 97%. Next steps: `(zp),Y` reads through RAM
   pointers outside versioned loops take a slow path (placing NES RAM next to
   the PRG copy would let one `(a0,d6.w)` read both); versioning loops that
   call routines; keeping hot zero-page variables in registers.
@@ -188,9 +188,11 @@ finished in #1 to #6.
 
 ## Hardware
 
-- [ ] **Test on real hardware.** Everything so far was tested in emulators
-  (Genesis Plus GX, and BlastEm for the 6-button pad fix), not on a real
-  console or the AtGames units this project targets.
+- [ ] **Test on an original Mega Drive.** Changes are tested in emulators
+  (Genesis Plus GX, and BlastEm for the 6-button pad fix). An AtGames
+  Genesis handheld has run the hardware test ROM (`tools/hwtest`) and
+  FamiDrive, which its results led to the handheld's fixes for; an
+  original Mega Drive hasn't.
 
 ## Cleanup
 

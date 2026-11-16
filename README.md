@@ -132,7 +132,8 @@ handheld's differences.
   drawing, so it goes by what the game does: sprite 0 hit is reported when the game polls for
   it, a poll that sees the hit flag clear marks the top of the screen, and delay loops count as
   the NES time they would take. Split-screen effects timed any other way can be off by a few
-  lines, and only horizontal splits are supported, besides the MMC3 scanline interrupt's
+  lines, and only horizontal splits are supported, besides the MMC3 scanline interrupt's and, in
+  MMC3 games, a switch of the BG pattern table after a sprite 0 hit (as Deja Vu's)
 - Sound is approximate: no DMC (sample) channel, the PSG only plays 50% squares so pulse duty is
   approximated by volume, pulse notes below about 109 Hz play an octave up, and timing assumes
   an NTSC console
