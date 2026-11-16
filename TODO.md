@@ -22,12 +22,11 @@ finished in #1 to #6.
   to `$0100` like PLP and RTS do.
 - [ ] **Reset state.** The 6502 starts with SP = `$00` and I clear; after reset
   it should be SP = `$FD` with I set.
-- [ ] **MMC3: more of it.** In PRG mode 0, only R6 and R7 as a 16 KB pair are
-  supported (`mmc3Write`, PRG_IMAGES): Mega Man 3 picks them apart (R6 = $18
-  with R7 = $1D, 52 frames in), which is ignored, so it runs the wrong code
-  from there (a black screen, with sound). PRG mode 1, 8 KB banks at $A000
-  and $C000, is (Super Mario Bros. 3: PRG_FRAMES, `mmc3Prg1`), but a game
-  can't switch between the modes. The scanline IRQ is taken when the NMI
+- [ ] **MMC3: more of it.** R6's and R7's 8 KB banks are switched one at a
+  time where the game's code does that (PRG_FRAMES, `mmc3Prg1`: in PRG mode 1,
+  at $C000 and $A000, as Super Mario Bros. 3; in mode 0, at $8000 and $A000,
+  as Mega Man 3), and as a 16 KB pair otherwise (PRG_IMAGES, as Super Mario
+  Bros. 2), but a game can't switch between the modes. The scanline IRQ is taken when the NMI
   handler returns, and again in the same frame where its handler leaves it
   on (`splitNext`: Super Mario Bros. 3's 32-pixel partition, water line and
   spade game), not by a count of lines: a handler's own time before it sets
@@ -36,15 +35,51 @@ finished in #1 to #6.
   below its line shows in the window plane, from the first whole cell row
   (`splitDone`); an earlier one's X scroll, `$2006` rows (one such strip a
   frame, by a line interrupt: `MD_Hint`) and hidden sprites show down to the
-  next, its background tiles don't. The line interrupt's vertical scroll
+  next, its background tiles don't. If the last points the PPU at no rows,
+  the window shows those of the last that did, from its line (`winV`), and
+  if one leaves the background off, the window is blank from its line, and
+  the planes under the window too (`splitBlank`; what it pointed the PPU at
+  after turning it off is for `$2007`). The line interrupt's vertical scroll
   is from the next line in Genesis Plus GX; on a console it may come a
   line later. Not yet: a horizontal scroll below the last split, and other
   sprite tiles below a split (sprites there are hidden when the handler
   switches them).
+  The IRQ comes earlier in the frame than on a NES, so a handler's `$2000`
+  increment is only kept for its own `$2007` writes, and one that a late
+  VBlank or the I flag holds off just doesn't come that frame: the window
+  stays as the last one left it, unless the I flag held it off as the NMI
+  handler returned two frames running (`irqHeld`, `splitMiss`: Code Name:
+  Viper turns it on every frame, but off its stages keeps the I flag set).
+  Tiny Toon Adventures runs its game in its NMI handler, which often
+  outlasts an MD frame, so its IRQ is skipped in many frames.
   Recompiled, Super Mario Bros. 3's split costs about 4% of the time (2-3
   frames a second where it's busiest), most of it the handler's own code
   and its PPU and mapper writes: `splitDone` only works when something it
   reads changed.
+- [ ] **Mega Man 3: what's left.** It plays now (MMC3 PRG mode 0 with 8 KB
+  banks apart; NMIs held while its NMI handler's sound work after its RTI
+  runs, or the game's own code does that work: NMI_TAIL, `nmiTailStart`,
+  `nmiTailEnd`, `nmiTailR6`). Recompiled, Top Man's stage runs at about
+  40-50 game frames a second where it's busy, 60 where it's quiet, its
+  music at full speed: an NMI that comes while its main task runs waits
+  for its task loop ($FEAD, a wait loop to the recompiler: `wait_heads`),
+  up to a frame, and those due still come (`nmiCredit`: after the
+  handler's sound work, `nmiTailEnd`; in the handler, which turns NMIs
+  off while it runs, they count too). A game frame there takes about 1.2
+  MD frames of work (with each NMI held until the game waits for it: 320
+  lines from the NMI to its frame done on average, 12% of frames within
+  one MD frame), the main task's and each NMI's (its handler, its sound
+  driver, and FamiDrive's PPU, APU and sprite work). 60 throughout would
+  need about a fifth less. Its sound driver's jump
+  engine ($8023: `engine_pattern2`) and multiply ($8006: `rcMul8`) are
+  translated directly now, and its sprite routine's loop at $F230 reads
+  through both its pointers. The biggest parts left: the sound driver
+  (about a tenth of the work), bank switches ($FF6B, about 25 a frame: its
+  callers push a return address because its sound path, rarely taken,
+  leaves its copy), and calls and returns in general. Interpreted (about
+  12), its title screen misses some tiles. Only Top Man's stage was tried.
+  The recompiler takes some of its banks' data for code (its unofficial
+  opcode warnings).
 - [ ] **Life Force: what's left.** It plays now, recompiled (an NMI taken
   in its NMI handler where it waits for a sprite 0 hit that can't come:
   `rdPPU_Status`, `ppuSp0Wait`; its sprites off below the status bar's
@@ -55,6 +90,19 @@ finished in #1 to #6.
   splits are supported). Sprite 0, a blue block at the status bar's left end, shows,
   though its attributes put it behind the background. Only the first
   stage and the demo were looked at.
+- [ ] **Code Name: Viper: what's left.** Its IRQ handler runs three times a
+  frame: the first points the PPU at the status bar's rows (`$2006`) and
+  switches all the CHR banks to blank ones, the second, 5 lines on,
+  switches R0 and R1 to its font, and the third, 24 lines on, turns the
+  background off and writes a column of the level (`$2000` with +32, then
+  `$2007`). The window shows the first one's rows with the font, from the
+  first whole cell row, 2 lines lower than on a NES. Only its first stage
+  was tried.
+- [ ] **Jump tables read too far.** After a JSR to a jump engine,
+  `inline_table` takes entries until one doesn't look like code (up to 128);
+  some of Tiny Toon Adventures' run on into the code after them, which is
+  then translated from wrong places too (its unofficial opcode warnings).
+  An entry that points just past its table could end it.
 - [ ] **An NMI during the NMI handler, elsewhere.** A VBlank that comes
   while the NMI handler runs is held until its RTI (`famiVInt`, `rcNmiDue`:
   `.late`), so a slow frame here isn't a lag frame to the game. The one
@@ -67,8 +115,15 @@ finished in #1 to #6.
 
 ## Sound
 
-- [ ] **DMC channel.** Sample playback (`$4010`-`$4013`) and direct output
-  (`$4011`) are ignored. Sample playback could use the YM2612 DAC.
+- [ ] **DMC channel (on hold for now).** Sample playback (`$4010`-`$4013`)
+  and direct output (`$4011`) are ignored. Sample playback could use the
+  YM2612 DAC: the Z80 only runs its startup stub and channel 6 is free, so
+  a small Z80 player could decode the samples from the ROM. Open questions:
+  the 68000 takes the Z80's bus each VBlank (sound writes, DMA), which
+  would make samples stutter; the fastest sample rates are tight for a
+  Z80; and how the DAC sounds on an AtGames handheld isn't known. Of the
+  games tried, Super Mario Bros. 3 plays samples (its drums); Mega Man 3
+  and Life Force don't.
 - [ ] **Low pulse notes.** Pulse notes below the PSG's range (about 109 Hz)
   fold up an octave in `apuPulseOut`. They could move to a spare FM channel.
 - [ ] **Pulse duty.** The PSG only plays 50% squares; 12.5%/25% pulses lose

@@ -40,9 +40,13 @@ rdFrom_PRG:
 		lsl.w	#8,d6
 		move.b	d4,d6
 		andi.w	#$7FFF,d6
-		if PRG_MODE1
-		btst	#14,d6			; MMC3 PRG mode 1: $C000-$DFFF in R6's
-		beq.s	.frame			; frame (prgPc)
+		if PRG_8K
+		btst	#14,d6			; MMC3, 8 KB banks: R6's in R6's frame
+		if PRG_R6=$C000			; (prgPc)
+		beq.s	.frame
+		else
+		bne.s	.frame
+		endif
 		btst	#13,d6
 		bne.s	.frame
 		movea.l	prgFrameC(a4),a5
@@ -485,8 +489,8 @@ mmc3WrData:
 .done:
 		emuNext
 .prg:
-		if PRG_MODE1
-		cmp.b	(a5,d5.w),d7		; R6, R7 (PRG mode 1: a bank each): a
+		if PRG_8K
+		cmp.b	(a5,d5.w),d7		; R6, R7 (PRG_8K: a bank each): a
 		beq.s	.done			; new bank (games set them again and
 		move.b	d7,(a5,d5.w)		; again)
 		bra.w	mmc3Prg1
@@ -622,16 +626,22 @@ mmc3WrIrqOn:
 		emuNext
 		endif
 
-		if PRG_MODE1
+		if PRG_8K
 ; --------------------------------------------------------
-; MMC3 in PRG mode 1 (PRG_MODE1): R6 (d5 = 6) picks the 8 KB bank at
-; $C000, R7 the one at $A000 (PRG_FRAMES: the frame of R7's bank is
+; MMC3, 8 KB banks apart (PRG_8K): R6 (d5 = 6) picks the 8 KB bank at
+; PRG_R6, R7 the one at $A000 (PRG_FRAMES: the frame of R7's bank is
 ; a1, R6's prgFrameC). Code running there goes on in the new bank.
 ;
 ; d7.b - the bank
 ; --------------------------------------------------------
 
 mmc3Prg1:
+		if NMI_TAIL
+		cmpi.w	#6,d5
+		bne.s	.not_r6
+		bsr.w	nmiTailR6		; (emu/cpu.asm)
+.not_r6:
+		endif
 		moveq	#0,d6
 		move.b	d7,d6
 		andi.w	#prgBank8Mask,d6
@@ -645,9 +655,13 @@ mmc3Prg1:
 		andi.l	#$7FFF,d4		; runs there, a0 moves to the new one
 		cmpi.w	#7,d5
 		beq.s	.r7
-		move.l	d6,prgFrameC(a4)	; R6, at $C000: bits 14, 13 = 1, 0
-		btst	#14,d4
+		move.l	d6,prgFrameC(a4)	; R6, at PRG_R6: bits 14, 13 = 1, 0
+		btst	#14,d4			; ($C000) or 0, 0 ($8000)
+		if PRG_R6=$C000
 		beq.s	.done
+		else
+		bne.s	.done
+		endif
 		btst	#13,d4
 		bne.s	.done
 		bra.s	.move
@@ -690,7 +704,7 @@ mmc3Prg1:
 ; --------------------------------------------------------
 
 prgSwitch:
-		if PRG_BANKED&&(PRG_MODE1=0)		; (PRG mode 1: mmc3WrData)
+		if PRG_BANKED&&(PRG_8K=0)		; (PRG mode 1: mmc3WrData)
 		andi.l	#prgBankMask,d5
 		cmpi.w	#NES_PRG16,d5
 		bcs.s	.bank_ok

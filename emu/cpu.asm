@@ -717,7 +717,7 @@ mos_BRK:
 		lsl.w	#8,d6
 		move.b	(a5),d6
 		and.w	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l	a1,a0
@@ -1301,7 +1301,7 @@ mos_JMP_abs:
 		lsl.w	#8,d6
 		move.b	(a0),d6
 		and.l	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l a1,a0
@@ -1332,7 +1332,7 @@ mos_JMP_ind:
 		emuNext
 .to_rom:
 		and.l	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l a1,a0
@@ -1363,7 +1363,7 @@ mos_JSR:
 		swap	d3
 		
 		and.l	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l a1,a0
@@ -1908,13 +1908,18 @@ rmwWrite:
 		lsr.w	#8,d6
 		bra.w	addr_Write
 
-		if PRG_MODE1
-; MMC3 PRG mode 1 (PRG_MODE1, PRG_FRAMES): a0 for the code at $8000 +
-; d6.w ($0000-$7FFF), in R6's frame for $C000-$DFFF, else in R7's (a1)
+		if PRG_8K
+; MMC3, 8 KB banks (PRG_8K, PRG_FRAMES): a0 for the code at $8000 +
+; d6.w ($0000-$7FFF), in R6's frame for R6's 8 KB (PRG_R6), else in
+; R7's (a1)
 prgPc:
 		movea.l	a1,a0
-		btst	#14,d6			; $C000-$DFFF: bits 14, 13 = 1, 0
+		btst	#14,d6			; R6's: bits 14, 13 = 1, 0 at $C000
+		if PRG_R6=$C000			; (PRG mode 1), or 0, 0 at $8000
 		beq.s	.frame
+		else
+		bne.s	.frame
+		endif
 		btst	#13,d6
 		bne.s	.frame
 		movea.l	prgFrameC(a4),a0
@@ -2175,7 +2180,7 @@ mos_RTI:
 		swap	d3
 		bsr	famiSetP
 		and.l	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l a1,a0
@@ -2187,6 +2192,9 @@ mos_RTI:
 		emuNext
 .outer:
 		move.l	#emuLoop,(RAM_EmuLoop+2).l
+		if NMI_TAIL
+		bsr.w	nmiTailStart
+		endif
 		tst.w	vbLate(a4)		; a VBlank came while the handler ran:
 		beq.s	.on_time		; the next NMI now, not a frame later
 		clr.w	vbLate(a4)
@@ -2213,7 +2221,7 @@ mos_RTI:
 		swap	d3
 		bsr	famiSetP
 		and.l	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l a1,a0
@@ -2253,13 +2261,16 @@ irqDue:
 		beq.s	.none
 		tst.w	ppuMaskOn(a4)		; (the MMC3 counts lines only while the
 		beq.s	.none			; PPU draws them)
-		tst.w	cpuModeIntDis(a4)
-		bne.s	.none
 		tst.w	cpuInIrq(a4)
 		bne.s	.none
+		tst.w	cpuModeIntDis(a4)
+		bne.s	.held
 		tst.w	cpuFamiVint(a4)
 		beq.s	irqTake
 .none:
+		emuNext
+.held:
+		move.w	#1,irqHeld(a4)		; (the I flag: ppuFrameStart)
 		emuNext
 
 irqTake:
@@ -2289,7 +2300,7 @@ irqTake:
 		lsl.w	#8,d6
 		move.b	(a0),d6
 		and.w	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l	a1,a0
@@ -2313,14 +2324,133 @@ mos_RTS:
 		move.b	d4,d6
 		swap	d3
 		addq.w	#1,d6
+		if NMI_TAIL
+		tst.b	nmiTail(a4)		; the end of the NMI handler's work
+		bne.s	.tail			; after its RTI?
+.not_tail:
+		endif
 		and.l	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l a1,a0
 		add.l 	d6,a0
 		endif
 		emuNext
+		if NMI_TAIL
+.tail:
+		move.w	d6,d4
+		bsr.s	nmiTailEnd
+		bra.s	.not_tail
+		endif
+
+		if NMI_TAIL
+; ----------------------------------------------------------------
+; NMI_TAIL: the NMI handler's RTI (mos_RTI), not to where the NMI came:
+; the handler changed its return address, to go on with its work there,
+; and NMIs wait (famiVInt, rcNmiDue) until that returns there, with the
+; stack as it is now (nmiTailEnd). Mega Man 3 runs its sound code that
+; way, which a second NMI must not come into: it would switch the
+; first's banks away. (rcTailStart in emu/recomp.asm does the same.)
+; ----------------------------------------------------------------
+
+nmiTailStart:
+		move.l	a0,d4
+		sub.l	a1,d4
+		ori.w	#$8000,d4
+		cmp.w	nmiRetPc(a4),d4
+		beq.s	.no_tail
+		move.b	#1,nmiTail(a4)
+		clr.b	nmiTailMain(a4)
+		move.l	d3,d4
+		swap	d4
+		move.b	d4,nmiRetSp(a4)
+.no_tail:
+		rts
+
+; ----------------------------------------------------------------
+; NMI_TAIL: an RTS to d4.w, leaving the stack in d3 (mos_RTS, and the
+; RTS that ends the handler's work in translated code: Gen.tail_rts in
+; tools/recomp6502.py). If it's the end of the NMI handler's work, back
+; where the NMI came with the stack as its RTI left it, NMIs come again:
+; recompiled, those due as the handler's RTI would have had them (rcRti
+; leaves them to here): where the game next waits, or at once if one is
+; a frame late or came while the handler ran; interpreted, from the next
+; VBlank (not one that came meanwhile, at once: the code it comes back
+; to, which the game's frames are made in, would never get to run where
+; this takes a frame). d5 is lost.
+; ----------------------------------------------------------------
+
+nmiTailEnd:
+		tst.b	nmiTailMain(a4)
+		bne.s	.not_end
+		cmp.w	nmiRetPc(a4),d4
+		bne.s	.not_end
+		move.l	d3,d5
+		swap	d5
+		cmp.b	nmiRetSp(a4),d5
+		bne.s	.not_end
+		if RECOMP
+		tst.w	nmiCredit(a4)
+		beq.s	.none_due
+		move.w	#1,nmiWaitDue(a4)
+		cmpi.w	#2,nmiCredit(a4)
+		bcc.s	.now
+.none_due:
+		tst.w	vbLate(a4)
+		beq.s	.no_vblank
+.now:
+		clr.w	vbLate(a4)
+		move.w	#1,FamiMdVint(a4)
+		move.w	#1,nmiWaitDue(a4)
+.no_vblank:
+		endif
+		clr.b	nmiTail(a4)
+.not_end:
+		rts
+
+; ----------------------------------------------------------------
+; NMI_TAIL: R6 gets the bank in d7.b (mmc3Prg1, Gen.prg1_switch in
+; tools/recomp6502.py; d4 is lost). The NMI handler's work
+; after its RTI switches banks; the first it puts in R6 is noted, and
+; if the game's own code puts that one there (Mega Man 3 does its sound
+; work there itself when an NMI came as it switched banks, which the
+; handler's work then left for it), NMIs are held as for the handler's
+; until it puts another there: on a NES that work is done long before
+; the next NMI, which would come into it here and do it again, and
+; switch its banks away. Not one that came meanwhile then, but the next
+; VBlank's: Mega Man 3 puts its bank back before it marks its switch
+; done ($F6), and the handler's work, which an NMI there would find it
+; in, would leave the sound work to it again, and so on each frame.
+; ----------------------------------------------------------------
+nmiTailR6:
+		tst.b	nmiTail(a4)
+		bne.s	.held
+		move.w	nmiTailBank(a4),d4
+		beq.s	.done
+		cmp.b	d7,d4
+		bne.s	.done
+		move.b	#1,nmiTail(a4)
+		st	nmiTailMain(a4)
+.done:
+		rts
+.held:
+		tst.b	nmiTailMain(a4)
+		beq.s	.handler
+		cmp.b	nmiTailBank+1(a4),d7	; the game's: done with that bank?
+		beq.s	.done
+		clr.b	nmiTail(a4)
+		clr.b	nmiTailMain(a4)
+		rts
+.handler:
+		tst.w	nmiTailBank(a4)		; the handler's work: its first
+		bne.s	.done
+		moveq	#0,d4
+		move.b	d7,d4
+		addi.w	#$100,d4
+		move.w	d4,nmiTailBank(a4)
+		rts
+		endif
 ; ----------------------------------------------------------------
 
 mos_SBC_imm:

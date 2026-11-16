@@ -18,8 +18,16 @@ FPS		equ 0			; 1: FPS counter (build.sh --fps, needs RECOMP)
 		include	"system/md/map.asm"	; Genesis hardware map
 		include	"out/nes_info.asm"	; the NES ROM's mapper and PRG size (tools/nesinfo.py)
 PRG_BANKED	equ (NES_MAPPER=2)||(NES_MAPPER=4)	; PRG-ROM in 16 KB banks: PRG_IMAGES
-PRG_MODE1	equ (NES_MAPPER=4)&&(NES_MMC3_PRG1<>0)	; MMC3 in PRG mode 1, 8 KB banks: PRG_FRAMES
-MMC3_IRQ	equ (NES_MAPPER=4)&&(NES_MMC3_IRQ<>0)	; MMC3's scanline IRQ: what's below its line (splitDone)
+PRG_8K		equ (NES_MAPPER=4)&&((NES_MMC3_PRG1<>0)||(NES_MMC3_PRG8<>0))	; MMC3, R6's and R7's 8 KB banks apart: PRG_FRAMES
+		if NES_MMC3_PRG1<>0
+PRG_R6		equ $C000		; where R6's bank is: PRG mode 1 (R7's at $A000, the last two at $8000 and $E000),
+		else
+PRG_R6		equ $8000		; or mode 0 (R7's at $A000, the last two at $C000 and $E000)
+		endif
+MMC3_IRQ	equ (NES_MAPPER=4)&&((NES_MMC3_IRQ<>0)||(NES_SP0_SPLIT<>0))	; MMC3's scanline IRQ: what's below its line
+					; (splitDone), or below sprite 0's where a $2000 write after its hit switches the BG table (sp0Split)
+NMI_TAIL	equ NES_NMI_TAIL<>0	; the NMI handler goes on after its RTI, to an address it puts in its
+					; interrupt frame: the next NMI waits for that too (mos_RTI, mos_RTS)
 splitWinBase	equ $A000		; MMC3_IRQ: the window's cells (VDP $83), rows 0-27 of 32
 splitTiles	equ $340		; and the tile set below the split (VRAM $6800-$87FF)
 prgBankMask	set 1			; its banks, rounded up to a power of 2, -1
@@ -69,6 +77,18 @@ cpuIRQ		equ $7FFE
 RAM_EmuLoop	ds.w 3
 RAM_RcStack	ds.l 1			; recompiled code: stack at dispatch (emu/recomp.asm)
 RAM_HintCount	ds.w 1			; line interrupts taken (MD_Hint, ppuMeasureLines)
+		finish
+
+; NMI_TAIL: NMIs held while the NMI handler's work after its RTI runs,
+; or the same work in the game's own code (emu/cpu.asm: nmiTailStart,
+; nmiTailEnd, nmiTailR6). By a4 too, in the RAM after the NES's.
+		struct RAM_Fami_RAM+$800-RAM_Fami_Emu
+nmiTail		ds.b 1			; not 0 while NMIs are held: 1 + the VBlanks come since (MD_Vint)
+nmiTailMain	ds.b 1			; and not 0 if it's the game's code that does the handler's work
+nmiRetSp	ds.b 1			; the stack the handler's work ends with (as its RTI left it)
+		ds.b 1
+nmiRetPc	ds.w 1			; where the NMI came (doVint, rcNmiDue): an RTI to elsewhere goes on to its work
+nmiTailBank	ds.w 1			; $100 + the first bank that work put in R6, 0: none seen yet
 		finish
 
 ; The end of an emulated instruction's routine and of a handler: on to
@@ -181,10 +201,10 @@ nmiWaitDue	ds.w 1			; and 1: one is due where the game waits for it (rcNmiWait)
 nmiHold		ds.w 1			; 1: the game took its last NMI waiting for it
 chrSlotPtr	ds.l 8			; MMC3: the CHR-ROM data each 1 KB of the pattern tables shows,
 chrStale	ds.w 1			; and those a3's copy is out of date for (bits 0-7, chrSync)
-prgFrameC	ds.l 1			; MMC3 PRG mode 1: the frame of R6's bank, at $C000 (PRG_FRAMES)
-rcCurTableC	ds.l 1			; and recompiled: the code of R6's bank, at $C000 (rcCurTable: R7's)
-rcFrameC	ds.l 1			; and prgFrameC+$8000, to read $C000-$DFFF through (emu/recomp.asm)
-		if PRG_MODE1
+prgFrameC	ds.l 1			; MMC3, 8 KB banks (PRG_8K): the frame of R6's bank, at PRG_R6 (PRG_FRAMES)
+rcCurTableC	ds.l 1			; and recompiled: the code of R6's bank there (rcCurTable: R7's)
+rcFrameC	ds.l 1			; and prgFrameC+$8000, to read R6's bank through (emu/recomp.asm)
+		if PRG_8K
 rcCurCallA	ds.l 1			; and the routines of R7's bank, R6's, that other code calls (rcPrgSlot)
 rcCurCallC	ds.l 1
 		endif
@@ -228,8 +248,9 @@ mmc3RegsSplit	ds.b 8			; the CHR registers below the split
 sprHideY	ds.w 1			; OAM DMA: sprites from this Y on are hidden ($E7, or the split's)
 ppuCellAddr	ds.w 1			; the nametable byte ppuDrwCell draws (for the window)
 splitKeyOk	ds.w 1			; 1: splitKey holds what splitDone read last time, and what it set is so
-splitKey	ds.b 28			; (BG banks R0, R1 or R2-R5, mmc3RegsSplit R0-R5, the sprites' mmc3Regs,
-					; irqLine, splitV, splitCtrlX, ppuSprWide, partHideY, vdpScrlY, ppuNTblBase)
+splitKey	ds.b 30			; (BG banks R0, R1 or R2-R5, mmc3RegsSplit R0-R5, the sprites' mmc3Regs,
+					; irqLine, splitV, splitCtrlX, ppuSprWide, partHideY, splitBlank, vdpScrlY,
+					; ppuNTblBase)
 irqEn		ds.w 1			; in the IRQ handler: 1 while the IRQ is on ($E000, $E001 there): another
 irqCount	ds.w 1			; comes this frame, irqLatch lines on (splitNext); how many more have
 irqReload	ds.w 1			; and 1: the handler wrote $C001, which starts the count again from there
@@ -238,7 +259,22 @@ partHideY	ds.w 1			; sprites hidden from this Y by an IRQ handler before the fra
 partLine	ds.w 1			; such a handler's $2006 rows (splitNext): the MD line before their first (0: none),
 partLinePrev	ds.w 1			; the last game frame's,
 partVs		ds.l 1			; and the planes' vertical scroll from there (MD_Hint)
+partLineNew	ds.w 1			; partLine and partVs as this game frame's IRQ handlers set them so far:
+partVsNew	ds.l 1			; splitDone takes them, or blanks the planes under the window
 partOn		ds.w 1			; this MD frame's line interrupt is still to set it (MD_Vint)
+splitChrBank	ds.w 1			; the BG pattern table below the split (bit 7), as ppuChrBank (splitDone)
+sp0Due		ds.w 1			; (byte) a $2000 write after sprite 0's hit switched it (wrPPU_Ctrl: sp0Split)
+winLine		ds.w 1			; an IRQ handler's $2006 rows before the frame's last (splitNext): its line,
+winV		ds.w 1			; the address ($FFFF: none) and its $2000 nametable X bit, for the window
+winCtrlX	ds.w 1			; if the last writes none (splitDone)
+splitBlank	ds.w 1			; an IRQ handler turned the background off ($2001) at this line ($FFFF: none)
+splitWinFill	ds.w 1			; the window's blank cells after splitWinLen's (below splitBlank)
+splitOffV	ds.w 1			; splitV, splitCtrlX and splitChrBank as an IRQ handler turned the background
+splitOffCtrlX	ds.w 1			; off (splitBlank): the split's, if it's still off as the handler returns
+splitOffChr	ds.w 1			; (splitNext)
+irqHeld		ds.w 1			; 1: the I flag held the IRQ off as the NMI handler returned (irqDue, rcRti)
+irqIncrSave	ds.w 1			; ppuAddrIncr as the frame's first IRQ handler began: again once the last returns
+splitMiss	ds.w 1			; 1: the game frame before took no IRQ, as the I flag held it off (ppuFrameStart)
 splitVarsEnd	equ *
 		finish
 		if splitVarsEnd>RAM_Fami_Split-RAM_Fami_Emu+$100
@@ -669,9 +705,16 @@ MD_Vint:
 		if RECOMP
 		move.w	#1,nmiWaitDue(a4)		; an NMI is due: at once, or when the
 		tst.w	ppuNmiFlag(a4)			; game next waits for it, if it does,
-		beq.s	.nmi_now			; up to a frame later (emu/recomp.asm)
-		addq.w	#1,nmiCredit(a4)		; (with NMIs off, none: the checks
-		tst.w	nmiHold(a4)			; just clear the flags)
+		if NMI_TAIL				; up to a frame later (emu/recomp.asm)
+		bne.s	.nmi_due			; (with NMIs off, none: the checks
+		tst.w	cpuFamiVint(a4)			; just clear the flags. NMI_TAIL: but
+		beq.s	.nmi_now			; in the NMI handler, which turns them
+.nmi_due:					; off while it runs, one is due as it
+		else
+		beq.s	.nmi_now
+		endif
+		addq.w	#1,nmiCredit(a4)		; turns them on again, on a NES, and
+		tst.w	nmiHold(a4)			; the work after its RTI holds it)
 		beq.s	.nmi_now
 		cmpi.w	#2,nmiCredit(a4)
 		bcs.s	.nmi_set
@@ -680,6 +723,14 @@ MD_Vint:
 .nmi_set:
 		else
 		move.w	#1,FamiMdVint(a4)
+		endif
+		if NMI_TAIL
+		tst.b	nmiTail(a4)			; NMIs held: the VBlanks since
+		beq.s	.no_tail			; (famiVInt, rcNmiDue)
+		addq.b	#1,nmiTail(a4)
+		bcc.s	.no_tail
+		st	nmiTail(a4)
+.no_tail:
 		endif
 		move.w	#1,FamiPPUVint(a4)
 
@@ -800,9 +851,9 @@ Fami_LoadRom:
 
 		lea	(RAM_Fami_Emu).l,a3
 		if PRG_BANKED
-		if PRG_MODE1
+		if PRG_8K
 		move.l	#PRG_FRAMES+$8000,cpuPrgImg(a3)	; bank 1 at $A000 (R7) and 0
-		move.l	#PRG_FRAMES,prgFrameC(a3)	; at $C000 (R6) to begin with
+		move.l	#PRG_FRAMES,prgFrameC(a3)	; at PRG_R6 (R6) to begin with
 		else
 		move.l	#PRG_IMAGES,cpuPrgImg(a3) ; bank 0 at $8000 to begin with
 		endif
@@ -816,6 +867,8 @@ Fami_LoadRom:
 		dbf	d7,.split_clr
 		move.w	#$E7,sprHideY(a3)
 		move.w	#$FFFF,splitV(a3)
+		move.w	#$FFFF,winV(a3)
+		move.w	#$FFFF,splitBlank(a3)
 		move.l	#$FFFFFFFF,splitBank(a3)
 		move.l	#$FFFFFFFF,splitBank+4(a3)
 		endif
@@ -835,7 +888,7 @@ Fami_LoadRom:
 		dbf	d1,.chr_cache
 		endif
 		movea.l	a0,a4			; CHR-ROM: after PRG-ROM (as romGrabPrg
-		if PRG_MODE1			; leaves a4), or right after the header
+		if PRG_8K			; leaves a4), or right after the header
 		adda.l	#$10,a4			; (PRG mode 1: ROM_FILE)
 		else
 		adda.l	#$10+NES_PRG16*$4000,a4
@@ -966,6 +1019,9 @@ emuStart:
 		move.w	#$8174,vdpReg01(a4)
 		move.w	#1,ppuAddrIncr(a4)		; $2000 is 0 at power on: +1
 		move.w	#$FFFF,ppuCtrlLast(a4)		; (none written yet)
+		if NMI_TAIL
+		clr.b	nmiTail(a4)
+		endif
 		move.w	#$4EF9,(RAM_EmuLoop).l		; JMP opcode
 		move.l	#emuLoop,(RAM_EmuLoop+2).l	; default emulation loop
 		moveq	#0,d0
@@ -1019,11 +1075,24 @@ famiVInt:
 .first:
 		tst.w	ppuNmiFlag(a4)
 		beq.s	emuVint
+		if NMI_TAIL
+		tst.b	nmiTail(a4)		; what the handler left for after its
+		bne.s	.tail			; RTI still runs (nmiTailStart,
+		endif				; nmiTailR6)
 .take:
 		jmp	doVint			; NMI: out of line, see after cpu.asm
 .late:
 		move.w	#1,vbLate(a4)
 		bra.s	emuVint
+		if NMI_TAIL
+.tail:
+		cmpi.b	#17,nmiTail(a4)		; no NMI for this VBlank (as on a
+		bcs.w	emuVint			; NES, where the work is long done),
+						; unless after 16 it never ends
+		clr.b	nmiTail(a4)
+		clr.b	nmiTailMain(a4)
+		bra.s	.take
+		endif
 
 
 ; ------------------------------------------------
@@ -1049,6 +1118,15 @@ emuVint:
 ; Take the NMI (from famiVInt)
 doVint:
 		move.l	#emuVint,(RAM_EmuLoop+2).l
+		if NMI_TAIL
+		tst.w	cpuFamiVint(a4)			; where the handler's RTI comes back
+		bne.s	.nested				; to, unless it goes on elsewhere
+		move.l	a0,d4				; (mos_RTI)
+		sub.l	a1,d4
+		ori.w	#$8000,d4
+		move.w	d4,nmiRetPc(a4)
+.nested:
+		endif
 		if MMC3_IRQ
 		tst.w	cpuFamiVint(a4)			; (one taken in the handler: saved already)
 		bne.s	.in_handler
@@ -1084,7 +1162,7 @@ doVint:
 		lsl.w	#8,d6
 		move.b	(a0),d6
 		and.w	#$7FFF,d6
-		if PRG_MODE1
+		if PRG_8K
 		bsr.w	prgPc
 		else
 		movea.l	a1,a0
@@ -1120,7 +1198,7 @@ EndOfRom:
 ; ROM are here
 ; ----------------------------------------------------------------
 
-		if PRG_MODE1
+		if PRG_8K
 ROM_FILE:	binclude "out/nes_rom.bin",0,$10	; copied here by build.sh: its header,
 		binclude "out/nes_rom.bin",$10+NES_PRG16*$4000	; then CHR-ROM (PRG mode 1:
 		else					; its PRG is in PRG_FRAMES, below)
@@ -1135,20 +1213,28 @@ ROM_FILE:	binclude "out/nes_rom.bin"	; copied here by build.sh
 ; images are 32 KB aligned: a0's low 15 bits are the PC's (mos_JSR).
 ; ----------------------------------------------------------------
 
-		if PRG_MODE1
-; MMC3 in PRG mode 1 (PRG_MODE1): R7's 8 KB bank at $A000 and R6's at
-; $C000 switch apart, with the second to last bank at $8000 and the
-; last at $E000. A 32 KB frame for each bank, of the fixed banks and
-; the bank at both $A000 and $C000: the CPU runs code and reads PRG
-; through R7's (a1), but at $C000-$DFFF R6's (prgFrameC, prgPc). They
-; are 32 KB aligned too.
+		if PRG_8K
+; MMC3 with R6's and R7's 8 KB banks switched apart (PRG_8K): R7's at
+; $A000, and R6's at $C000 with the second to last bank at $8000 (PRG
+; mode 1, as Super Mario Bros. 3), or at $8000 with the second to last
+; at $C000 (mode 0, as Mega Man 3: PRG_R6); the last at $E000. A 32 KB
+; frame for each bank, of the fixed banks and the bank at both R6's
+; place and R7's: the CPU runs code and reads PRG through R7's (a1),
+; but in R6's 8 KB through R6's (prgFrameC, prgPc). They are 32 KB
+; aligned too.
 		align $8000
 PRG_FRAMES:
 prgImage	set 0
 		rept NES_PRG16*2
+		if PRG_R6=$C000
 		binclude "out/nes_rom.bin",$10+(NES_PRG16*2-2)*$2000,$2000
 		binclude "out/nes_rom.bin",$10+prgImage*$2000,$2000
 		binclude "out/nes_rom.bin",$10+prgImage*$2000,$2000
+		else
+		binclude "out/nes_rom.bin",$10+prgImage*$2000,$2000
+		binclude "out/nes_rom.bin",$10+prgImage*$2000,$2000
+		binclude "out/nes_rom.bin",$10+(NES_PRG16*2-2)*$2000,$2000
+		endif
 		binclude "out/nes_rom.bin",$10+(NES_PRG16*2-1)*$2000,$2000
 prgImage	set prgImage+1
 		endm

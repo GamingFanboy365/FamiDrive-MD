@@ -9,7 +9,8 @@ Nemul, originally made by Mairtrus. Credit to Mairtrus for the original work.
 
 - Runs on real hardware (the original Nemul did not)
 - Passes nestest's tests for all official 6502 opcodes
-- Mappers 0 (NROM), 2 (UxROM), 3 (CNROM) and 4 (MMC3, the ways Super Mario Bros. 2 and 3 use it),
+- Mappers 0 (NROM), 2 (UxROM), 3 (CNROM) and 4 (MMC3, the ways Super Mario Bros. 2 and 3 and
+  Mega Man 3 use it),
   with CHR-ROM or CHR-RAM, and PRG RAM at $6000-$7FFF for mappers 2 and 4
 - Working vertical scrolling using both scroll layers (the NES map height differs from the MD's)
 - Horizontal scroll changes partway down the screen (such as a still status bar above a scrolling
@@ -43,7 +44,9 @@ in World 1-1's quieter parts and while it scrolls, and to about 55-58 in its bus
 
 When a game's frame needs a little more time than an MD frame, its next NMI waits until the game
 is ready for it (up to a frame), so the game runs a little slower instead of at half speed. NMIs
-still come once per VBlank on average, so music keeps its tempo.
+still come once per VBlank on average, so music keeps its tempo. The game is ready where it loops
+waiting for the NMI: a few instructions polling a flag, or a loop like Mega Man 3's that looks
+through its tasks for one ready to run.
 
 The translated code goes to `out/recomp.asm`. It is the game's code in another form, so like the
 built ROM it stays out of git and shouldn't be published. Code the recompiler can't find ahead of
@@ -70,14 +73,18 @@ hide or show it. Builds without `--fps` don't contain it.
 - CHR-ROM or CHR-RAM
 
 Anything else shows an error screen saying what isn't supported. MMC3 games work if they switch
-PRG-ROM at $8000-$BFFF in 16 KB pairs, as Super Mario Bros. 2 does, or put it in PRG mode 1 and
-switch 8 KB banks at $A000 and $C000 one at a time, as Super Mario Bros. 3 does. Its scanline
+PRG-ROM at $8000-$BFFF in 16 KB pairs, as Super Mario Bros. 2 does, or switch its two 8 KB banks one
+at a time, at $A000 and $C000 in PRG mode 1, as Super Mario Bros. 3 does, or at $8000 and $A000 in
+PRG mode 0, as Mega Man 3 does (but not both modes in one game). Its scanline
 interrupt is taken when the NMI handler returns, and again in the same frame, up to four times, when
 its handler leaves it on for a line further down. What the frame's last handler sets up for the
 screen below its line (other nametable rows, other CHR banks) shows in the MD's window plane, from
 the first whole cell row below that line. What an earlier one sets up is for the lines down to the
 next: its horizontal scroll, other nametable rows (the planes' vertical scroll, set by a line
-interrupt), and sprites hidden if it switched their tiles, but not other background tiles.
+interrupt), and sprites hidden if it switched their tiles, but not other background tiles. If the
+last one points the PPU at no other rows, the window shows the rows an earlier one pointed it at,
+from that one's line, with the tiles as the last one leaves them, and if it turns the background
+off, the screen is blank from its line (as Code Name: Viper's status bar does both).
 
 ### Checks
 
@@ -149,6 +156,18 @@ handheld's differences.
 - Life Force (mapper 2) plays recompiled, at about 47-51 game frames per second in its first
   stage. Its vertical stage shows no status bar (seen in the attract demo, not looked into yet),
   and only its first stage and the demo were tried
+- Mega Man 3 (MMC3) plays recompiled, so far at about 40-50 game frames per second in Top Man's
+  stage where it's busy (60 where it's quiet, and on its title screen), its music at full
+  speed; that stage is the only one tried. Interpreted, it runs at about 12, and its title
+  screen misses some of its tiles
+- Tiny Toon Adventures (MMC3) plays recompiled, at about 60 game frames per second in its first
+  stage, the only one tried; the iris wipe when you lose a life closes in steps of 8 lines.
+  Interpreted, it runs at a few frames per second
+- Deja Vu (MMC3) plays recompiled at full speed, as far as its first rooms were tried. The menu
+  and text below its picture use the other BG pattern table, switched after a sprite 0 hit:
+  shown in the window plane, from the first whole 8-line row there
+- Code Name: Viper (MMC3) plays recompiled, as far as its first stage was tried. Its status bar shows
+  2 lines lower than on a NES (from the first whole 8-line row below its split)
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its

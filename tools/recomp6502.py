@@ -17,12 +17,14 @@
 # switch banks that its own is still there). PRG RAM ($6000-$7FFF) is
 # read and written directly.
 #
-# MMC3 in PRG mode 1 (8 KB banks at $A000 and $C000 that switch apart,
-# the last two at $8000 and $E000) is translated likewise (mode1): the
-# fixed banks' code once, and each bank's at the slot its own JSRs and
-# JMPs point at (slot_homes), with labels A<n>_... and C<n>_...; a
-# bank's code goes to the other slot's through rcDispatch, as the fixed
-# code goes to both.
+# MMC3 with its two 8 KB banks switched apart (prg8: in PRG mode 1, R7's
+# at $A000 and R6's at $C000, the last two at $8000 and $E000, as Super
+# Mario Bros. 3; or in mode 0, R6's at $8000 and R7's at $A000, the last
+# two at $C000 and $E000, as Mega Man 3) is translated likewise
+# (prg8_units): the fixed banks' code once, and each bank's at the slot
+# its own JSRs and JMPs point at (slot_homes), with labels A<n>_... (R7's
+# slot) and C<n>_... (R6's); a bank's code goes to the other slot's
+# through rcDispatch, as the fixed code goes to both.
 #
 # The output is included by md.asm when building with RECOMP=1 (see
 # build.sh --recompile). It uses the interpreter's register layout so
@@ -32,7 +34,7 @@
 #   d3 6502 stack pointer (high word) | flags as a 68k CCR (low byte)
 #   a0 PRG-ROM copy + $8000 (so (a0,d6.w) reads 6502 address d6 >= $8000)
 #   a1 PRG-ROM copy (banked PRG: the image of the bank at $8000; MMC3
-#      PRG mode 1: R7's frame, and $C000-$DFFF is read through R6's)
+#      prg8: R7's frame, and R6's 8 KB is read through R6's)
 #   a2 NES RAM, a3 PPU buffer, a4 emulator vars
 #   a6 vdp_data;  d4-d7, a5 are scratch (a5 can stay pointing into RAM
 #   from one instruction to the next: Gen.a5_ix)
@@ -170,6 +172,32 @@ def mmc3_mode1(prg):
 
 
 @functools.lru_cache(maxsize=4)
+def mmc3_apart(prg):
+	"""Does the code, in PRG mode 0, switch R6's bank at $8000 and R7's
+	at $A000 apart: R6 or R7 picked with an immediate value (LDA #$06,
+	#$07) stored to $8000, and its bank loaded from memory or as a
+	constant right after and stored to $8001 (as Mega Man 3)? As
+	NES_MMC3_PRG8 from tools/nesinfo.py, which looks for the same."""
+	return not mmc3_mode1(prg) and re.search(
+		rb'\xA9[\x06\x07](?:\x85.)?\x8D\x00\x80(?:\xA5.|\xAD..|\xA9.)(?:\x85.)?\x8D\x01\x80', prg, re.S) is not None
+
+
+@functools.lru_cache(maxsize=4)
+def nmi_tail(prg):
+	"""Where an interrupt handler goes on after its RTI, 0 if nowhere: the
+	address it puts in its own interrupt frame (as Mega Man 3's NMI
+	handler, for its sound code). As NES_NMI_TAIL from tools/nesinfo.py
+	(NMI_TAIL in md.asm), which looks for the same."""
+	for m in re.finditer(rb'\xA9(.)\x9D(.)\x01\xA9(.)\x9D(.)\x01', prg, re.S):
+		v1, o1, v2, o2 = (m.group(k)[0] for k in (1, 2, 3, 4))
+		if abs(o1 - o2) == 1 and min(o1, o2) >= 3 and max(o1, o2) <= 8:
+			addr = (v1 << 8 | v2) if o1 > o2 else (v2 << 8 | v1)
+			if addr >= 0x8000:
+				return addr
+	return 0
+
+
+@functools.lru_cache(maxsize=4)
 def mmc3_irq(prg):
 	"""Does the code turn MMC3's scanline IRQ on: a store to $E001
 	(STA/STX/STY)? As NES_MMC3_IRQ from tools/nesinfo.py (MMC3_IRQ in
@@ -186,12 +214,14 @@ class Prg:
 	and reads it). The fixed bank's code can't know which bank is at
 	$8000: those addresses are other units' (bank units go by the bank
 	at $8000 when they're called, rcDispatch).
-	MMC3 in PRG mode 1 (mode1, as Super Mario Bros. 3: R7's 8 KB bank at
-	$A000 and R6's at $C000 switch apart, the second to last bank is at
-	$8000 and the last at $E000, see PRG_FRAMES in md.asm): the fixed
-	banks are unit 'F', and each bank b at $A000 and at $C000 is unit
-	('A', b) and ('C', b). Each sees the fixed banks, but not the other
-	slot: like the fixed code's, its calls there go by the bank there."""
+	MMC3 with 8 KB banks apart (prg8, see PRG_FRAMES in md.asm): R7's
+	bank at $A000 and R6's at r6 switch apart; in PRG mode 1 (as Super
+	Mario Bros. 3) r6 is $C000, the second to last bank is at $8000 and
+	the last at $E000; in mode 0 (as Mega Man 3) r6 is $8000 and the
+	last two are at $C000 and $E000. The fixed banks are unit 'F', and
+	each bank b at $A000 and at r6 is unit ('A', b) and ('C', b). Each
+	sees the fixed banks, but not the other slot: like the fixed
+	code's, its calls there go by the bank there."""
 	def __init__(self, rom, unit=None):
 		if rom[:4] != b'NES\x1a':
 			sys.exit('recomp6502: not an iNES file')
@@ -203,20 +233,22 @@ class Prg:
 			sys.exit('recomp6502: mapper %d is not supported' % self.mapper)
 		self.banked = self.mapper in (2, 4)
 		prg = rom[16:16 + rom[4] * 0x4000]
-		self.mode1 = self.mapper == 4 and mmc3_mode1(prg)
+		self.prg8 = self.mapper == 4 and (mmc3_mode1(prg) or mmc3_apart(prg))
+		self.r6 = 0xC000 if self.mapper == 4 and mmc3_mode1(prg) else 0x8000
 		self.irq = self.mapper == 4 and mmc3_irq(prg)
+		self.nmi_tail = nmi_tail(prg)
 		self.banks = len(prg) // 0x4000
 		self.banks8 = len(prg) // 0x2000
 		self.unit = unit
-		if self.mode1:
-			self.fixed = prg[-0x4000:]	# $8000-$9FFF, then $E000-$FFFF
+		if self.prg8:
+			self.fixed = prg[-0x4000:]	# $8000-$9FFF, then $E000-$FFFF (mode 0: $C000-$FFFF)
 			if unit in (None, 'F'):
 				self.data, self.slot = self.fixed, 'F'
-				self.regions = [(0x8000, 0x9FFF), (0xE000, 0xFFFF)]
+				self.regions = [(0x8000, 0x9FFF), (0xE000, 0xFFFF)] if self.r6 == 0xC000 else [(0xC000, 0xFFFF)]
 			else:
 				self.slot, b = unit
 				self.data = prg[b * 0x2000:(b + 1) * 0x2000]
-				lo = 0xA000 if self.slot == 'A' else 0xC000
+				lo = 0xA000 if self.slot == 'A' else self.r6
 				self.regions = [(lo, lo + 0x1FFF)]
 			self.lo, self.hi = self.regions[0][0], self.regions[-1][1]
 			self.mask = len(self.data) - 1
@@ -237,23 +269,23 @@ class Prg:
 
 	def region(self, a):
 		"""Which code is at a ($8000-$FFFF): 'F', the fixed code's, or
-		'B' (the bank at $8000), 'A' or 'C' (MMC3 PRG mode 1: the bank
-		at $A000 or at $C000)."""
-		if self.mode1:
-			return 'F' if a < 0xA000 or a >= 0xE000 else 'A' if a < 0xC000 else 'C'
+		'B' (the bank at $8000), 'A' or 'C' (MMC3 prg8: R7's bank at
+		$A000, or R6's at r6)."""
+		if self.prg8:
+			if 0xA000 <= a < 0xC000:
+				return 'A'
+			return 'C' if self.r6 <= a < self.r6 + 0x2000 else 'F'
 		return 'F' if not self.banked or a >= 0xC000 else 'B'
 
 	def byte(self, a):
 		"""The byte at a, if this unit can know it."""
 		if a < 0x8000:
 			return None
-		if self.mode1:
+		if self.prg8:
 			if a > 0xFFFF:
 				return None
-			if a < 0xA000:
-				return self.fixed[a - 0x8000]
-			if a >= 0xE000:
-				return self.fixed[a - 0xC000]
+			if self.region(a) == 'F':		# (mode 1: $8000, $E000; 0: $C000)
+				return self.fixed[a - 0x8000 if a < 0xA000 else a - 0xC000]
 			lo = self.regions[0][0]
 			return self.data[a - lo] if self.slot != 'F' and lo <= a < lo + 0x2000 else None
 		if not self.banked:
@@ -291,7 +323,11 @@ PPU_WRITE = ('wrPPU_Ctrl', 'wrPPU_Mask', 'wrPPU_Status', 'wrPPU_OamAddr',
 def inline_table_routine(prg, f):
 	"""Does the routine at f pull its own return address and jump
 	through a pointer (a "jump engine")? Then the bytes after each JSR
-	to it are a table of addresses, not code."""
+	to it are a table of addresses, not code. (It may keep a byte on the
+	stack meanwhile, once it has pulled one: Mega Man 3's sound code's
+	pushes the pointer's low byte, PHA, and pulls it back, PLA. And it
+	may step the pointer's high byte when its index wraps: a branch over
+	an INC zp, as Konami's does.)"""
 	pulls, pc = 0, f
 	for _ in range(24):
 		op = prg.byte(pc) if pc >= 0x8000 else None
@@ -300,8 +336,12 @@ def inline_table_routine(prg, f):
 		m, mode = OPS[op]
 		if m == 'PLA':
 			pulls += 1
+		elif m == 'PHA' and pulls:
+			pulls -= 1
 		elif m == 'JMP' and mode == 'ind':
 			return pulls >= 2
+		elif mode == 'rel' and prg.byte(pc + 1) == 2 and prg.byte(pc + 2) == 0xE6:
+			pass				# (over an INC zp)
 		elif m in ('RTS', 'RTI', 'BRK', 'JSR', 'JMP', 'PHA', 'PHP', 'TSX', 'TXS') or mode == 'rel':
 			return False
 		pc += SIZE[mode]
@@ -315,13 +355,68 @@ def engine_pattern(prg, f):
 	jump (Gen.emit_engine_call)."""
 	b = [prg.byte(f + k) for k in range(22)] if f >= 0x8000 and f + 22 <= 0x10000 else []
 	if len(b) < 22 or b[:3] != [0x0A, 0xA8, 0x68]:
-		return None
+		return engine_pattern2(prg, f)
 	z1 = b[4]
 	want = [0x0A, 0xA8, 0x68, 0x85, z1, 0x68, 0x85, (z1 + 1) & 0xFF, 0xC8, 0xB1, z1, 0x85, b[12],
 		0xC8, 0xB1, z1, 0x85, (b[12] + 1) & 0xFF, 0x6C, b[12], 0x00]
 	if b[:21] != want or z1 == 0xFF or b[12] == 0xFF:
-		return None
+		return engine_pattern2(prg, f)
 	return z1, b[12]
+
+
+def engine_pattern2(prg, f):
+	"""('one', zp) if the routine at f is the jump engine that keeps the
+	entry's low byte on the stack: ASL A, TAY, INY, PLA, STA zp, PLA, STA
+	zp+1, LDA (zp),Y, PHA, INY, LDA (zp),Y, STA zp+1, PLA, STA zp, JMP (zp)
+	(Mega Man 3's sound code's, at $8023): it leaves the entry in zp, its
+	low byte in A, Y the entry's index * 2 + 2. A JSR to it becomes a
+	direct jump too (Gen.emit_engine_call)."""
+	b = [prg.byte(f + k) for k in range(23)] if f >= 0x8000 and f + 23 <= 0x10000 else []
+	if len(b) < 23 or None in b or b[:5] != [0x0A, 0xA8, 0xC8, 0x68, 0x85]:
+		return engine_pattern3(prg, f)
+	z = b[5]
+	want = [0x0A, 0xA8, 0xC8, 0x68, 0x85, z, 0x68, 0x85, (z + 1) & 0xFF, 0xB1, z, 0x48, 0xC8, 0xB1, z,
+		0x85, (z + 1) & 0xFF, 0x68, 0x85, z, 0x6C, z, 0x00]
+	if b != want or z == 0xFF:
+		return None
+	return 'one', z
+
+
+def engine_pattern3(prg, f):
+	"""('keep', (zp1, zp2, zy)) if the routine at f is the jump engine
+	that keeps Y: ASL A, STY zy, TAY, INY, PLA, STA zp1, PLA, STA zp1+1,
+	LDA (zp1),Y, STA zp2, INY, BNE +2, INC zp1+1, LDA (zp1),Y, LDY zy,
+	STA zp2+1, JMP (zp2) (Konami's: Tiny Toon Adventures' at $D05A). It
+	leaves the return address in zp1, the entry in zp2, its high byte in
+	A, Y as it was (and in zy, unless that's zp2+1), N and Z from Y. A
+	JSR to it becomes a direct jump too (Gen.emit_engine_call)."""
+	b = [prg.byte(f + k) for k in range(29)] if f >= 0x8000 and f + 29 <= 0x10000 else []
+	if len(b) < 29 or None in b or b[:2] != [0x0A, 0x84]:
+		return None
+	zy, z1, z2 = b[2], b[7], b[14]
+	want = [0x0A, 0x84, zy, 0xA8, 0xC8, 0x68, 0x85, z1, 0x68, 0x85, (z1 + 1) & 0xFF, 0xB1, z1, 0x85, z2,
+		0xC8, 0xD0, 0x02, 0xE6, (z1 + 1) & 0xFF, 0xB1, z1, 0xA4, zy, 0x85, (z2 + 1) & 0xFF, 0x6C, z2, 0x00]
+	if b != want or 0xFF in (z1, z2) or len({z1, z1 + 1, z2, z2 + 1}) < 4 or zy in (z1, z1 + 1, z2):
+		return None
+	return 'keep', (z1, z2, zy)
+
+
+def mul_pattern(prg, f):
+	"""(lo, hi, m) if the routine at f multiplies hi by m into hi:lo,
+	shifting and adding: LDA #0, STA lo, LDY #8, then eight times ASL lo,
+	ROL hi and, if the bit out was 1, CLC, LDA lo, ADC m, STA lo, LDA hi,
+	ADC #0, STA hi; RTS (Mega Man 3's sound code's, at $8006). It leaves
+	Y 0, N and C clear, Z set. A JSR to it becomes the 68000's mulu where
+	A and V aren't needed after it (Gen.emit_mul_call)."""
+	b = [prg.byte(f + k) for k in range(29)] if f >= 0x8000 and f + 29 <= 0x10000 else []
+	if len(b) < 29 or None in b:
+		return None
+	lo, hi, m = b[3], b[9], b[16]
+	want = [0xA9, 0x00, 0x85, lo, 0xA0, 0x08, 0x06, lo, 0x26, hi, 0x90, 0x0D, 0x18, 0xA5, lo, 0x65, m,
+		0x85, lo, 0xA5, hi, 0x69, 0x00, 0x85, hi, 0x88, 0xD0, 0xEA, 0x60]
+	if b != want or len({lo, hi, m}) < 3:
+		return None
+	return lo, hi, m
 
 
 def inline_table(prg, at):
@@ -421,14 +516,14 @@ def jump_tables(prg, insns, foreign=None, loads=None):
 	- tables pushed high/low before an RTS (target - 1)
 	Returns all of them, and those reached by RTS. MMC3 PRG mode 1: the
 	tables this unit loads from the other slot, whose bank it can't know,
-	go into foreign, as (low bytes, high bytes, 1 for RTS tables) (mode1
+	go into foreign, as (low bytes, high bytes, 1 for RTS tables) (prg8_units
 	reads them in each bank there: slot_table), and into loads where it
 	loads anything there indexed (where such a table must end)."""
 	order = sorted(insns)
 	prev = {order[k]: insns[order[k - 1]] for k in range(1, len(order))}
 
 	def readable(a):
-		return prg.const(a) or (foreign is not None and prg.mode1 and prg.region(a) in ('A', 'C') and
+		return prg.const(a) or (foreign is not None and prg.prg8 and prg.region(a) in ('A', 'C') and
 					prg.region(a) != prg.slot)
 
 	def table_load(i):
@@ -476,7 +571,7 @@ def jump_tables(prg, insns, foreign=None, loads=None):
 		"""MMC3 PRG mode 1: are a load of the low bytes and one of the high
 		bytes 24 bytes apart at most, as code making one jump does? (A RAM
 		pointer games use everywhere gets its bytes from many tables.)"""
-		return not prg.mode1 or any(abs(a - b) <= 24 for a in lo[slot][l] for b in hi[slot][h])
+		return not prg.prg8 or any(abs(a - b) <= 24 for a in lo[slot][l] for b in hi[slot][h])
 	pairs = []
 	for slot in lo:
 		same = set(lo[slot]) & set(hi.get(slot, {}))	# LDA t,Y / INY / LDA t,Y: interleaved
@@ -491,6 +586,15 @@ def jump_tables(prg, insns, foreign=None, loads=None):
 					pairs.append((table_load(insns[j]), table_load(i), 1))
 					break
 	found, rts = set(), set()
+	# a return address pushed as constants, LDA #hi / PHA / LDA #lo / PHA, for
+	# the routine jumped to next to return to (Mega Man 3: JMP ($0000))
+	for pc in order:
+		run = [insns.get(pc), insns.get(pc + 2), insns.get(pc + 3), insns.get(pc + 5)]
+		if all(run) and [(x.m, x.mode) for x in run] == [('LDA', 'imm'), ('PHA', None), ('LDA', 'imm'), ('PHA', None)]:
+			a = ((run[0].arg << 8 | run[2].arg) + 1) & 0xFFFF
+			if plausible_code(prg, a):
+				found.add(a)
+				rts.add(a)
 	for l, h, add in pairs:
 		if not (prg.const(l) and prg.const(h)):
 			if not (prg.const(l) or prg.const(h)) and prg.region(l) == prg.region(h):
@@ -630,9 +734,9 @@ def slot_table(b, l, h, add, end=0x10000):
 
 
 def slot_homes(rom):
-	"""MMC3 PRG mode 1: the slot each bank's code runs in ('A': $A000,
-	'C': $C000), or None for a bank with no sign of code. (Not the last
-	two, always at $8000 and $E000.) A bank's JSRs and JMPs into its own
+	"""MMC3 prg8: the slot each bank's code runs in ('A': $A000, R7's;
+	'C': R6's), or None for a bank with no sign of code. (Not the last
+	two, always fixed.) A bank's JSRs and JMPs into its own
 	slot go to its code, those into the other slot to another bank's:
 	there its bytes are as likely data. A slot scores the JSRs and JMPs
 	into it whose target looks like code here (code_at), less those
@@ -1163,6 +1267,7 @@ class Gen:
 		self.dyn = {}			# MMC3 PRG mode 1: routines called in the other slot, (slot, index)
 		self.dyn_copies = set()		# and this bank's that are (copies of them, if small: DYN_COPY_MAX)
 		self.sj = 0			# slot_jump's labels
+		self.pass_store = None		# a store whose move sets the flags the branch after it reads (store_passes)
 		self.tails = {}			# routine -> its JMPs that are tail calls (routine_body)
 		self.engine_tails = {}		# routine -> its jump engine calls whose entries' copies it tail-calls (routine_body)
 		self.engine_entries = set()	# and those entries (copies that keep every flag: emit_routine)
@@ -1225,11 +1330,12 @@ class Gen:
 		needn't be stored in d3."""
 		if self.fast and 'ptr' in self.fast:
 			return False		# keep d3 right for exits into the normal copy
-		pc = i.pc + i.n
+		pc, k = i.pc + i.n, i
 		while True:
 			n = self.insns.get(pc)
-			if n is None or pc in self.targets:
-				return False
+			if n is None or pc in self.targets or any(q in self.insns for q in range(k.pc + 1, k.pc + k.n)):
+				return False		# (or an instruction decoded inside one: its code goes between)
+			k = n
 			if n.m in ('ROL', 'ROR', 'ADC'):
 				return n.mode in ('acc', 'imm', 'zp') or (n.mode == 'abs' and n.arg < 0x2000)
 			if not self.x_safe(n):
@@ -1274,8 +1380,9 @@ class Gen:
 				return ['move.w %s,d4' % r] + (['addq.w #1,d4'] if a & 1 else []) + \
 				       ['jsr rcReadPad'], 'd7'
 			return ['move.w #$%04X,d6' % a, 'add.w %s,d6' % r, 'jsr rcRead16'], 'd7'
-		if m == 'indy' and self.fast and 'ptr' in self.fast:
-			return [], self.ix(0, 'd2', 'a5')	# pointer checked and loaded into a5
+		if m == 'indy' and self.fast and 'ptr' in self.fast:	# pointer checked and loaded into a5
+			two = self.fast['ptrz'][1:] == [a]		# (the second: a1)
+			return [], self.ix(0, 'd2', 'a1' if two else 'a5')
 		if m == 'indy':
 			rn, rs, rd = (self.tag(x, i.pc) for x in ('Rn', 'Rs', 'Rd'))
 			r = dst or 'd7'
@@ -1290,11 +1397,15 @@ class Gen:
 			self.stubs += ['\t\tjsr ' + ('rcRead16P' if i.pc in self.addr_pending else 'rcRead16')] + \
 				      (['\t\tmove.b d7,%s' % r] if r != 'd7' else []) + ['\t\tjmp ' + rd]
 			prg = ['bpl.w ' + rn]
-			if self.prg.mode1:		# $C000-$DFFF: R6's bank (rcFrameC)
+			if self.prg.prg8:		# R6's 8 KB: its bank (rcFrameC)
 				rp, rc = self.tag('Rp', i.pc), self.tag('Rc', i.pc)
-				prg += ['cmpi.w #$C000,d6', 'bcs.s ' + rp, 'cmpi.w #$E000,d6', 'bcs.w ' + rc, rp + ':']
-				self.stubs += [rc + ':', '\t\tmovea.l rcFrameC(a4),a5', '\t\tmove.b (a5,d6.w),%s' % r,
-					       '\t\tjmp ' + rd]
+				if self.prg.r6 == 0xC000:
+					prg += ['cmpi.w #$C000,d6', 'bcs.s ' + rp, 'cmpi.w #$E000,d6', 'bcs.w ' + rc, rp + ':']
+					self.stubs += [rc + ':', '\t\tmovea.l rcFrameC(a4),a5', '\t\tmove.b (a5,d6.w),%s' % r,
+						       '\t\tjmp ' + rd]
+				else:		# (in line: reads there are as common as at $A000-$FFFF)
+					prg += ['cmpi.w #$A000,d6', 'bcc.s ' + rp, 'movea.l rcFrameC(a4),a5',
+						'move.b (a5,d6.w),%s' % r, 'bra.s ' + rd, rp + ':']
 			return self.indy_addr(a) + prg + ['move.b (a0,d6.w),%s' % r, rd + ':'], r
 		if m == 'indx':
 			return self.indx_addr(a) + ['jsr rcRead16'], 'd7'
@@ -1332,6 +1443,15 @@ class Gen:
 		if a + self.index_hi(i) < 0x800:
 			if a < 0x80:
 				return [], self.ix(a, r)
+			if self.fast and 'ptr' in self.fast:	# (a5 holds the pointer)
+				if 'off' in self.fast and self.fast['off'][r]:
+					raise Unroll
+				rb = self.fast.get('rbase')
+				if rb is not None and 'off' not in self.fast and not self.fast.get('ppu_run') and \
+				   0 <= a - rb <= 127:
+					self.fast['a3'].append(i.pc)		# (a3 from the guard: copy_of)
+					return [], '%d(a3,%s.w)' % (a - rb, r)
+				return ['move.w %s,d6' % r, 'addi.w #$%04X,d6' % a], '(a2,d6.w)'
 			return self.a5_ix(a, r, '$%04X' % a)
 		if self.fast and 'off' in self.fast and self.fast['off'][r]:
 			raise Unroll
@@ -1436,11 +1556,11 @@ class Gen:
 
 	def switches(self, i):
 		"""Can i, in a bank's code, write to the mapper (and switch the
-		bank it runs in)? MMC3 PRG mode 1: R7 switches $A000's bank, R6
-		$C000's (mmc3_regs)."""
+		bank it runs in)? MMC3 prg8: R7 switches $A000's bank, R6 R6's
+		(mmc3_regs)."""
 		if self.prg.unit == 'F' or not self.prg_switch(i):
 			return False
-		regs = self.mmc3_regs(i) if self.prg.mode1 else None
+		regs = self.mmc3_regs(i) if self.prg.prg8 else None
 		return regs is None or {'A': 7, 'C': 6}[self.prg.slot] in regs
 
 	def prg_switch(self, i):
@@ -1450,7 +1570,7 @@ class Gen:
 			return False
 		if i.mode == 'abs' and self.prg.mapper == 4 and i.arg & 0xE001 != 0x8001:
 			return False
-		regs = self.mmc3_regs(i) if self.prg.mode1 else None
+		regs = self.mmc3_regs(i) if self.prg.prg8 else None
 		return regs is None or max(regs) >= 6
 
 	def mmc3_regs(self, i):
@@ -1472,13 +1592,13 @@ class Gen:
 		return self.own_bank(k) + ['move.w #$%04X,d4' % ((i.pc + i.n) & 0xFFFF), 'jmp rcDispatch', k + ':']
 
 	def slot_jump(self, t):
-		"""Lines that go to t, in the $A000 or $C000 slot (MMC3 PRG mode 1)
+		"""Lines that go to t, in R7's slot at $A000 or R6's (MMC3 prg8)
 		where the bank isn't known here: its code in that bank's table, as
 		rcDispatch looks it up (rcCurTable: R7's, less $8000; rcCurTableC:
 		R6's), or rcDispatch where it has none (it interprets). Leaving a
 		routine copy, the 68000's returns go (as rcDispatch drops them).
 		None for anywhere else (rcDispatch)."""
-		s = self.prg.region(t) if self.prg.mode1 else None
+		s = self.prg.region(t) if self.prg.prg8 else None
 		if s not in ('A', 'C'):
 			return None
 		self.sj += 1
@@ -1493,8 +1613,8 @@ class Gen:
 
 	def own_bank(self, k):
 		"""Lines that go to k if this bank is still where its code runs
-		(the bank at $8000; MMC3 PRG mode 1: R7's at $A000, R6's at $C000)."""
-		if not self.prg.mode1:
+		(the bank at $8000; MMC3 prg8: R7's at $A000, R6's at r6)."""
+		if not self.prg.prg8:
 			return ['cmpa.l #PRG_IMAGES+$%X,a1' % (self.prg.unit * 0x8000), 'beq.s ' + k]
 		frame = 'PRG_FRAMES+$%X' % (self.prg.unit[1] * 0x8000)
 		if self.prg.slot == 'A':
@@ -1504,10 +1624,11 @@ class Gen:
 	def prg_frame(self, lo, hi):
 		"""Setup and the address register to read PRG at lo to hi through,
 		where it isn't constant here: a1, the image of the bank at $8000.
-		MMC3 PRG mode 1: a1 is R7's frame (PRG_FRAMES), right but at $C000-
-		$DFFF, and R6's (prgFrameC) is right but at $A000-$BFFF: None if
-		lo to hi is in both."""
-		if not self.prg.mode1 or not (lo <= 0xDFFF and hi >= 0xC000):
+		MMC3 prg8: a1 is R7's frame (PRG_FRAMES), right but in R6's 8 KB,
+		and R6's (prgFrameC) is right but at $A000-$BFFF: None if lo to hi
+		is in both."""
+		r6 = self.prg.r6 if self.prg.prg8 else 0
+		if not self.prg.prg8 or not (lo <= r6 + 0x1FFF and hi >= r6):
 			return [], 'a1'
 		if lo <= 0xBFFF and hi >= 0xA000:
 			return None
@@ -1534,11 +1655,15 @@ class Gen:
 		if ea == '(a2,d6.w)':
 			reg, vals = 'd6', ptr
 		else:
-			base, reg = int(ea[1:ea.index('(')], 16), ea[-5:-3]
+			if '(a3,' in ea:		# (ram_indexed: from the copy's RAM base)
+				base = self.fast['rbase'] + int(ea[:ea.index('(')])
+			else:
+				base = int(ea[1:ea.index('(')], 16)
+			reg = ea[-5:-3]
 			vals = [p - base for p in ptr if 0 <= p - base <= 255]
 		chk = []
-		for v in vals:
-			chk += ['cmpi.b #$%02X,%s' % (v, reg), 'beq.w %s' % self.olab(i.pc)]
+		for v in vals:			# (d6: the whole RAM address)
+			chk += ['cmpi.%s #$%02X,%s' % ('w' if reg == 'd6' else 'b', v, reg), 'beq.w %s' % self.olab(i.pc)]
 		return setup + chk, ea, post
 
 	def dst_plain(self, i):
@@ -1639,6 +1764,57 @@ class Gen:
 			if ok and pc == b.pc:
 				exits.add(b.pc)
 		return exits, jmps
+
+	def wait_heads(self):
+		"""Loops that wait for an NMI but aren't idle_loops' few loads and
+		a branch: a JMP (or branch) back to the head of code that reads
+		RAM or ROM, compares, counts in registers and branches, setting
+		each register and flag before it reads it each time round, and
+		stores nothing but a value it knows (Mega Man 3's task loop at
+		$FEAD: STX $90 with X 0, then each task's state, until one is
+		ready). Each time round does the same as the last: only an NMI (or
+		IRQ) can change what it finds. Their heads, where an NMI due is
+		taken as in idle_loops' (nmi_check)."""
+		reads = {'LDA': '', 'LDX': '', 'LDY': '', 'CMP': 'A', 'CPX': 'X', 'CPY': 'Y', 'BIT': 'A', 'AND': 'A',
+			 'ORA': 'A', 'EOR': 'A', 'INX': 'X', 'INY': 'Y', 'DEX': 'X', 'DEY': 'Y', 'TAX': 'A', 'TAY': 'A',
+			 'TXA': 'X', 'TYA': 'Y', 'CLC': '', 'SEC': '', 'CLV': '', 'NOP': '', 'STA': 'A', 'STX': 'X', 'STY': 'Y'}
+		sets = {'LDA': 'A', 'LDX': 'X', 'LDY': 'Y', 'AND': 'A', 'ORA': 'A', 'EOR': 'A', 'INX': 'X', 'INY': 'Y',
+			'DEX': 'X', 'DEY': 'Y', 'TAX': 'X', 'TAY': 'Y', 'TXA': 'A', 'TYA': 'A'}
+		flags = {N: 'N', Z: 'Z', C: 'C', V: 'V'}
+		heads = set()
+		for j in self.insns.values():
+			if not (j.m == 'JMP' and j.mode == 'abs' or j.mode == 'rel' and not j.decided) or \
+			   not 0 < j.pc - j.arg <= 64:
+				continue
+			pc, known = j.arg, set()
+			while pc < j.pc:
+				i = self.insns.get(pc)
+				if i is None or i.m not in reads and i.mode != 'rel':
+					break
+				if i.mode not in ('rel', None, 'imm', 'zp', 'zpx', 'zpy', 'abs', 'absx', 'absy'):
+					break
+				if i.mode in ('abs', 'absx', 'absy') and not (i.arg >= 0x8000 and i.m[:2] != 'ST' or
+									       i.arg + (0 if i.mode == 'abs' else 255) < 0x800):
+					break			# (RAM, or ROM read: no I/O)
+				if i.mode == 'rel' and (i.pc < i.arg < j.pc or i.arg == j.pc and j.mode == 'rel' or
+							i.decided is not None):
+					break			# (on, past what it might need; or always out)
+				need = set(reads.get(i.m, '')) | {'X' if i.mode in ('zpx', 'absx') else
+								  'Y' if i.mode in ('zpy', 'absy') else ''}
+				need |= {flags[f] for f in flags if uses(i) & f}
+				if need - known - {''}:
+					break			# (it would go by the last time round)
+				if i.m[:2] == 'ST':
+					rng = self.ranges.get(i.pc)
+					v = rng[{'STA': 0, 'STX': 1, 'STY': 2}[i.m]] if rng else TOP
+					if v[0] != v[1] or i.mode not in ('zp', 'abs'):
+						break		# (only a value it stores each time)
+				known |= set(sets.get(i.m, '')) | {flags[f] for f in flags if DEFS.get(i.m, 0) & f}
+				pc += i.n
+			else:
+				if pc == j.pc and not {flags[f] for f in flags if uses(j) & f} - known:
+					heads.add(j.arg)
+		return heads
 
 	def nmi_check(self, t):
 		"""The NMI check before a backward jump to t: in a loop that waits
@@ -1953,6 +2129,9 @@ class Gen:
 				if self.split_next:
 					direct, need = nxt_i, 0
 		self.direct_next = None
+		if direct is None and self.store_passes(i, nxt_i, defs):
+			need &= ~(N | Z)		# (the store's move sets them: emit at the store)
+			self.pass_store = nxt_i.pc
 
 		def nz_done(kind='nz'):
 			if direct and kind:
@@ -2022,8 +2201,11 @@ class Gen:
 			self.e(*setup)
 			if d is not None:
 				self.e('move.b %s,%s' % (r, d))
+				if self.pass_store == i.pc:	# (store_passes: N and Z of r, for the branch)
+					self.direct_next = 'nz'
 			else:
 				self.e('move.b %s,d7' % r, *post)
+			self.pass_store = None
 		elif m in ('TAX', 'TAY', 'TXA', 'TYA'):
 			s, d = {'TAX': ('d0', 'd1'), 'TAY': ('d0', 'd2'), 'TXA': ('d1', 'd0'), 'TYA': ('d2', 'd0')}[m]
 			self.e('move.b %s,%s' % (s, d))
@@ -2163,7 +2345,18 @@ class Gen:
 				if skip: self.c_skipped = i.pc
 			else:
 				setup, d, post = self.dst(i)
-				if d is not None:
+				f = FLAG_OF[direct.m] if direct and not skip and not self.split_next else 0
+				if d is not None and f:		# the branch right after: its flag from the store
+					self.e(*setup)		# (N, Z) or from X (C, as the shift left it)
+					self.e('move.b %s,d7' % d, *pre())
+					self.e('%s.b #1,d7' % op)
+					self.e('move.b d7,%s' % d)
+					if f == C:
+						self.e('subx.b d5,d5')
+						self.direct_next = 'shift'
+					else:
+						self.direct_next = 'nz'
+				elif d is not None:
 					self.e(*setup)
 					self.e('move.b %s,d7' % d, *pre())
 					self.e('%s.b #1,d7' % op)
@@ -2237,6 +2430,8 @@ class Gen:
 					hi = (p & 0xFF00) | ((p + 1) & 0xFF)	# 6502 page wrap bug
 					self.e('move.b $%04X(a2),d4' % (hi & 0x7FF), 'lsl.w #8,d4',
 					       'move.b $%04X(a2),d4' % (p & 0x7FF), 'jmp rcDispatch')
+		elif m == 'JSR' and not (self.fast and not self.fast.get('routine')) and i.arg in self.muls:
+			self.emit_mul_call(i)
 		elif m == 'JSR' and not (self.fast and not self.fast.get('routine')) and i.arg in self.engines and \
 		     (i.arg in self.insns or i.arg in self.ext) and self.engine_table(i):
 			self.emit_engine_call(i)
@@ -2287,6 +2482,8 @@ class Gen:
 			self.e('swap d3', 'addq.b #1,d3', 'move.b (a2,d3.w),d6', 'addq.b #1,d3',
 			       'move.b (a2,d3.w),-(sp)', 'swap d3', 'move.w (sp)+,d4', 'move.b d6,d4',
 			       'addq.w #1,d4')
+			if i.pc == self.tail_rts:	# (the end of the NMI handler's work after its RTI)
+				self.e('jsr nmiTailEnd')
 			# usually it goes back to one of a few known callers
 			for r in self.returns.get(i.pc, ()):
 				self.e('cmpi.w #$%04X,d4' % r, 'bne.s *+8', 'jmp (%s).l' % lab(r))
@@ -2313,15 +2510,31 @@ class Gen:
 		else:
 			raise ValueError(m)
 
+	def nmi_tail_rts(self):
+		"""The RTS that ends the work an NMI handler goes on to after its
+		RTI (nmi_tail: NMI_TAIL in md.asm), back where the NMI came: the
+		first along its way from where it begins, over the routines it
+		calls. None if it isn't in this unit's code, or doesn't go
+		straight there."""
+		pc = self.prg.nmi_tail
+		for _ in range(64):
+			i = self.insns.get(pc)
+			if i is None or i.mode == 'rel' or i.m in ('JMP', 'RTI', 'BRK'):
+				return None
+			if i.m == 'RTS':
+				return pc
+			pc += i.n
+		return None
+
 	def dispatch_c(self):
 		"""The rcDispatchC (emu/recomp.asm) of this unit's RTSs: one that
 		doesn't keep returns to a switched bank's code but its own (the
 		bank at $8000's for the fixed bank's code; MMC3 PRG mode 1: the
-		$A000 and $C000 banks' for the fixed code's, the other slot's for
+		$A000 and R6's banks' for the fixed code's, the other slot's for
 		a bank's)."""
 		if not self.prg.banked:
 			return 'rcDispatchC'
-		if not self.prg.mode1:
+		if not self.prg.prg8:
 			return 'rcDispatchCF' if self.prg.unit == 'F' else 'rcDispatchC'
 		return {'F': 'rcDispatchCF', 'A': 'rcDispatchCA', 'C': 'rcDispatchCC'}[self.prg.slot]
 
@@ -2330,6 +2543,14 @@ class Gen:
 		if they are all translated."""
 		t = inline_table(self.prg, i.pc + 3)
 		return t if t and all(a in self.insns or a in self.ext for a in t) else None
+
+	def emit_mul_call(self, i):
+		"""JSR to a shift-and-add multiply (mul_pattern): the 68000's mulu
+		(rcMul8, emu/recomp.asm), with A, Y and the flags as the routine
+		leaves them. (Not in a loop's copy: d4 may hold what it keeps.)"""
+		lo, hi, m = self.muls[i.arg]
+		self.e('moveq #0,d6', 'move.b $%02X(a2),d6' % hi, 'moveq #0,d5', 'move.b $%02X(a2),d5' % m, 'jsr rcMul8',
+		       'move.b d6,$%02X(a2)' % lo, 'lsr.w #8,d6', 'move.b d6,$%02X(a2)' % hi)
 
 	def emit_engine_call(self, i):
 		"""JSR to a jump engine (engine_pattern) with entry A of the table
@@ -2341,22 +2562,49 @@ class Gen:
 		t = self.engine_table(i)
 		ret = i.pc + 2
 		g, jw, jt = self.tag('Jg', i.pc), self.tag('Jw', i.pc), self.tag('Jt', i.pc)
-		self.e('cmpi.b #%d,d0' % len(t), 'bcc.w ' + g)	# not in the table: the engine
-		# the return address it pulled, in zp1
-		if z1 & 1:
-			self.e('move.b #$%02X,$%02X(a2)' % (ret & 0xFF, z1), 'move.b #$%02X,$%02X(a2)' % (ret >> 8, z1 + 1))
+		n = min(len(t), 127) if z1 == 'keep' else len(t)	# (engine_pattern3's 128th: zp1+1 stepped)
+		self.e('cmpi.b #%d,d0' % n, 'bcc.w ' + g)	# not in the table: the engine
+		if z1 == 'keep':		# (engine_pattern3: Y kept, N and Z from it)
+			k1, k2, ky = z2
+			if k1 & 1:		# the return address it pulled, in zp1
+				self.e('move.b #$%02X,$%02X(a2)' % (ret & 0xFF, k1), 'move.b #$%02X,$%02X(a2)' % (ret >> 8, k1 + 1))
+			else:
+				self.e('move.w #$%04X,$%02X(a2)' % ((ret & 0xFF) << 8 | ret >> 8, k1))
+			self.e('moveq #0,d6', 'move.b d0,d6', 'add.w d6,d6', 'lea %s(pc),a5' % jw)	# ASL A
+			if k2 & 1:		# the entry in zp2, and its high byte in A
+				self.e('move.b (a5,d6.w),$%02X(a2)' % k2, 'move.b 1(a5,d6.w),d0', 'move.b d0,$%02X(a2)' % (k2 + 1))
+			else:
+				self.e('move.w (a5,d6.w),d5', 'move.w d5,$%02X(a2)' % k2, 'move.b d5,d0')
+			if ky != k2 + 1:	# (Y's copy, where the entry's high byte doesn't go)
+				self.e('move.b d2,$%02X(a2)' % ky)
+			if i.live_out & (N | Z | C):	# N and Z from Y (LDY zy); C from ASL: 0
+				self.e('tst.b d2', 'move sr,d5', 'andi.w #$C,d5', 'andi.b #$E2,d3', 'or.b d5,d3')
+		elif z1 == 'one':		# (engine_pattern2: the entry in zp, its low byte in A)
+			self.e('moveq #0,d6', 'move.b d0,d6', 'add.w d6,d6',	# ASL A, TAY
+			       'move.b d6,d2', 'addq.b #2,d2',			# two INY
+			       'lea %s(pc),a5' % jw, 'move.b (a5,d6.w),d0')
+			if z2 & 1:
+				self.e('move.b d0,$%02X(a2)' % z2, 'move.b 1(a5,d6.w),$%02X(a2)' % (z2 + 1))
+			else:
+				self.e('move.w (a5,d6.w),$%02X(a2)' % z2)
+			if i.live_out & (N | Z | C):	# N and Z from the low byte; C from ASL: 0
+				self.e('tst.b d0', 'move sr,d5', 'andi.w #$C,d5', 'andi.b #$E2,d3', 'or.b d5,d3')
 		else:
-			self.e('move.w #$%04X,$%02X(a2)' % ((ret & 0xFF) << 8 | ret >> 8, z1))
-		self.e('moveq #0,d6', 'move.b d0,d6', 'add.w d6,d6',	# ASL A, TAY
-		       'move.b d6,d2', 'addq.b #2,d2',			# two INY
-		       'lea %s(pc),a5' % jw)
-		# the entry in zp2, and its high byte in A
-		if z2 & 1:
-			self.e('move.b (a5,d6.w),$%02X(a2)' % z2, 'move.b 1(a5,d6.w),d0', 'move.b d0,$%02X(a2)' % (z2 + 1))
-		else:
-			self.e('move.w (a5,d6.w),d5', 'move.w d5,$%02X(a2)' % z2, 'move.b d5,d0')
-		if i.live_out & (N | Z | C):		# (as the table's entries need them)
-			self.e('andi.b #$E2,d3', 'ori.b #8,d3')	# the high byte: N set, Z clear; C from ASL: 0
+			# the return address it pulled, in zp1
+			if z1 & 1:
+				self.e('move.b #$%02X,$%02X(a2)' % (ret & 0xFF, z1), 'move.b #$%02X,$%02X(a2)' % (ret >> 8, z1 + 1))
+			else:
+				self.e('move.w #$%04X,$%02X(a2)' % ((ret & 0xFF) << 8 | ret >> 8, z1))
+			self.e('moveq #0,d6', 'move.b d0,d6', 'add.w d6,d6',	# ASL A, TAY
+			       'move.b d6,d2', 'addq.b #2,d2',			# two INY
+			       'lea %s(pc),a5' % jw)
+			# the entry in zp2, and its high byte in A
+			if z2 & 1:
+				self.e('move.b (a5,d6.w),$%02X(a2)' % z2, 'move.b 1(a5,d6.w),d0', 'move.b d0,$%02X(a2)' % (z2 + 1))
+			else:
+				self.e('move.w (a5,d6.w),d5', 'move.w d5,$%02X(a2)' % z2, 'move.b d5,d0')
+			if i.live_out & (N | Z | C):		# (as the table's entries need them)
+				self.e('andi.b #$E2,d3', 'ori.b #8,d3')	# the high byte: N set, Z clear; C from ASL: 0
 		self.e('add.w d6,d6')
 		if len(t) <= 63:			# (the addresses right after the entries)
 			self.e('movea.l %d(a5,d6.w),a5' % (2 * len(t)), 'jmp (a5)')
@@ -2442,26 +2690,35 @@ class Gen:
 			elif lo >> 3 == hi >> 3 and hi & 7 < 6:	# one of R0-R5: the register from $8000
 				self.e(*irq, 'moveq #7,d5', 'and.b mmc3Select+1(a4),d5', 'lea mmc3Regs(a4),a5',
 				       'cmp.b (a5,d5.w),%s' % r, 'beq.s ' + same, *call)
-			elif lo == hi and not lo & 0x40 and not self.prg.mode1:	# R6, R7 in PRG mode 0
+			elif lo == hi and not lo & 0x40 and not self.prg.prg8:	# R6, R7 in PRG mode 0
 				self.e('move.b %s,mmc3Regs+%d(a4)' % (r, lo & 7), 'jsr mmc3Pair', *self.after_switch(i))
-			elif lo == hi and self.prg.mode1:	# R7 ($A000's bank), R6 ($C000's) in PRG mode 1
+			elif lo == hi and self.prg.prg8:	# R7 ($A000's bank), R6 (r6's), 8 KB apart
 				n = lo & 7
 				self.e('cmp.b mmc3Regs+%d(a4),%s' % (n, r), 'beq.s ' + same, 'move.b %s,mmc3Regs+%d(a4)' % (r, n),
-				       *self.prg1_switch(n, r), *self.after_switch(i), same + ':')
+				       *self.prg1_switch(n, r, (self.tag('Mt', i.pc), self.tag('Mu', i.pc))),
+				       *self.after_switch(i), same + ':')
 			else:
 				return False
 			return True
 		return False
 
-	def prg1_switch(self, n, r):
+	def prg1_switch(self, n, r, labs=None):
 		"""MMC3 PRG mode 1: R7 (n 7, $A000) or R6 now holds r's bank. What
 		rcDispatch, the call tables and PRG reads go by comes from the
-		bank's record (rcBankRecsA, rcBankRecsC: mode1): its code there,
+		bank's record (rcBankRecsA, rcBankRecsC: prg8_units): its code there,
 		the copies of its routines other code calls (emit_dyn_call), its
-		frame and the frame +$8000."""
+		frame and the frame +$8000. (labs: two labels for NMI_TAIL's check.)"""
 		s = 'A' if n == 7 else 'C'
-		lines = ['moveq #prgBank8Mask,d6', 'and.b %s,d6' % r, 'lsl.w #4,d6', 'lea (rcBankRecs%s).l,a5' % s,
-			 'adda.w d6,a5']
+		lines = []
+		if s == 'C' and self.prg.nmi_tail:	# (NMI_TAIL: nmiTailR6, emu/cpu.asm)
+			call = (['move.b %s,d7' % r] if r != 'd7' else []) + ['jsr nmiTailR6']
+			if labs:			# only with NMIs held, or for the bank its work was seen in
+				slow, done = labs
+				call = ['tst.b nmiTail(a4)', 'bne.s ' + slow, 'cmp.b nmiTailBank+1(a4),%s' % r,
+					'bne.s ' + done, slow + ':'] + call + [done + ':']
+			lines = call
+		lines += ['moveq #prgBank8Mask,d6', 'and.b %s,d6' % r, 'lsl.w #4,d6', 'lea (rcBankRecs%s).l,a5' % s,
+			  'adda.w d6,a5']
 		if s == 'A':		# (the frame in a1 and cpuPrgImg, a0 the frame +$8000)
 			return lines + ['move.l (a5)+,rcCurTable(a4)', 'move.l (a5)+,rcCurCallA(a4)', 'movea.l (a5)+,a1',
 					'move.l a1,cpuPrgImg(a4)', 'movea.l (a5),a0']
@@ -2607,6 +2864,26 @@ class Gen:
 		if s.m == 'JSR':
 			return s.live_out
 		return uses(s) | (s.live_out & ~DEFS.get(s.m, 0))
+
+	def store_passes(self, i, s, defs):
+		"""i sets only N and Z, from a register that the store s right after
+		(STA, STX, STY to plain RAM) moves, and a branch right after s reads
+		one of them, and nothing reads them after: the 68000's move in s sets
+		them as i did, so the branch can test them there (emit, at s)."""
+		REG = {'LDA': 'A', 'TXA': 'A', 'TYA': 'A', 'PLA': 'A', 'AND': 'A', 'ORA': 'A', 'EOR': 'A',
+		       'LDX': 'X', 'TAX': 'X', 'INX': 'X', 'DEX': 'X', 'LDY': 'Y', 'TAY': 'Y', 'INY': 'Y', 'DEY': 'Y'}
+		if s is None or i.m not in REG or defs != N | Z or s.m != 'ST' + REG[i.m] or \
+		   i.pc in self.delays or i.pc in self.delays2 or i.pc in self.delay_skip:
+			return False
+		if not (s.mode in ('zp', 'zpx', 'zpy') or (s.mode in ('abs', 'absx', 'absy') and s.arg < 0x2000)):
+			return False
+		b = self.insns.get(s.pc + s.n)
+		if b is None or b.mode != 'rel' or b.decided is not None or FLAG_OF[b.m] not in (N, Z) or \
+		   defs & b.live_out or s.pc in self.targets or b.pc in self.targets:
+			return False
+		if self.fast and (s.pc in self.fast.get('check', ()) or s.pc in self.fast.get('skip', ())):
+			return False
+		return True
 
 	def split_plan(self, i, m, b, defs):
 		"""i's flags are read after the branch b that tests them: b tests
@@ -2769,7 +3046,11 @@ class Gen:
 		writes gets a second, fast copy: a guard at its entry loads the
 		pointer into a5 once and checks the index registers' ranges, so
 		zp,X needs no wrap-around and stores can't hit the pointer.
-		Stores the guard couldn't clear check their address instead."""
+		Stores the guard couldn't clear check their address instead.
+		Through two pointers (Mega Man 3's sprite loop), the second goes
+		in a1, which translated code can always make again from a0: so
+		only where nothing else in the loop uses a1, and every way out
+		of the copy makes it again first (copy_of)."""
 		t = b.arg
 		body, pc = [], t
 		while pc <= b.pc and pc in self.insns:
@@ -2778,17 +3059,18 @@ class Gen:
 		if pc != b.pc + 2:
 			return None
 		W = ('STA', 'STX', 'STY', 'INC', 'DEC', 'ASL', 'LSR', 'ROL', 'ROR')
-		ptr = None
+		ptrz = []			# the pointers' low bytes' addresses
 		for i in body:
 			if i.m in ('JSR', 'JMP', 'RTS', 'RTI', 'BRK', 'PHA', 'PLA', 'PHP', 'PLP', 'TXS'):
 				return None
 			if i.mode == 'rel' and i is not b and i.arg <= i.pc:
 				return None
 			if i.mode == 'indy':
-				if i.m == 'STA' or ptr not in (None, i.arg):
+				if i.m == 'STA' or (i.arg not in ptrz and len(ptrz) == 2):
 					return None
-				ptr = i.arg
-		if ptr is None:
+				if i.arg not in ptrz:
+					ptrz.append(i.arg)
+		if not ptrz:
 			return None
 		# the furthest index the (zp),Y reads reach, from the registers at
 		# entry (emit_versioned): Y if the loop doesn't change it; Y plus
@@ -2805,7 +3087,7 @@ class Gen:
 			reach = 'Y counts'
 		elif cnt is not None and cnt.m == 'DEX' and xs == [cnt] and len(ys) == 1 and ys[0].m == 'INY':
 			reach = 'Y + X'
-		ptrs = [ptr, (ptr + 1) & 0xFF]
+		ptrs = [a for p in ptrz for a in (p, (p + 1) & 0xFF)]
 		for i in body:
 			if i.m in W and (i.mode == 'zp' or (i.mode == 'abs' and i.arg < 0x2000)) \
 			   and i.arg & 0x7FF in ptrs:
@@ -2860,10 +3142,18 @@ class Gen:
 			if runs and len(runs) <= 2:
 				guard[r] = runs
 				direct |= {i.pc for i, base, zp, wr in acc[r] if zp}
-			else:
-				check |= {i.pc for i, base, zp, wr in acc[r] if wr}
-		plan = {'t': t, 'b': b, 'body': body, 'pcs': {i.pc for i in body}, 'ptr': ptrs,
-			'direct': direct, 'check': check, 'guard': guard, 'reach': reach}
+			else:			# (a store whose addresses can't reach the pointers needn't check)
+				check |= {i.pc for i, base, zp, wr in acc[r] if wr and
+					  (zp or any(base <= p <= base + 255 for p in alias))}
+		# abs,X / abs,Y RAM past $7F (not wrapping): through a3 from the
+		# lowest of them, for those up to 127 bytes on (ram_indexed, copy_of)
+		bases = [i.arg & 0x7FF for i in body if i.mode in ('absx', 'absy') and i.arg < 0x2000 and
+			 0x80 <= i.arg & 0x7FF and (i.arg & 0x7FF) + self.index_hi(i) < 0x800]
+		plan = {'t': t, 'b': b, 'body': body, 'pcs': {i.pc for i in body}, 'ptr': ptrs, 'ptrz': ptrz,
+			'direct': direct, 'check': check, 'guard': guard, 'reach': reach,
+			'rbase': min(bases) if len(bases) > 1 else None}
+		if len(ptrz) == 2:
+			return plan		# (not unrolled, nor a $2007 run: one pointer only)
 		# $2007 stores and no other PPU access, X or Y counting the turns
 		# down (one DEX or DEY all that changes it), and no way out but
 		# the last turn (no branch to the BNE either: its copy for entries
@@ -3051,12 +3341,13 @@ class Gen:
 		self.ccr_d3 = None
 		f = b.pc + 2
 		exit = ['jmp %s' % self.lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']
+		a3 = []				# (RAM read through a3 from the copy's base: ram_indexed)
 		try:
 			off = {'d1': 0, 'd2': 0}
 			for k in range(turns['n'] if turns else 1):
 				self.fast = dict(plan, prefix=base + ({'nt': 'N', 'pal': 'Q'}[run] if run else 'U%d' % k if k else 'F'),
 						 outer=outer and base, rf=outer.get('f') if outer and outer.get('routine') else None,
-						 ppu_run=run)
+						 ppu_run=run, a3=a3)
 				if turns:
 					self.fast.update(off=off, skip=turns['skip'])
 				dk = None
@@ -3102,7 +3393,43 @@ class Gen:
 			self.ccr_d3 = None
 		if fast and any((',a5' in l or ('jsr' in l and 'rcNmi' not in l)) and '(a5 kept)' not in l for l in fast):
 			fast = None
+		if fast and a3 and any(re.search(r'\b(jsr|bsr)\b', l) or re.search(r'(?<![0-9])\(a3,', l) for l in fast):
+			return self.copy_of(dict(plan, rbase=None), turns, run)	# (a handler or the PPU's code needs a3)
+		if fast:
+			again = (['lea -$8000(a0),a1'] if len(plan['ptrz']) == 2 else []) + \
+				(['lea (RAM_Fami_PPU).w,a3'] if a3 else [])
+			if again:
+				fast = self.borrowed_exits(fast, '%sA1_%04X' % (base, t), again)
+		self.copy_a3 = bool(fast and a3)
 		return fast
+
+	def borrowed_exits(self, fast, name, again):
+		"""A fast copy that borrows a1 (two pointers: version_plan) or a3
+		(RAM through its base: ram_indexed): None if anything in it uses a1
+		but the second pointer's reads, or checks for an NMI (whose handler
+		would read PRG through a1, write the PPU through a3), or, borrowing
+		a3, calls a handler or has a $2007 store (which need a3 as it is);
+		else its lines with each way out (to a label not its own) through a
+		stub that makes them again (again)."""
+		if any('rcNmi' in l or (len(again) > 1 or 'a1' in again[0]) and
+		       re.sub(r'\(a1,d2\.w\)', '', l).find('a1') >= 0 for l in fast):
+			return None
+		if any('a3' in l for l in again) and \
+		   any(re.search(r'\b(jsr|bsr)\b', l) or re.search(r'(?<![0-9])\(a3,', l) for l in fast):
+			return None
+		own = {l.split(':')[0].strip() for l in fast if re.match(r'\s*[A-Za-z_][A-Za-z0-9_]*:', l)}
+		stubs, out = {}, []
+		for l in fast:
+			m = re.match(r'^(\s+)(b[a-z]{2}\.[sw]|jmp|bra\.[sw])\s+\(?([A-Za-z_][A-Za-z0-9_]*)\)?(\.l)?\s*$', l)
+			if m and m.group(3) not in own:
+				to = m.group(3)
+				stub = stubs.setdefault(to, '%s_%d' % (name, len(stubs)))
+				op = m.group(2) if m.group(2).startswith('b') and m.group(2) != 'bra.s' else 'jmp'
+				l = '%s%s %s' % (m.group(1), op.replace('.s', '.w'), stub)
+			out.append(l)
+		for to, stub in stubs.items():
+			out += [stub + ':'] + ['\t\t' + l for l in again] + ['\t\tjmp ' + to]
+		return out
 
 	def emit_versioned(self, plan):
 		"""Guard and fast copy of a loop, placed where code falls into
@@ -3116,10 +3443,13 @@ class Gen:
 			fast = self.copy_of(plan, None)
 		if fast is None:
 			return False
+		a3 = self.copy_a3
 		slow = self.lab(t)
 		v = self.fast['prefix'] if self.fast else ''
-		g = [v + 'V_%04X:' % t, '\t\tmove.b $%02X(a2),-(sp)' % plan['ptr'][1], '\t\tmove.w (sp)+,d6',
-		     '\t\tmove.b $%02X(a2),d6' % plan['ptr'][0]]
+		def load(zp):
+			return ['\t\tmove.b $%02X(a2),-(sp)' % ((zp + 1) & 0xFF), '\t\tmove.w (sp)+,d6',
+				'\t\tmove.b $%02X(a2),d6' % zp]
+		g = [v + 'V_%04X:' % t] + load(plan['ptrz'][0])
 		for r, runs in plan['guard'].items():
 			reg = 'd1' if r == 'X' else 'd2'
 			def within(lo, hi):
@@ -3132,32 +3462,51 @@ class Gen:
 				g += ['\t\tcmpi.b #$%02X,%s' % (runs[0][1], reg), '\t\tbhi.s %s' % hi_lab]
 				g += within(runs[0][0], 255) + ['\t\tbra.s %s' % ok_lab, hi_lab + ':']
 				g += within(runs[1][0], runs[1][1]) + [ok_lab + ':']
-		# d7: the last byte the reads reach (version_plan's reach), in the
-		# same memory as the first (d6)
-		y = '%sVY_%04X' % (v, t)
-		g += {'Y': ['\t\tmoveq #0,d7', '\t\tmove.b d2,d7'],
-		      'Y counts': ['\t\tmoveq #0,d7', '\t\tmove.b d2,d7', '\t\tbne.s ' + y,
-				   '\t\tmove.w #$FF,d7', y + ':'],		# (Y = 0: 256 turns)
-		      'Y + X': ['\t\tmoveq #0,d7', '\t\tmove.b d1,d7', '\t\tbeq.w ' + slow,	# (X = 0: 256 turns)
-				'\t\tmoveq #0,d5', '\t\tmove.b d2,d5', '\t\tadd.w d5,d7',
-				'\t\tcmpi.w #$100,d7', '\t\tbcc.w ' + slow],		# (Y would wrap)
-		      None: ['\t\tmove.w #$FF,d7']}[plan['reach']]
-		g += ['\t\tadd.w d6,d7', '\t\tbcs.w ' + slow]	# (not past $FFFF)
-		g += ['\t\tcmpi.w #$800,d7', '\t\tbcs.s %sVR_%04X' % (v, t)]	# RAM
-		if self.prg.banked:		# PRG RAM
-			g += ['\t\tcmpi.w #$6000,d6', '\t\tbcs.w %s' % slow,
-			      '\t\tcmpi.w #$8000,d7', '\t\tbcs.s %sVW_%04X' % (v, t)]
-		g += ['\t\tcmpi.w #$8000,d6', '\t\tbcs.w %s' % slow]		# PRG
-		if self.prg.mode1:		# R7's frame (a0) but at $C000-$DFFF: R6's
-			ok = '%sVP_%04X' % (v, t)
-			g += ['\t\tcmpi.w #$C000,d7', '\t\tbcs.s ' + ok, '\t\tcmpi.w #$E000,d6', '\t\tbcc.s ' + ok,
-			      '\t\tcmpi.w #$C000,d6', '\t\tbcs.w %s' % slow, '\t\tcmpi.w #$E000,d7', '\t\tbcc.w %s' % slow,
-			      '\t\tmovea.l rcFrameC(a4),a5', '\t\tadda.w d6,a5', '\t\tbra.s %sF_%04X' % (v, t), ok + ':']
-		g += ['\t\tlea (a0,d6.w),a5', '\t\tbra.s %sF_%04X' % (v, t)]
-		if self.prg.banked:
-			g += ['%sVW_%04X:' % (v, t), '\t\tlea (RAM_Fami_WRAM-$6000).l,a5', '\t\tadda.w d6,a5',
-			      '\t\tbra.s %sF_%04X' % (v, t)]
-		g += ['%sVR_%04X:' % (v, t), '\t\tlea (a2,d6.w),a5']
+		# each pointer's guard: its reads' first byte (d6) and last (d7:
+		# version_plan's reach) in the same memory, and the pointer there in
+		# a5 (the second: a1)
+		F = '%sF_%04X' % (v, t)
+		for k, zp in enumerate(plan['ptrz']):
+			x = '' if k == 0 else str(k)
+			reg = 'a5' if k == 0 else 'a1'
+			nxt = F if k == len(plan['ptrz']) - 1 else '%sVB_%04X' % (v, t)
+			if k:
+				g += load(zp)
+			y = '%sVY%s_%04X' % (v, x, t)
+			g += {'Y': ['\t\tmoveq #0,d7', '\t\tmove.b d2,d7'],
+			      'Y counts': ['\t\tmoveq #0,d7', '\t\tmove.b d2,d7', '\t\tbne.s ' + y,
+					   '\t\tmove.w #$FF,d7', y + ':'],		# (Y = 0: 256 turns)
+			      'Y + X': ['\t\tmoveq #0,d7', '\t\tmove.b d1,d7', '\t\tbeq.w ' + slow,	# (X = 0: 256 turns)
+					'\t\tmoveq #0,d5', '\t\tmove.b d2,d5', '\t\tadd.w d5,d7',
+					'\t\tcmpi.w #$100,d7', '\t\tbcc.w ' + slow],		# (Y would wrap)
+			      None: ['\t\tmove.w #$FF,d7']}[plan['reach']]
+			g += ['\t\tadd.w d6,d7', '\t\tbcs.w ' + slow]	# (not past $FFFF)
+			g += ['\t\tcmpi.w #$800,d7', '\t\tbcs.s %sVR%s_%04X' % (v, x, t)]	# RAM
+			if self.prg.banked:		# PRG RAM
+				g += ['\t\tcmpi.w #$6000,d6', '\t\tbcs.w %s' % slow,
+				      '\t\tcmpi.w #$8000,d7', '\t\tbcs.s %sVW%s_%04X' % (v, x, t)]
+			g += ['\t\tcmpi.w #$8000,d6', '\t\tbcs.w %s' % slow]		# PRG
+			if self.prg.prg8:		# R7's frame (a0) but in R6's 8 KB: R6's
+				ok = '%sVP%s_%04X' % (v, x, t)
+				if self.prg.r6 == 0xC000:
+					g += ['\t\tcmpi.w #$C000,d7', '\t\tbcs.s ' + ok, '\t\tcmpi.w #$E000,d6', '\t\tbcc.s ' + ok,
+					      '\t\tcmpi.w #$C000,d6', '\t\tbcs.w %s' % slow, '\t\tcmpi.w #$E000,d7', '\t\tbcc.w %s' % slow]
+				else:
+					g += ['\t\tcmpi.w #$A000,d6', '\t\tbcc.s ' + ok, '\t\tcmpi.w #$A000,d7', '\t\tbcc.w %s' % slow]
+				g += ['\t\tmovea.l rcFrameC(a4),%s' % reg, '\t\tadda.w d6,%s' % reg, '\t\tbra.s ' + nxt, ok + ':']
+			g += ['\t\tlea (a0,d6.w),%s' % reg, '\t\tbra.s ' + nxt]
+			if self.prg.banked:
+				g += ['%sVW%s_%04X:' % (v, x, t), '\t\tlea (RAM_Fami_WRAM-$6000).l,%s' % reg, '\t\tadda.w d6,%s' % reg,
+				      '\t\tbra.s ' + nxt]
+			g += ['%sVR%s_%04X:' % (v, x, t), '\t\tlea (a2,d6.w),%s' % reg]
+			if nxt != F:
+				g += [nxt + ':']
+		if a3:					# (the copy's RAM base: ram_indexed)
+			FA = '%sFA_%04X' % (v, t)
+			g = [l.replace('bra.s ' + F, 'bra.s ' + FA) for l in g]
+			fast = [FA + ':', '\t\tlea $%04X(a2),a3' % plan['rbase']] + fast
+			plan = dict(plan, ppu=None)
+			plan.pop('ppu')
 		nt = pal = None
 		if 'ppu' in plan and 'unroll' not in plan:
 			nt = self.copy_of(plan, None, 'nt')
@@ -3187,8 +3536,8 @@ class Gen:
 	def dyn_target(self, i):
 		"""MMC3 PRG mode 1: is i a JSR into the other slot (from the fixed
 		code: into either), to a routine some bank there may have a copy
-		of (mode1: dyn)?"""
-		return self.prg.mode1 and i.m == 'JSR' and not i.table and i.arg in self.dyn and \
+		of (prg8: dyn)?"""
+		return self.prg.prg8 and i.m == 'JSR' and not i.table and i.arg in self.dyn and \
 			self.dyn[i.arg][0] != self.prg.slot
 
 	def emit_dyn_call(self, i):
@@ -3196,7 +3545,7 @@ class Gen:
 		the copy of the routine in the one there now, from its call table
 		(rcCurCallA, rcCurCallC: emu/recomp.asm, rcPrgSlot), called with
 		the 68000's jsr, the 6502 return address in d4: a light copy's
-		entry is the copy, a heavy one's pushes it first (mode1). Where
+		entry is the copy, a heavy one's pushes it first (prg8). Where
 		that bank has none, the return address pushed, rcDispatch, as
 		before. A bank's code checks after the call that its own bank is
 		still there (the routine may switch it)."""
@@ -3330,8 +3679,8 @@ class Gen:
 
 	def switch_slots(self, f, memo=None):
 		"""The slots a callable routine (with those it calls) may switch
-		the bank of: 'A' ($A000, R7) and 'C' ($C000, R6) in MMC3 PRG mode
-		1, both where that isn't known (or another mapper's bank)."""
+		the bank of: 'A' ($A000, R7) and 'C' (r6, R6) in MMC3 prg8,
+		both where that isn't known (or another mapper's bank)."""
 		memo = {} if memo is None else memo
 		if f in memo:
 			return memo[f]
@@ -3340,7 +3689,7 @@ class Gen:
 		for pc in self.callable[f][0]:
 			i = self.insns[pc]
 			if self.prg_switch(i):
-				regs = self.mmc3_regs(i) if self.prg.mode1 else None
+				regs = self.mmc3_regs(i) if self.prg.prg8 else None
 				out |= {'A', 'C'} if regs is None else {s for s, r in (('A', 7), ('C', 6)) if r in regs}
 			if i.m == 'JSR':
 				out |= self.switch_slots(i.arg, memo) if not i.table and i.arg in self.callable else {'A', 'C'}
@@ -3353,7 +3702,7 @@ class Gen:
 		this code's bank out: so the same as calling the copy and
 		returning? MMC3 PRG mode 1 only (another mapper's bank switches
 		where the copy doesn't know)."""
-		if not (self.prg.mode1 and i.m == 'JMP' and i.mode == 'abs' and d == 0 and i.arg not in self.insns):
+		if not (self.prg.prg8 and i.m == 'JMP' and i.mode == 'abs' and d == 0 and i.arg not in self.insns):
 			return False
 		r = self.ext_routines.get(i.arg)
 		return r is not None and self.prg.slot not in r[3]
@@ -3516,6 +3865,8 @@ class Gen:
 			self.targets |= {t for t in i.succ if t is not None and t != i.pc + i.n}
 			if i.m == 'JSR':
 				self.targets.add(i.pc + 3)
+		self.fall_from = {i.pc + i.n: i for i in self.insns.values() if i.pc + i.n in i.succ}
+		self.tail_rts = self.nmi_tail_rts()
 		self.paired = self.php_pairs()
 		if self.prg.irq:		# where MMC3's IRQ, taken after a CLI, comes back to (irq_check)
 			self.targets |= {i.pc + 1 for i in self.insns.values() if i.m == 'CLI'}
@@ -3523,9 +3874,8 @@ class Gen:
 		self.counted = self.counted_loops()
 		self.loopy = self.loop_edges()
 		self.pha_paired = self.pha_pairs()
-		self.fall_from = {i.pc + i.n: i for i in self.insns.values() if i.pc + i.n in i.succ}
 		self.idle_exits, self.idle_jmps = self.idle_loops()
-		self.idle_heads = {self.insns[b].arg for b in self.idle_exits}
+		self.idle_heads = {self.insns[b].arg for b in self.idle_exits} | self.wait_heads()
 		memo = {}
 		self.callable = {}
 		for i in self.insns.values():
@@ -3609,7 +3959,7 @@ class Gen:
 		# address, less its first byte's index (see below)
 		size = len(self.prg.data)
 		addrs = [a for lo, hi in self.prg.regions for a in range(lo, hi + 1)] if self.prg.banked else \
-			[0x10000 - size + o for o in range(size)]	# (MMC3 PRG mode 1's fixed code: $8000, $E000)
+			[0x10000 - size + o for o in range(size)]	# (MMC3 prg8's fixed code, in its regions)
 		safe_bit = (lambda a: a & 0x3FFF) if self.prg.banked else (lambda a: a & self.prg.mask)
 		first = min(safe_bit(a) for a in addrs) & ~7
 		self.out += ['', '\t\talign 4', '\t\tdc.l rcSafe-$%X' % (first >> 3), 'rcTable:']
@@ -3646,6 +3996,85 @@ class Gen:
 					self.out += ['\t\tjmp (%s).l' % lab(v)]
 				else:
 					self.out += ['\t\tmove.w #$%04X,d4' % v, '\t\tjmp rcDispatch']
+
+
+SHIFTS = ('lsl', 'lsr', 'asl', 'asr', 'rol', 'ror', 'roxl', 'roxr')
+
+
+def max_size(l):
+	"""The most bytes a line of 68000 code can take (short_branches): its
+	opcode word and each operand's extension words, or the 68000's
+	longest, 10 bytes, for anything not plainly an instruction."""
+	t = l.split(';')[0].strip()
+	if not t:
+		return 0
+	if re.match(r'^[A-Za-z_][A-Za-z0-9_]*:$', t):
+		return 0
+	m = re.match(r'^([a-z]+)(?:\.([bwls]))?(?:\s+(.*))?$', t)
+	if not m:
+		return 10
+	op, sz, args = m.group(1), m.group(2), (m.group(3) or '').strip()
+	if op in ('dc', 'ds', 'rept', 'endm', 'align', 'if', 'else', 'elseif', 'endif', 'include', 'binclude', 'even',
+		  'org', 'phase', 'dephase', 'set', 'equ'):
+		return 1000		# (not code: no branch across it)
+	n = 2
+	if op.startswith('b') and op not in ('btst', 'bset', 'bclr', 'bchg'):
+		return 2 if sz == 's' else 4
+	if op in ('dbf', 'dbra') or (op.startswith('db') and len(op) == 4):
+		return 4
+	ops, depth, cur = [], 0, ''
+	for ch in args:
+		if ch == ',' and depth == 0:
+			ops.append(cur); cur = ''
+			continue
+		depth += ch == '('
+		depth -= ch == ')'
+		cur += ch
+	if cur:
+		ops.append(cur)
+	for o in ops:
+		o = o.strip()
+		if o.startswith('#'):
+			if op in ('moveq', 'addq', 'subq') or op in SHIFTS:
+				continue
+			n += 4 if sz == 'l' else 2
+		elif re.match(r'^(d[0-7]|a[0-7]|sp|sr|ccr|usp|\((a[0-7]|sp)\)\+?|-\((a[0-7]|sp)\))$', o):
+			continue
+		elif re.match(r'^\(.*\)\.w$', o):
+			n += 2
+		elif re.match(r'^[-$A-Za-z0-9_+*]*\((a[0-7]|sp|pc)(,[ad][0-7]\.[wl])?\)$', o):
+			n += 2
+		else:
+			n += 4			# an absolute address (long, at most)
+	return min(n, 10)
+
+
+def short_branches(out):
+	"""Bcc.w to a label near enough becomes Bcc.s: when not taken it's
+	4 cycles less (and 2 bytes). Near enough: no more than 126 bytes away
+	at the most each line between may take (max_size), and no *+n
+	offsets around, which count on the sizes."""
+	labpos = {}
+	for k, l in enumerate(out):
+		m = re.match(r'\s*([A-Za-z_][A-Za-z0-9_]*):', l)
+		if m:
+			labpos.setdefault(m.group(1), k)
+	pat = re.compile(r'^(\s+)b(eq|ne|cs|cc|mi|pl|vs|vc|ge|lt|gt|le|hi|ls)\.w\s+([A-Za-z_][A-Za-z0-9_]*)\s*$')
+	res = list(out)
+	for k, l in enumerate(out):
+		m = pat.match(l)
+		if not m:
+			continue
+		t = labpos.get(m.group(3))
+		if t is None or abs(t - k) > 48:
+			continue
+		lo, hi = (k + 1, t) if t > k else (t, k)
+		if any('*+' in x or '*-' in x for x in out[max(0, lo - 4):hi + 4]):
+			continue
+		span = sum(max_size(x) for x in out[lo:hi])
+		if (t > k and span <= 126) or (t <= k and span + 2 <= 126):
+			res[k] = '%sb%s.s %s' % (m.group(1), m.group(2), m.group(3))
+	return res
 
 
 def long_jumps(out):
@@ -3776,6 +4205,8 @@ def generate(prg, u, ext_entries=(), ext_insns=(), facts=(None, None, None), cop
 		if i.m == 'JSR' and i.arg not in g.engines:
 			g.engines[i.arg] = engine_pattern(prg, i.arg)
 	g.engines = {a: z for a, z in g.engines.items() if z}
+	g.muls = {a: mul_pattern(prg, a) for a in {i.arg for i in insns.values() if i.m == 'JSR'}}
+	g.muls = {a: z for a, z in g.muls.items() if z}
 	entries = set(vectors) | set(extra) | {i.pc + 3 for i in insns.values() if i.m == 'JSR'}
 	g.ranges = ranges(insns, entries)
 	g.entries = entries
@@ -3795,8 +4226,8 @@ def prefixed(out, pre):
 	return [tok.sub(lambda m: pre + m.group(0) if m.group(0) in names else m.group(0), l) for l in out]
 
 
-def mode1(rom, extra):
-	"""MMC3 in PRG mode 1: the fixed banks' code, and each bank's at its
+def prg8_units(rom, extra):
+	"""MMC3 prg8: the fixed banks' code, and each bank's at its
 	slot (slot_homes) from where other units' code goes there: the fixed
 	code's and the other slot's banks' (wherever the bank's bytes look
 	like code, code_at: which bank is there isn't known here), and from
@@ -3805,18 +4236,33 @@ def mode1(rom, extra):
 	output and the units."""
 	homes = slot_homes(rom)
 	fixed = Prg(rom, 'F')
-	slots = [Prg(rom, (s, b)) for s in 'AC' for b in sorted(homes) if homes[b] == s]
+	# (a bank with no sign of code, mostly data, in both slots: only where
+	# the fixed code goes there, whatever bank is there, and its bytes look
+	# like code for longer, as Mega Man 3's stage banks' routine at $9C00:
+	# its translated code's table takes 32 KB)
+	slots = [Prg(rom, (s, b)) for s in 'AC' for b in sorted(homes) if homes[b] in (s, None)]
+	data = {b.unit for b in slots if homes[b.unit[1]] is None}
 	fixed.peers = slots
 	for b in slots:
 		b.peers = [fixed] + [p for p in slots if p.slot != b.slot]
-	win = {'F': ((0x8000, 0xA000), (0xE000, 0x10000)), 'A': ((0xA000, 0xC000),), 'C': ((0xC000, 0xE000),)}
+	r6 = fixed.r6
+	win = {'F': tuple((lo, hi + 1) for lo, hi in fixed.regions), 'A': ((0xA000, 0xC000),), 'C': ((r6, r6 + 0x2000),)}
 	into = {s: set() for s in 'FAC'}
+	fin = {s: set() for s in 'AC'}		# (where the fixed code goes)
 	tab = {b.unit: set() for b in slots}	# and into each bank, from its jump tables other units load
+
+	def entries(b):
+		if b.unit in data:
+			return {a for a in fin[b.slot] if code_at(b, a, 24)}
+		return {a for a in into[b.slot] if code_at(b, a)} | tab[b.unit]
 	while True:
 		uf = analyze(fixed, extra, into['F'])
-		us = [uf] + [analyze(b, [], sorted({a for a in into[b.slot] if code_at(b, a)} | tab[b.unit])) for b in slots]
+		us = [uf] + [analyze(b, [], sorted(entries(b))) for b in slots]
 		new = {s: set() for s in 'FAC'}
 		newtab = {b.unit: set() for b in slots}
+		for s in 'AC':
+			for lo, hi in win[s]:
+				fin[s] |= outside(uf, lo, hi)
 		for u in us:
 			for s in 'FAC':
 				for lo, hi in win[s] if s != u['slot'] else ():
@@ -3835,6 +4281,9 @@ def mode1(rom, extra):
 			into[s] |= new[s]
 		for k in tab:
 			tab[k] |= newtab[k]
+	# (a data bank's few instructions aren't worth their table: interpreted)
+	us = [u if k == 0 or slots[k - 1].unit not in data or len(u['insns']) >= 16 else analyze(slots[k - 1], [], [])
+	      for k, u in enumerate(us)]
 	# flags live where one unit's code goes to another's (as for banks
 	# at $8000, main)
 	ents = [into['F']] + [u['entries'] for u in us[1:]]
@@ -3901,7 +4350,7 @@ def mode1(rom, extra):
 	n = 1
 	while n < fixed.banks8:
 		n *= 2			# (the banks, rounded up as prgBank8Mask in md.asm)
-	out += ['', '; each bank\'s code at $A000 and at $C000, by the bank there: its record', '\t\talign 4']
+	out += ['', '; each bank\'s code at $A000 and at $%04X, by the bank there: its record' % r6, '\t\talign 4']
 	for s, less in (('A', '-$8000'), ('C', '')):
 		out += ['rcBankRecs%s:' % s] + ['\t\tdc.l %s%s,%s,PRG_FRAMES+$%X,PRG_FRAMES+$%X' % (
 			'%s%d_rcTable' % (s, b) if (s, b) in have else 'rcNoTable', less,
@@ -3923,13 +4372,15 @@ def main():
 	sys.argv[1:] = args
 	rom = open(sys.argv[1], 'rb').read()
 	prg = Prg(rom)
+	if prg.nmi_tail:		# (the work an NMI handler goes on to after its RTI)
+		extra.append(prg.nmi_tail)
 	if not prg.banked:
 		u = analyze(prg, extra)
 		NEST[0] = nest_ok(prg, u)
 		g = generate(prg, u)
 		out, units = g.out, [(u, g)]
-	elif prg.mode1:
-		out, units = mode1(rom, extra)
+	elif prg.prg8:
+		out, units = prg8_units(rom, extra)
 	else:
 		# Banked PRG: the fixed bank's code, and each bank's at $8000
 		# from where the fixed bank's code goes there (wherever the
@@ -3983,7 +4434,7 @@ def main():
 		       ['\t\tdc.l B%d_rcTable' % n for n in range(len(banks))]
 	with open(sys.argv[2], 'w') as f:
 		f.write('; generated by tools/recomp6502.py from %s -- do not publish\n' % sys.argv[1].split('/')[-1])
-		f.write('\n'.join(long_jumps(out)) + '\n')
+		f.write('\n'.join(short_branches(long_jumps(out))) + '\n')
 	print('recomp6502: %d instructions, %d bytes of 6502 code, %d loops versioned%s' %
 	      (sum(len(u['insns']) for u, g in units), sum(i.n for u, g in units for i in u['insns'].values()),
 	       sum(len(g.versioned) for u, g in units), '' if NEST[0] else ', NMIs leave routine copies (nest_ok)'))
