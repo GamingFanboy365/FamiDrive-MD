@@ -121,12 +121,12 @@ handheld's differences.
 - **Slow when interpreted.** Emulating a 6502 plus the PPU on a 68000 is a stretch. Games that
   use a lot of CPU run far below full speed when interpreted (Pinball's gameplay runs at about
   6%), and their music slows down with them. Recompile them: Pinball then plays at NES speed,
-  though its attract demo still runs at about 97%
-- Recompiled Super Mario Bros. can drop the odd frame in its busiest scenes (about 2% of frames in
-  World 4-1, with Lakitu and several enemies on screen), and the black screen before a level
-  lasts about a tenth of a second longer than on a NES. As a level restarts after a death, one
-  frame shows the screen half cleared where the NES shows plain sky
-- Ice Climber's pause while it builds a mountain lasts about a third of a second longer than on
+  and its attract demo runs at about 99.5% (it drops the odd frame)
+- Recompiled Super Mario Bros. runs at 60 game frames per second while you play, World 4-1 with
+  Lakitu and several Spinies on screen included, but the black screen before a level lasts about a
+  tenth of a second longer than on a NES (6 frames, 8 on an AtGames handheld). As a level
+  restarts after a death, one frame shows the screen half cleared where the NES shows plain sky
+- Ice Climber's pause while it builds a mountain lasts about a quarter of a second longer than on
   a NES
 - Graphics glitches from timing inaccuracy. The emulator can't tell which line the NES would be
   drawing, so it goes by what the game does: sprite 0 hit is reported when the game polls for
@@ -137,12 +137,12 @@ handheld's differences.
 - Sound is approximate: no DMC (sample) channel, the PSG only plays 50% squares so pulse duty is
   approximated by volume, pulse notes below about 109 Hz play an octave up, and timing assumes
   an NTSC console
-- Recompiled Super Mario Bros. 2 runs at 60 game frames per second in most of its levels, but slows
-  in the busiest moments of some (measured in Genesis Plus GX, as a Mega Drive and changed to act
-  like an AtGames handheld, whose frames are shorter): World 4-1, with several Flurries on screen,
-  to about 54-56 on a Mega Drive and 50-56 on the handheld, and on the handheld 2-1, 5-1 and 6-1
-  to about 56-59. Interpreted, it runs at about a tenth of full speed, and its story screen
-  garbles some text lines: its menu code assumes it never runs late
+- Recompiled Super Mario Bros. 2 runs at 60 game frames per second while you play, as far as tried
+  (the first parts of World 4-1, with several Flurries on screen, and of 2-1, 5-1 and 6-1,
+  measured in Genesis Plus GX as a Mega Drive and changed to act like an AtGames handheld, whose
+  frames are shorter). As the player dies, or goes through a door or jar to another area, it
+  slows to about 51-57 for a moment. Interpreted, it runs at about a tenth of full speed, and its
+  story screen garbles some text lines: its menu code assumes it never runs late
 - Super Mario Bros. 3 splits the screen more than once a frame in its levels with water along the
   bottom or a water line, and in its spade bonus game: of those, World 3-2, 3-3 and the spade game
   were tried. Sprites that are partly below its status bar's top line, or a water line, show
