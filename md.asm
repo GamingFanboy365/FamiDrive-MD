@@ -688,9 +688,16 @@ MD_Vint:
 		if RECOMP
 		move.w	#1,nmiWaitDue(a4)		; an NMI is due: at once, or when the
 		tst.w	ppuNmiFlag(a4)			; game next waits for it, if it does,
-		beq.s	.nmi_now			; up to a frame later (emu/recomp.asm)
-		addq.w	#1,nmiCredit(a4)		; (with NMIs off, none: the checks
-		tst.w	nmiHold(a4)			; just clear the flags)
+		if NMI_TAIL				; up to a frame later (emu/recomp.asm)
+		bne.s	.nmi_due			; (with NMIs off, none: the checks
+		tst.w	cpuFamiVint(a4)			; just clear the flags. NMI_TAIL: but
+		beq.s	.nmi_now			; in the NMI handler, which turns them
+.nmi_due:					; off while it runs, one is due as it
+		else
+		beq.s	.nmi_now
+		endif
+		addq.w	#1,nmiCredit(a4)		; turns them on again, on a NES, and
+		tst.w	nmiHold(a4)			; the work after its RTI holds it)
 		beq.s	.nmi_now
 		cmpi.w	#2,nmiCredit(a4)
 		bcs.s	.nmi_set

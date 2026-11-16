@@ -593,6 +593,7 @@ rcTailStart:
 ; the VBlank after next: each frame would take two. Its next NMI
 ; comes as soon as the handler returns instead (vbLate: a VBlank
 ; came while it ran), or when the game next waits for it (one due).
+; (NMI_TAIL: when the handler's work after its RTI ends: nmiTailEnd.)
 ; ----------------------------------------------------------------
 
 rcRti:
@@ -619,6 +620,8 @@ rcRti:
 .outer:
 		if NMI_TAIL
 		bsr.w	rcTailStart
+		tst.b	nmiTail(a4)		; its work after the RTI holds NMIs:
+		bne.s	.on_time		; those due come when it ends
 		endif
 		tst.w	nmiCredit(a4)
 		beq.s	.none_due

@@ -1741,6 +1741,57 @@ class Gen:
 				exits.add(b.pc)
 		return exits, jmps
 
+	def wait_heads(self):
+		"""Loops that wait for an NMI but aren't idle_loops' few loads and
+		a branch: a JMP (or branch) back to the head of code that reads
+		RAM or ROM, compares, counts in registers and branches, setting
+		each register and flag before it reads it each time round, and
+		stores nothing but a value it knows (Mega Man 3's task loop at
+		$FEAD: STX $90 with X 0, then each task's state, until one is
+		ready). Each time round does the same as the last: only an NMI (or
+		IRQ) can change what it finds. Their heads, where an NMI due is
+		taken as in idle_loops' (nmi_check)."""
+		reads = {'LDA': '', 'LDX': '', 'LDY': '', 'CMP': 'A', 'CPX': 'X', 'CPY': 'Y', 'BIT': 'A', 'AND': 'A',
+			 'ORA': 'A', 'EOR': 'A', 'INX': 'X', 'INY': 'Y', 'DEX': 'X', 'DEY': 'Y', 'TAX': 'A', 'TAY': 'A',
+			 'TXA': 'X', 'TYA': 'Y', 'CLC': '', 'SEC': '', 'CLV': '', 'NOP': '', 'STA': 'A', 'STX': 'X', 'STY': 'Y'}
+		sets = {'LDA': 'A', 'LDX': 'X', 'LDY': 'Y', 'AND': 'A', 'ORA': 'A', 'EOR': 'A', 'INX': 'X', 'INY': 'Y',
+			'DEX': 'X', 'DEY': 'Y', 'TAX': 'X', 'TAY': 'Y', 'TXA': 'A', 'TYA': 'A'}
+		flags = {N: 'N', Z: 'Z', C: 'C', V: 'V'}
+		heads = set()
+		for j in self.insns.values():
+			if not (j.m == 'JMP' and j.mode == 'abs' or j.mode == 'rel' and not j.decided) or \
+			   not 0 < j.pc - j.arg <= 64:
+				continue
+			pc, known = j.arg, set()
+			while pc < j.pc:
+				i = self.insns.get(pc)
+				if i is None or i.m not in reads and i.mode != 'rel':
+					break
+				if i.mode not in ('rel', None, 'imm', 'zp', 'zpx', 'zpy', 'abs', 'absx', 'absy'):
+					break
+				if i.mode in ('abs', 'absx', 'absy') and not (i.arg >= 0x8000 and i.m[:2] != 'ST' or
+									       i.arg + (0 if i.mode == 'abs' else 255) < 0x800):
+					break			# (RAM, or ROM read: no I/O)
+				if i.mode == 'rel' and (i.pc < i.arg < j.pc or i.arg == j.pc and j.mode == 'rel' or
+							i.decided is not None):
+					break			# (on, past what it might need; or always out)
+				need = set(reads.get(i.m, '')) | {'X' if i.mode in ('zpx', 'absx') else
+								  'Y' if i.mode in ('zpy', 'absy') else ''}
+				need |= {flags[f] for f in flags if uses(i) & f}
+				if need - known - {''}:
+					break			# (it would go by the last time round)
+				if i.m[:2] == 'ST':
+					rng = self.ranges.get(i.pc)
+					v = rng[{'STA': 0, 'STX': 1, 'STY': 2}[i.m]] if rng else TOP
+					if v[0] != v[1] or i.mode not in ('zp', 'abs'):
+						break		# (only a value it stores each time)
+				known |= set(sets.get(i.m, '')) | {flags[f] for f in flags if DEFS.get(i.m, 0) & f}
+				pc += i.n
+			else:
+				if pc == j.pc and not {flags[f] for f in flags if uses(j) & f} - known:
+					heads.add(j.arg)
+		return heads
+
 	def nmi_check(self, t):
 		"""The NMI check before a backward jump to t: in a loop that waits
 		for VBlank, for any NMI due; elsewhere, for one that can't wait
@@ -3784,7 +3835,7 @@ class Gen:
 		self.loopy = self.loop_edges()
 		self.pha_paired = self.pha_pairs()
 		self.idle_exits, self.idle_jmps = self.idle_loops()
-		self.idle_heads = {self.insns[b].arg for b in self.idle_exits}
+		self.idle_heads = {self.insns[b].arg for b in self.idle_exits} | self.wait_heads()
 		memo = {}
 		self.callable = {}
 		for i in self.insns.values():

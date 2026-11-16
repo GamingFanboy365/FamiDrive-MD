@@ -47,14 +47,18 @@ finished in #1 to #6.
 - [ ] **Mega Man 3: what's left.** It plays now (MMC3 PRG mode 0 with 8 KB
   banks apart; NMIs held while its NMI handler's sound work after its RTI
   runs, or the game's own code does that work: NMI_TAIL, `nmiTailStart`,
-  `nmiTailEnd`, `nmiTailR6`). Recompiled, Top Man's stage runs at 30 game
-  frames a second so far: NMIs come each frame, but the game's main task
-  finishes its frame in every other one (its yield, $FF21, runs once each
-  two NMIs). A game frame there takes about 1.2 MD frames of work (with each
-  NMI held until the game waits for it: 320 lines from the NMI to its frame
-  done on average, 12% of frames within one MD frame), the main task's and
-  each NMI's (its handler, its sound driver, and FamiDrive's PPU, APU and
-  sprite work). 60 would need about a fifth less. Its sound driver's jump
+  `nmiTailEnd`, `nmiTailR6`). Recompiled, Top Man's stage runs at about
+  40-50 game frames a second where it's busy, 60 where it's quiet, its
+  music at full speed: an NMI that comes while its main task runs waits
+  for its task loop ($FEAD, a wait loop to the recompiler: `wait_heads`),
+  up to a frame, and those due still come (`nmiCredit`: after the
+  handler's sound work, `nmiTailEnd`; in the handler, which turns NMIs
+  off while it runs, they count too). A game frame there takes about 1.2
+  MD frames of work (with each NMI held until the game waits for it: 320
+  lines from the NMI to its frame done on average, 12% of frames within
+  one MD frame), the main task's and each NMI's (its handler, its sound
+  driver, and FamiDrive's PPU, APU and sprite work). 60 throughout would
+  need about a fifth less. Its sound driver's jump
   engine ($8023: `engine_pattern2`) and multiply ($8006: `rcMul8`) are
   translated directly now, and its sprite routine's loop at $F230 reads
   through both its pointers. The biggest parts left: the sound driver

@@ -2370,7 +2370,9 @@ nmiTailStart:
 ; RTS that ends the handler's work in translated code: Gen.tail_rts in
 ; tools/recomp6502.py). If it's the end of the NMI handler's work, back
 ; where the NMI came with the stack as its RTI left it, NMIs come again:
-; recompiled, one that came meanwhile now; interpreted, from the next
+; recompiled, those due as the handler's RTI would have had them (rcRti
+; leaves them to here): where the game next waits, or at once if one is
+; a frame late or came while the handler ran; interpreted, from the next
 ; VBlank (not one that came meanwhile, at once: the code it comes back
 ; to, which the game's frames are made in, would never get to run where
 ; this takes a frame). d5 is lost.
@@ -2386,9 +2388,18 @@ nmiTailEnd:
 		cmp.b	nmiRetSp(a4),d5
 		bne.s	.not_end
 		if RECOMP
-		cmpi.b	#1,nmiTail(a4)
+		tst.w	nmiCredit(a4)
+		beq.s	.none_due
+		move.w	#1,nmiWaitDue(a4)
+		cmpi.w	#2,nmiCredit(a4)
+		bcc.s	.now
+.none_due:
+		tst.w	vbLate(a4)
 		beq.s	.no_vblank
+.now:
+		clr.w	vbLate(a4)
 		move.w	#1,FamiMdVint(a4)
+		move.w	#1,nmiWaitDue(a4)
 .no_vblank:
 		endif
 		clr.b	nmiTail(a4)

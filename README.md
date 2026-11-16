@@ -44,7 +44,9 @@ in World 1-1's quieter parts and while it scrolls, and to about 55-58 in its bus
 
 When a game's frame needs a little more time than an MD frame, its next NMI waits until the game
 is ready for it (up to a frame), so the game runs a little slower instead of at half speed. NMIs
-still come once per VBlank on average, so music keeps its tempo.
+still come once per VBlank on average, so music keeps its tempo. The game is ready where it loops
+waiting for the NMI: a few instructions polling a flag, or a loop like Mega Man 3's that looks
+through its tasks for one ready to run.
 
 The translated code goes to `out/recomp.asm`. It is the game's code in another form, so like the
 built ROM it stays out of git and shouldn't be published. Code the recompiler can't find ahead of
@@ -151,9 +153,10 @@ handheld's differences.
 - Life Force (mapper 2) plays recompiled, at about 47-51 game frames per second in its first
   stage. Its vertical stage shows no status bar (seen in the attract demo, not looked into yet),
   and only its first stage and the demo were tried
-- Mega Man 3 (MMC3) plays recompiled, so far at about 29 game frames per second in Top Man's
-  stage (its title screen at 60), the only stage tried. Interpreted, it runs at about
-  12, and its title screen misses some of its tiles
+- Mega Man 3 (MMC3) plays recompiled, so far at about 40-50 game frames per second in Top Man's
+  stage where it's busy (60 where it's quiet, and on its title screen), its music at full
+  speed; that stage is the only one tried. Interpreted, it runs at about 12, and its title
+  screen misses some of its tiles
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its
