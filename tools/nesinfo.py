@@ -39,6 +39,16 @@ def mmc3_use(prg):
     return mode1, apart, irq
 
 
+def sp0_split(prg):
+    """Does the code write $2000 right after waiting for sprite 0's hit (a loop on
+    LDA $2002 / AND #$40 or #$C0, or BIT $2002, then a branch; a few instructions on,
+    no jump or call between, STA/STX/STY $2000)? Deja Vu switches the BG pattern table
+    there, for the menu below its picture: the split's code (MMC3_IRQ in md.asm) shows
+    that in the window plane (sp0Split in emu/ppu.asm)."""
+    return re.search(rb'(?:\xAD\x02\x20\x29[\x40\xC0]|\x2C\x02\x20)[\xF0\xD0\x50\x70].'
+                     rb'(?:(?!\x60|\x40|\x4C|\x20).){0,16}?[\x8D\x8E\x8C]\x00\x20', prg, re.S) is not None
+
+
 def nmi_tail(prg):
     """Where an interrupt handler goes on after its RTI, 0 if nowhere: the address it puts
     in its own interrupt frame, a constant's two bytes stored to neighbouring bytes of the
@@ -77,6 +87,8 @@ with open(sys.argv[2], 'w') as out:
     out.write('NES_MMC3_PRG1\tequ %d\t\t; MMC3 PRG mode 1: banks at $A000 and $C000\n' % mode1)
     out.write('NES_MMC3_PRG8\tequ %d\t\t; MMC3 PRG mode 0, its banks at $8000 and $A000 switched apart\n' % apart)
     out.write('NES_MMC3_IRQ\tequ %d\t\t; MMC3 scanline IRQ\n' % irq)
+    out.write('NES_SP0_SPLIT\tequ %d\t\t; a $2000 write after a sprite 0 hit (MMC3: the split\'s code)\n'
+              % (mapper == 4 and prg16 > 0 and sp0_split(rom[16:16 + prg16 * 0x4000])))
     out.write('NES_NMI_TAIL\tequ $%04X\t\t; where the NMI handler goes on after its RTI (0: nowhere)\n'
               % (nmi_tail(rom[16:16 + prg16 * 0x4000]) if prg16 else 0))
 

@@ -33,8 +33,12 @@ wrPPU_Table:	dc.w wrPPU_Ctrl-wrPPU_Table ; $2000
 wrPPU_Ctrl:
 		if MMC3_IRQ
 		tst.w	cpuInIrq(a4)		; in the IRQ handler: only the
-		beq.s	.main			; nametable X bit, for the rows below
-		andi.w	#1,d7			; its line (splitDone)
+		beq.s	.main			; nametable X bit and the BG table,
+		move.w	d7,d6			; for the rows below its line
+		lsl.b	#3,d6			; (splitDone; bit 4 -> bit 7)
+		andi.w	#$80,d6
+		move.w	d6,splitChrBank(a4)
+		andi.w	#1,d7
 		move.w	d7,splitCtrlX(a4)
 		moveq	#0,d7
 		emuNext
@@ -46,7 +50,11 @@ wrPPU_Ctrl:
 		moveq	#0,d6
 		move.b	d7,d6
 		cmp.w	ppuCtrlLast(a4),d6
+		if MMC3_IRQ
+		beq.w	.nt_x
+		else
 		beq.s	.nt_x
+		endif
 		move.w	d6,ppuCtrlLast(a4)
 
 	; NMI on/off
@@ -71,6 +79,22 @@ wrPPU_Ctrl:
 		move.b	d7,d6
 		andi.w	#$C0,d6
 		move.w	ppuChrBank(a4),d5
+		if MMC3_IRQ
+		move.w	d5,d4			; a new BG table after sprite 0's hit:
+		eor.b	d6,d4			; for the rows below its line (sp0Split),
+		bpl.s	.bg_screen		; the screen keeps its own
+		cmpi.w	#2,ppuSp0State(a4)
+		bne.s	.bg_screen
+		move.w	d6,d4			; (the new sprite table)
+		andi.w	#$40,d4
+		andi.w	#$80,d5
+		or.w	d5,d4
+		move.w	d4,ppuChrBank(a4)
+		move.w	d6,splitChrBank(a4)
+		st	sp0Due(a4)		; (sp0Split: once this write's nametable is set)
+		bra.s	.no_reload
+.bg_screen:
+		endif
 		move.w	d6,ppuChrBank(a4)
 		eor.b	d6,d5
 		bpl.s	.no_reload
@@ -88,6 +112,12 @@ wrPPU_Ctrl:
 	; PPU Name table base
 		andi.w	#$C0,d7
 		move.w	d7,ppuNTblBase(a4)
+		if MMC3_IRQ
+		tst.b	sp0Due(a4)
+		beq.s	.nt_x
+		sf	sp0Due(a4)
+		bsr.w	sp0Split
+		endif
 
 	; Bit 0 is bit 8 of the X scroll (ppuXChanged)
 .nt_x:
@@ -1803,6 +1833,7 @@ splitBegin:
 		bne.s	.next
 		move.l	mmc3Regs(a4),mmc3RegsSplit(a4)
 		move.l	mmc3Regs+4(a4),mmc3RegsSplit+4(a4)
+		move.w	ppuChrBank(a4),splitChrBank(a4)	; (a $2000 write there may change it)
 		move.w	#$E7,partHideY(a4)
 		clr.w	irqCount(a4)
 .next:
@@ -1815,6 +1846,25 @@ splitBegin:
 		move.w	#1,irqEn(a4)		; (on, as it came: the handler's $E000 ends it)
 		clr.w	irqReload(a4)
 		rts
+
+; A $2000 write that switches the BG pattern table after the game saw
+; sprite 0's hit (wrPPU_Ctrl, which put that table in splitChrBank and
+; set its nametable): the rows below sprite 0's line show that table,
+; as below an IRQ handler's line (splitDone: the window plane), and the
+; screen keeps its own. Deja Vu does this each frame for the menu below
+; its picture: converting the screen's BG tiles again for each switch
+; (chrLoadBg), twice a frame, made it crawl.
+sp0Split:
+		move.l	mmc3Regs(a4),mmc3RegsSplit(a4)	; the CHR as it is
+		move.l	mmc3Regs+4(a4),mmc3RegsSplit+4(a4)
+		move.w	#$FFFF,splitV(a4)	; the screen's scroll
+		move.w	#$FFFF,splitCtrlX(a4)
+		move.w	#$FFFF,splitScrX(a4)
+		move.w	#$E7,partHideY(a4)
+		move.w	#1,splitSeen(a4)	; (this game frame has one: ppuFrameStart)
+		move.w	ppuSp0Ypos(a4),irqLine(a4)	; from the line after sprite 0's
+		addq.w	#1,irqLine(a4)		; first with a pixel
+		bra.w	splitDone
 
 ; The IRQ handler returned. If it left the IRQ on, the next comes this
 ; frame, the latch's lines further down: Super Mario Bros. 3 takes one
@@ -1967,7 +2017,7 @@ splitDone:
 		beq.w	.work
 		movem.l	d0-d1/a5,-(sp)
 		lea	splitKey(a4),a5		; (the order .done stores it in)
-		move.b	ppuChrBank+1(a4),d0	; the BG's banks: R0, R1 or R2-R5
+		move.b	splitChrBank+1(a4),d0	; the BG's banks: R0, R1 or R2-R5
 		move.b	mmc3Select+1(a4),d1
 		eor.b	d1,d0
 		smi	d0
@@ -2023,7 +2073,7 @@ splitDone:
 	; R0 and R1 (2 KB each) if they're there (CHR mode, $8000 bit 7),
 	; else R2-R5; the 1 KB parts that are new are DMAed in at VBlank
 		lea	splitBank(a4),a5	; (mmc3RegsSplit right after it)
-		move.w	ppuChrBank(a4),d0	; BG table: $2000 bit 4 (bit 7 here)
+		move.w	splitChrBank(a4),d0	; BG table: $2000 bit 4 (bit 7 here)
 		move.b	mmc3Select+1(a4),d1	; and the 2 KB banks' half: bit 7
 		eor.b	d1,d0
 		move.b	d0,d6			; (bit 7 set: the BG's are R2-R5)
@@ -2182,7 +2232,7 @@ splitDone:
 		move.w	d5,sprHideY(a4)
 .done:
 		lea	splitKey(a4),a5		; what it read, for next time (in the
-		move.b	ppuChrBank+1(a4),d0	; order the start compares it in)
+		move.b	splitChrBank+1(a4),d0	; order the start compares it in)
 		move.b	mmc3Select+1(a4),d1
 		eor.b	d1,d0
 		smi	d0

@@ -160,8 +160,11 @@ handheld's differences.
 - Tiny Toon Adventures (MMC3) plays recompiled, at about 60 game frames per second in its first
   stage, the only one tried; the iris wipe when you lose a life closes in steps of 8 lines.
   Interpreted, it runs at a few frames per second
-- Deja Vu (MMC3) stops showing anything after its file menu (see TODO.md); Code Name: Viper
-  plays with glitches in its graphics (not looked into yet)
+- Deja Vu (MMC3) plays recompiled at full speed, as far as its first rooms were tried. The menu
+  and text below its picture use the other BG pattern table, switched after a sprite 0 hit:
+  shown in the window plane, from the first whole 8-line row there
+- Code Name: Viper (MMC3) plays recompiled, but its status bar shows the level's tiles (see
+  TODO.md)
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its

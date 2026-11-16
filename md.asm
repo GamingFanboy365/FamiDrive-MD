@@ -24,7 +24,8 @@ PRG_R6		equ $C000		; where R6's bank is: PRG mode 1 (R7's at $A000, the last two
 		else
 PRG_R6		equ $8000		; or mode 0 (R7's at $A000, the last two at $C000 and $E000)
 		endif
-MMC3_IRQ	equ (NES_MAPPER=4)&&(NES_MMC3_IRQ<>0)	; MMC3's scanline IRQ: what's below its line (splitDone)
+MMC3_IRQ	equ (NES_MAPPER=4)&&((NES_MMC3_IRQ<>0)||(NES_SP0_SPLIT<>0))	; MMC3's scanline IRQ: what's below its line
+					; (splitDone), or below sprite 0's where a $2000 write after its hit switches the BG table (sp0Split)
 NMI_TAIL	equ NES_NMI_TAIL<>0	; the NMI handler goes on after its RTI, to an address it puts in its
 					; interrupt frame: the next NMI waits for that too (mos_RTI, mos_RTS)
 splitWinBase	equ $A000		; MMC3_IRQ: the window's cells (VDP $83), rows 0-27 of 32
@@ -258,6 +259,8 @@ partLine	ds.w 1			; such a handler's $2006 rows (splitNext): the MD line before 
 partLinePrev	ds.w 1			; the last game frame's,
 partVs		ds.l 1			; and the planes' vertical scroll from there (MD_Hint)
 partOn		ds.w 1			; this MD frame's line interrupt is still to set it (MD_Vint)
+splitChrBank	ds.w 1			; the BG pattern table below the split (bit 7), as ppuChrBank (splitDone)
+sp0Due		ds.w 1			; (byte) a $2000 write after sprite 0's hit switched it (wrPPU_Ctrl: sp0Split)
 splitVarsEnd	equ *
 		finish
 		if splitVarsEnd>RAM_Fami_Split-RAM_Fami_Emu+$100

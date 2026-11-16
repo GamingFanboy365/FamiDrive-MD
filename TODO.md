@@ -78,12 +78,14 @@ finished in #1 to #6.
   splits are supported). Sprite 0, a blue block at the status bar's left end, shows,
   though its attributes put it behind the background. Only the first
   stage and the demo were looked at.
-- [ ] **Deja Vu: a background pattern table switched mid-screen.** Its NMI
-  handler sets table 0 for the picture and, after a sprite 0 hit, table 1
-  for the menu below it. Each switch converts the whole BG table again
-  (`chrLoadBg`, about 2.4 MD frames), so after its file menu it crawls and
-  shows nothing. Both tables should stay converted, and the rows below the
-  split come from the other (the window plane, as for MMC3's splits).
+- [ ] **Code Name: Viper's status bar.** Its IRQ handler runs three times a
+  frame: the first points the PPU at the status bar's rows ($2006) and
+  switches all the CHR banks to it, the second, 5 lines on, switches R0
+  and R1 again, the third, 24 lines on, turns rendering off. The window
+  shows the last one's split (blank), and an earlier one's tiles don't
+  show, so the status bar has the level's. A handler that only switches
+  CHR could go with the split before it, and one that only turns
+  rendering off end the window there.
 - [ ] **Jump tables read too far.** After a JSR to a jump engine,
   `inline_table` takes entries until one doesn't look like code (up to 128);
   some of Tiny Toon Adventures' run on into the code after them, which is
