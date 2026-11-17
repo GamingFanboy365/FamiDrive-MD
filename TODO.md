@@ -96,19 +96,24 @@ finished in #1 to #6.
   switches R0 and R1 to its font, and the third, 24 lines on, turns the
   background off and writes a column of the level (`$2000` with +32, then
   `$2007`). The window shows the first one's rows with the font, from the
-  first whole cell row, 2 lines lower than on a NES. Only its first stage
-  was tried.
+  first whole cell row, 2 lines lower than on a NES. Where it's busy, its
+  frame now and then outlasts an MD frame, and the NMI held for its wait
+  then comes wherever it is (`nmiCredit`), sometimes while it draws its
+  sprites: that frame misses some. Only its first stage was tried.
 - [ ] **Jump tables read too far.** After a JSR to a jump engine,
   `inline_table` takes entries until one doesn't look like code (up to 128);
   some of Tiny Toon Adventures' run on into the code after them, which is
-  then translated from wrong places too (its unofficial opcode warnings).
-  An entry that points just past its table could end it.
+  then translated from wrong places too (its unofficial opcode warnings),
+  as well as from the right ones (an instruction decoded inside another
+  makes a join after it). An entry that points just past its table could
+  end it.
 - [ ] **An NMI during the NMI handler, elsewhere.** A VBlank that comes
   while the NMI handler runs is held until its RTI (`famiVInt`, `rcNmiDue`:
   `.late`), so a slow frame here isn't a lag frame to the game. The one
   let through is for a handler polling $2002 with sprite 0 hidden (Life
   Force). A game that counts on one anywhere else (a handler that never
-  returns, say) still waits.
+  returns, say) still waits. VBlanks in MMC3's IRQ handler are held until
+  its last RTI the same way, but only up to 8 (`irqVbls`).
 - [ ] **Other CHR switches.** MMC3 bank switches copy tiles made with the ROM
   (`chrUpdate`), but a new BG pattern table (`chrLoadBg`) and CNROM's 8 KB
   switches still convert every tile, which takes several frames.

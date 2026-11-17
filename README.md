@@ -168,7 +168,8 @@ handheld's differences.
   and text below its picture use the other BG pattern table, switched after a sprite 0 hit:
   shown in the window plane, from the first whole 8-line row there
 - Code Name: Viper (MMC3) plays recompiled, as far as its first stage was tried. Its status bar shows
-  2 lines lower than on a NES (from the first whole 8-line row below its split)
+  2 lines lower than on a NES (from the first whole 8-line row below its split), and where it's busy
+  and runs late, a frame now and then misses some of its sprites
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its
