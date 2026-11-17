@@ -3954,6 +3954,14 @@ class Gen:
 				if pc in heads:		# loop head: NMI check for the back edges
 					self.prologued.add(pc)
 					flag, call = self.nmi_check(pc)
+					# code falling into a loop that waits for VBlank goes
+					# past it: the game may only pass by, what it waits
+					# for already there, and an NMI held for its wait
+					# comes where it waits (Code Name: Viper's frame
+					# sync halfway through its sprites)
+					p = self.insns[pcs[k - 1]] if k else None
+					if pc in self.idle_heads and p and p.pc + p.n == pc and (pc in p.succ or p.m == 'JSR'):
+						self.out.append('\t\tbra.s %s' % lab(pc))	# (a JSR's call returns here)
 					self.out += ['C_%04X:' % pc, '\t\t' + flag, '\t\tbeq.s %s' % lab(pc),
 						     '\t\tmove.w #$%04X,d4' % pc, '\t\t' + call]
 				self.out.append('%s:\t\t\t\t\t; $%04X  %s' % (lab(pc), pc, i.text()))
