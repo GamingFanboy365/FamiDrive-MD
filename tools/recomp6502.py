@@ -2987,17 +2987,26 @@ class Gen:
 
 	# ---- loop versioning ----------------------------------------------------
 
-	def entry_value(self, t, what):
+	def entry_value(self, t, what, body=None):
 		"""Constant value of a register ('A', 'X', 'Y') or zero page byte
-		when straight-line code falls into t, or None."""
+		when straight-line code falls into t, or None. body: (code, start)
+		of a routine's copy (or of one put in place), which is entered
+		only at its start: there only its own code comes into the rest."""
 		seq, pc = [], t
 		while len(seq) < 32:
-			q = next((c for c in (self.insns.get(pc - n) for n in (1, 2, 3))
-				  if c and c.pc + c.n == pc and pc in c.succ), None)
+			if body is None:
+				q = next((c for c in (self.insns.get(pc - n) for n in (1, 2, 3))
+					  if c and c.pc + c.n == pc and pc in c.succ), None)
+			elif pc == body[1]:
+				break
+			else:			# (into t, only the way that falls into it)
+				into = [c for c in (self.insns[p] for p in body[0]) if pc in c.succ and
+					(pc != t or c.pc + c.n == pc)]
+				q = into[0] if len(into) == 1 and into[0].pc + into[0].n == pc and into[0].m != 'JSR' else None
 			if q is None:
 				break
 			seq.append(q)
-			if q.pc in self.targets:
+			if body is None and q.pc in self.targets:
 				break			# everything after it runs on every path
 			pc = q.pc
 		regs, mem = {}, {}
@@ -3268,10 +3277,11 @@ class Gen:
 		f = b.pc + 2
 		self.e(*(['jmp %s' % self.lab(f)] if f in self.insns else ['move.w #$%04X,d4' % f, 'jmp rcDispatch']))
 
-	def fill_plan(self, b):
+	def fill_plan(self, b, body=None):
 		"""STA base,X / DEX / BPL (or the INX, Y and BNE forms, or a run of
 		DEX for a stride of 2, 4...) with a known start value fills
-		memory: stores replace the loop where code falls into it."""
+		memory: stores replace the loop where code falls into it. body:
+		in a routine's copy (entry_value)."""
 		t = b.arg
 		s = self.insns.get(t)
 		if not s or s.m != 'STA' or s.mode not in ('zpx', 'absx', 'absy') or b.pc not in self.counted:
@@ -3284,7 +3294,7 @@ class Gen:
 		if pc != b.pc or not d or any(x.m != d.m for x in steps) or s.mode[-1] != d.m[2].lower() \
 		   or b.m not in ('BNE', 'BPL'):
 			return None
-		y = self.entry_value(t, d.m[2])
+		y = self.entry_value(t, d.m[2], body)
 		if y is None:
 			return None
 		ys = []
@@ -3764,14 +3774,25 @@ class Gen:
 		self.out.append(end + ':')
 		self.xc = False
 
+	def body_plan(self, t, pcs):
+		"""A fill for the loop at t in a routine's copy (or one put in
+		place) where the code at large has none, as the copy's own code
+		before it, its only way in, may give it a start (fill_plan)."""
+		b = next((self.insns[p] for p in pcs if p > t and self.insns[p].mode == 'rel' and
+			  self.insns[p].arg == t and self.insns[p].decided is None), None)
+		return self.fill_plan(b, (pcs, self.fast['f'])) if b is not None else None
+
 	def emit_routine_body(self, pcs, whole=True):
 		dk = None
 		for k, pc in enumerate(pcs):
 			i = self.insns[pc]
 			if pc in self.targets:
 				self.xc = False
-			if pc in self.plans and k and dk is None:
-				self.loop_entry(pcs[k - 1], self.plans[pc])
+			plan = self.plans.get(pc)
+			if plan is None and k and self.fast and self.fast.get('routine'):
+				plan = self.body_plan(pc, pcs)
+			if plan and k and dk is None:
+				self.loop_entry(pcs[k - 1], plan)
 			if not (i.mode == 'rel' and dk is not None):
 				self.out.append('%s:\t\t\t\t; $%04X  %s' % (self.lab(pc), pc, i.text()))
 			if i.mode == 'rel':
@@ -3865,6 +3886,13 @@ class Gen:
 			self.targets |= {t for t in i.succ if t is not None and t != i.pc + i.n}
 			if i.m == 'JSR':
 				self.targets.add(i.pc + 3)
+			# an instruction decoded inside i (bytes that code elsewhere
+			# jumps into) comes between i and the next one in the output:
+			# i goes on to it with a jump (fall_through), so code comes
+			# there two ways, and a branch there can't count on the CCR
+			# as the code just before it leaves it
+			if i.pc + i.n in i.succ and any(q in self.insns for q in range(i.pc + 1, i.pc + i.n)):
+				self.targets.add(i.pc + i.n)
 		self.fall_from = {i.pc + i.n: i for i in self.insns.values() if i.pc + i.n in i.succ}
 		self.tail_rts = self.nmi_tail_rts()
 		self.paired = self.php_pairs()
