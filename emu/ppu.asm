@@ -1880,6 +1880,7 @@ splitBegin:
 		move.w	#$FFFF,splitOffCtrlX(a4)	; earlier handler: none of its
 		move.w	splitChrBank(a4),splitOffChr(a4)	; own, splitNext)
 		move.w	#1,splitSeen(a4)
+		clr.w	irqVbls(a4)
 		clr.w	irqOn(a4)		; (the next frame's: the NMI handler sets it)
 		move.w	#1,cpuInIrq(a4)
 		move.w	#1,irqEn(a4)		; (on, as it came: the handler's $E000 ends it)

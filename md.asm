@@ -275,6 +275,7 @@ splitOffChr	ds.w 1			; (splitNext)
 irqHeld		ds.w 1			; 1: the I flag held the IRQ off as the NMI handler returned (irqDue, rcRti)
 irqIncrSave	ds.w 1			; ppuAddrIncr as the frame's first IRQ handler began: again once the last returns
 splitMiss	ds.w 1			; 1: the game frame before took no IRQ, as the I flag held it off (ppuFrameStart)
+irqVbls		ds.w 1			; VBlanks that came in the IRQ handler (rcNmiDue, famiVInt): their NMI waits for it
 splitVarsEnd	equ *
 		finish
 		if splitVarsEnd>RAM_Fami_Split-RAM_Fami_Emu+$100
@@ -1075,6 +1076,14 @@ famiVInt:
 .first:
 		tst.w	ppuNmiFlag(a4)
 		beq.s	emuVint
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; in MMC3's IRQ handler: when its last
+		beq.s	.not_irq		; returns (mos_RTI), as on a NES, where
+		addq.w	#1,irqVbls(a4)		; it's long done by VBlank, unless it
+		cmpi.w	#8,irqVbls(a4)		; isn't after 8
+		bcs.s	.late
+.not_irq:
+		endif
 		if NMI_TAIL
 		tst.b	nmiTail(a4)		; what the handler left for after its
 		bne.s	.tail			; RTI still runs (nmiTailStart,
