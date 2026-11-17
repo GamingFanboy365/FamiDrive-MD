@@ -2234,6 +2234,10 @@ mos_RTI:
 		bne.w	irqTake			; line, as it set it
 		clr.w	cpuInIrq(a4)
 		bsr.w	splitDone
+		tst.w	vbLate(a4)		; a VBlank came in the handlers
+		beq.s	.not_irq		; (famiVInt): its NMI now
+		clr.w	vbLate(a4)
+		move.w	#1,FamiMdVint(a4)
 .not_irq:
 		endif
 		emuNext

@@ -486,6 +486,14 @@ rcNmiDue:
 .first:
 		tst.w	ppuNmiFlag(a4)
 		beq.w	.none
+		if MMC3_IRQ
+		tst.w	cpuInIrq(a4)		; in MMC3's IRQ handler: when its
+		beq.s	.not_irq		; last returns (rcRti), as on a NES,
+		addq.w	#1,irqVbls(a4)		; where it's long done by VBlank (one
+		cmpi.w	#8,irqVbls(a4)		; taken in it splits its $8000/$8001
+		bcs.w	.late			; pairs), unless it isn't after 8
+.not_irq:
+		endif
 		if NMI_TAIL
 		tst.b	nmiTail(a4)		; what the NMI handler left for after
 		beq.s	.on			; its RTI (rcTailStart), or the game's
@@ -610,6 +618,11 @@ rcRti:
 		clr.w	cpuInIrq(a4)
 		jsr	splitDone
 		move.w	irqInterp(a4),rcNmiInterp(a4)	; (on as the NMI handler's RTI went)
+		tst.w	vbLate(a4)		; a VBlank came in the handlers
+		beq.w	.resume			; (rcNmiDue): its NMI now
+		clr.w	vbLate(a4)
+		move.w	#1,FamiMdVint(a4)
+		move.w	#1,nmiWaitDue(a4)
 		bra.w	.resume
 .nmi:
 		endif
