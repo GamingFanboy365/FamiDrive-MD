@@ -1089,24 +1089,24 @@ ppuChrRamWrite:
 		tst.w	ppuChrRam(a4)
 		beq.w	.done
 		move.b	d7,(a3,d4.w)
-		movem.l	d0-d3,-(sp)
+		movem.l	d0-d3/a5,-(sp)
 
-	; 2bpp row -> 4bpp, colors 0-3
+	; 2bpp row -> 4bpp, colors 0-3 (as chrConvert)
 		move.w	d4,d3
 		andi.w	#$1FF7,d3
-		move.b	(a3,d3.w),d1		; plane 0
-		move.b	8(a3,d3.w),d2		; plane 1
-		moveq	#0,d0
-		moveq	#7,d5
-.pixel:
-		lsl.l	#4,d0
-		moveq	#0,d6
-		add.b	d2,d2
-		addx.b	d6,d6
-		add.b	d1,d1
-		addx.b	d6,d6
-		or.b	d6,d0
-		dbf	d5,.pixel
+		lea	(ppuChrSpread).l,a5
+		moveq	#0,d1
+		move.b	(a3,d3.w),d1		; plane 0: bit 0 of each pixel
+		add.w	d1,d1
+		add.w	d1,d1
+		move.l	(a5,d1.w),d0
+		moveq	#0,d1
+		move.b	8(a3,d3.w),d1		; plane 1: bit 1
+		add.w	d1,d1
+		add.w	d1,d1
+		move.l	(a5,d1.w),d2
+		add.l	d2,d2
+		or.l	d2,d0
 
 	; VRAM address of the row in the first set: tile*32 + row*4
 		move.w	d4,d3
@@ -1164,7 +1164,7 @@ ppuChrRamWrite:
 		move.l	d5,4(a6)
 		move.l	d0,(a6)
 		move.w	#$2000,sr
-		movem.l	(sp)+,d0-d3
+		movem.l	(sp)+,d0-d3/a5
 .done:
 		emuNext
 

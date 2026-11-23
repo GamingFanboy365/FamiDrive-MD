@@ -9,9 +9,9 @@ Nemul, originally made by Mairtrus. Credit to Mairtrus for the original work.
 
 - Runs on real hardware (the original Nemul did not)
 - Passes nestest's tests for all official 6502 opcodes
-- Mappers 0 (NROM), 2 (UxROM), 3 (CNROM) and 4 (MMC3, the ways Super Mario Bros. 2 and 3 and
-  Mega Man 3 use it),
-  with CHR-ROM or CHR-RAM, and PRG RAM at $6000-$7FFF for mappers 2 and 4
+- Mappers 0 (NROM), 2 (UxROM), 3 (CNROM), 4 (MMC3, the ways Super Mario Bros. 2 and 3 and
+  Mega Man 3 use it) and 71 (Camerica),
+  with CHR-ROM or CHR-RAM, and PRG RAM at $6000-$7FFF for mappers 2, 4 and 71
 - Working vertical scrolling using both scroll layers (the NES map height differs from the MD's)
 - Horizontal scroll changes partway down the screen (such as a still status bar above a scrolling
   level) use the MD's line scroll
@@ -37,7 +37,7 @@ The build uses the [AS macro assembler](http://john.ccac.rwth-aachen.de:8000/as/
 while the game runs. Games that use a lot of CPU run many times faster: Pinball's gameplay goes
 from about 3.5 to about 55 game frames per second, as fast as on a NES (which also drops frames
 when the game is busy). Super Mario Bros., Balloon Fight, Ice Climber and Excitebike run at full
-speed (60) while you play. Games with banked PRG-ROM (mappers 2 and 4) are translated a bank at a
+speed (60) while you play. Games with banked PRG-ROM (mappers 2, 4 and 71) are translated a bank at a
 time: Super Mario Bros. 2 goes from about 6 to 60 game frames per second in most of its levels, and
 Super Mario Bros. 3, whose MMC3 switches 8 KB banks at $A000 and $C000 apart, from about 6 to 60
 in World 1-1's quieter parts and while it scrolls, and to about 55-58 in its busiest moments.
@@ -68,11 +68,14 @@ hide or show it. Builds without `--fps` don't contain it.
 ### Supported NES ROMs
 
 - iNES format (`.nes`)
-- Mapper 0 (NROM), 2 (UxROM), 3 (CNROM) or 4 (MMC3)
-- 16 KB or 32 KB of PRG-ROM, or with mappers 2 and 4, 32 KB to 512 KB
+- Mapper 0 (NROM), 2 (UxROM), 3 (CNROM), 4 (MMC3) or 71 (Camerica)
+- 16 KB or 32 KB of PRG-ROM, or with mappers 2, 4 and 71, 32 KB to 512 KB
 - CHR-ROM or CHR-RAM
 
-Anything else shows an error screen saying what isn't supported. MMC3 games work if they switch
+Anything else shows an error screen saying what isn't supported. Mapper 71 picks the PRG bank with a
+write anywhere at $8000-$FFFF but $9000-$9FFF, as FCEUX does: Camerica's own games write it at
+$C000-$FFFF, and some dumped as mapper 71 at $8000 (Dooly Bravo Land). Its one-screen mirroring at
+$9000-$9FFF (the BF9097 board, which Fire Hawk uses) isn't supported. MMC3 games work if they switch
 PRG-ROM at $8000-$BFFF in 16 KB pairs, as Super Mario Bros. 2 does, or switch its two 8 KB banks one
 at a time, at $A000 and $C000 in PRG mode 1, as Super Mario Bros. 3 does, or at $8000 and $A000 in
 PRG mode 0, as Mega Man 3 does (but not both modes in one game). Its scanline
@@ -170,6 +173,9 @@ handheld's differences.
 - Code Name: Viper (MMC3) plays recompiled, as far as its first stage was tried. Its status bar shows
   2 lines lower than on a NES (from the first whole 8-line row below its split), and where it's busy
   and runs late, a frame now and then misses some of its sprites
+- Dooly Bravo Land (mapper 71) plays recompiled, at 60 game frames per second in its first stage,
+  the only one tried. Interpreted, it's far too slow to play: its intro spends most of its time in
+  delay loops, which the interpreter runs an instruction at a time, and recompiled code in one step
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its

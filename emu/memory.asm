@@ -360,6 +360,8 @@ wrTo_PRG:
 		beq.s	.mapper_3
 		subq.w	#1,d5
 		beq.w	mmc3Write
+		cmpi.w	#71-4,d5
+		beq.s	mapper71Write
 		emuNext
 
 ; --------------------------------------------------------
@@ -401,6 +403,22 @@ mapper2Write:
 		moveq	#0,d5
 		move.b	d7,d5
 		bsr.w	prgSwitch
+		emuNext
+
+; --------------------------------------------------------
+; Mapper $47 (71), Camerica and Codemasters' boards (BF9093, BF9097):
+; as UxROM, but a write to $9000-$9FFF is the BF9097's one-screen
+; mirroring (Fire Hawk), which isn't supported: it does nothing. Their
+; games pick the bank at $C000-$FFFF; others dumped as mapper 71 pick
+; it at $8000 (Dooly Bravo Land, as FCEUX takes them). Recompiled code
+; calls mapper2Write for writes outside $9000-$9FFF.
+; --------------------------------------------------------
+
+mapper71Write:
+		move.b	d6,d5
+		andi.b	#$F0,d5
+		cmpi.b	#$90,d5			; $9000-$9FFF
+		bne.s	mapper2Write
 		emuNext
 
 ; --------------------------------------------------------
