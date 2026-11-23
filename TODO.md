@@ -114,6 +114,13 @@ finished in #1 to #6.
   Force). A game that counts on one anywhere else (a handler that never
   returns, say) still waits. VBlanks in MMC3's IRQ handler are held until
   its last RTI the same way, but only up to 8 (`irqVbls`).
+- [ ] **Mapper 71's one-screen mirroring.** The BF9097 board's `$9000`-`$9FFF`
+  register (Fire Hawk) is ignored (`mapper71Write`): the planes only show
+  horizontal or vertical mirroring (`ppuSetMirror`).
+- [ ] **Delay loops, interpreted.** Recompiled code counts out a DEX/DEY and
+  BNE delay loop in one step (`rcDelay`), but the interpreter runs it an
+  instruction at a time: Dooly Bravo Land's intro, mostly delays, is far
+  too slow to play interpreted.
 - [ ] **Other CHR switches.** MMC3 bank switches copy tiles made with the ROM
   (`chrUpdate`), but a new BG pattern table (`chrLoadBg`) and CNROM's 8 KB
   switches still convert every tile, which takes several frames.

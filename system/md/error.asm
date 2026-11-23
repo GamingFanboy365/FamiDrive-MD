@@ -147,11 +147,11 @@ errStrBadHeader:
 errStrMapper:
 		dc.b "MAPPER % IS NOT SUPPORTED",$0A
 		dc.b "SUPPORTED: 0 (NROM), 2 (UXROM),",$0A
-		dc.b "3 (CNROM), 4 (MMC3)",0
+		dc.b "3 (CNROM), 4 (MMC3), 71 (CAMERICA)",0
 errStrPrgSize:
 		dc.b "% X 16 KB PRG-ROM IS NOT SUPPORTED",$0A
 		dc.b "SUPPORTED: 16 KB OR 32 KB, OR WITH",$0A
-		dc.b "MAPPERS 2 AND 4, 32 KB TO 512 KB",0
+		dc.b "MAPPERS 2, 4 AND 71, 32 KB TO 512 KB",0
 errStrMmc3Prg:
 		dc.b "MMC3 PRG MODE 1 IS NOT SUPPORTED",$0A
 		dc.b "(PRG BANKS IN 16 KB PAIRS AT $8000)",0

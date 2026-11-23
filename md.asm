@@ -17,7 +17,7 @@ FPS		equ 0			; 1: FPS counter (build.sh --fps, needs RECOMP)
 		include	"system/md/const.asm"	; RAM / Variables are here
 		include	"system/md/map.asm"	; Genesis hardware map
 		include	"out/nes_info.asm"	; the NES ROM's mapper and PRG size (tools/nesinfo.py)
-PRG_BANKED	equ (NES_MAPPER=2)||(NES_MAPPER=4)	; PRG-ROM in 16 KB banks: PRG_IMAGES
+PRG_BANKED	equ (NES_MAPPER=2)||(NES_MAPPER=4)||(NES_MAPPER=71)	; PRG-ROM in 16 KB banks: PRG_IMAGES
 PRG_8K		equ (NES_MAPPER=4)&&((NES_MMC3_PRG1<>0)||(NES_MMC3_PRG8<>0))	; MMC3, R6's and R7's 8 KB banks apart: PRG_FRAMES
 		if NES_MMC3_PRG1<>0
 PRG_R6		equ $C000		; where R6's bank is: PRG mode 1 (R7's at $A000, the last two at $8000 and $E000),
@@ -808,6 +808,8 @@ Fami_LoadRom:
 		cmpi.b	#3,d1
 		beq.s	.mapper_ok
 		cmpi.b	#4,d1
+		beq.s	.mapper_ok
+		cmpi.b	#71,d1
 		beq.s	.mapper_ok
 		lea	(errStrMapper).l,a0
 		jmp	(MD_ShowError).l

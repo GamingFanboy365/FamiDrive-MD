@@ -8,7 +8,7 @@
 # Code only reached through computed jumps can be listed in FILE
 # (hex addresses, one per line); anything not found is interpreted.
 #
-# Banked PRG-ROM (mappers 2 and 4: a 16 KB bank at $8000, the last at
+# Banked PRG-ROM (mappers 2, 4 and 71: a 16 KB bank at $8000, the last at
 # $C000) is translated a bank at a time (see Prg and main): the fixed
 # bank's code once, and each bank's at $8000 once, with labels B<n>_...
 # The fixed bank calls into a bank through rcDispatch, which goes by the
@@ -208,7 +208,7 @@ def mmc3_irq(prg):
 class Prg:
 	"""PRG-ROM as one translation unit's code sees it.
 	NROM and CNROM (unit None): all of $8000-$FFFF, one unit.
-	Banked PRG (mappers 2, 4: a 16 KB bank at $8000, the last at $C000,
+	Banked PRG (mappers 2, 4, 71: a 16 KB bank at $8000, the last at $C000,
 	see PRG_IMAGES in md.asm): the fixed bank is unit 'F', and each bank
 	n at $8000 is unit n, which sees the fixed bank too (its code calls
 	and reads it). The fixed bank's code can't know which bank is at
@@ -229,9 +229,9 @@ class Prg:
 		if rom[7] & 0x0C != 0x08 and any(rom[12:16]):
 			hi = 0			# junk in old headers ("DiskDude!"), as md.asm does
 		self.mapper = rom[6] >> 4 | hi
-		if self.mapper not in (0, 2, 3, 4):
+		if self.mapper not in (0, 2, 3, 4, 71):
 			sys.exit('recomp6502: mapper %d is not supported' % self.mapper)
-		self.banked = self.mapper in (2, 4)
+		self.banked = self.mapper in (2, 4, 71)
 		prg = rom[16:16 + rom[4] * 0x4000]
 		self.prg8 = self.mapper == 4 and (mmc3_mode1(prg) or mmc3_apart(prg))
 		self.r6 = 0xC000 if self.mapper == 4 and mmc3_mode1(prg) else 0x8000
@@ -1570,6 +1570,8 @@ class Gen:
 			return False
 		if i.mode == 'abs' and self.prg.mapper == 4 and i.arg & 0xE001 != 0x8001:
 			return False
+		if i.mode == 'abs' and self.prg.mapper == 71 and i.arg & 0xF000 == 0x9000:
+			return False
 		regs = self.mmc3_regs(i) if self.prg.prg8 else None
 		return regs is None or max(regs) >= 6
 
@@ -1687,7 +1689,9 @@ class Gen:
 						     0xE000: 'mmc3WrIrqOff', 0xE001: 'mmc3WrIrqOn'})
 				reg = regs.get(a & 0xE001)
 				return [], None, (['jsr ' + reg] if reg else []) + self.after_switch(i)
-			if a >= 0x8000 and self.prg.mapper == 2:
+			if a >= 0x8000 and self.prg.mapper == 71 and a & 0xF000 == 0x9000:
+				return [], None, []	# (the BF9097's mirroring: not supported, emu/memory.asm)
+			if a >= 0x8000 and self.prg.mapper in (2, 71):
 				return [], None, ['jsr mapper2Write'] + self.after_switch(i)
 			return [], None, ['move.w #$%04X,d6' % a, 'jsr rcWrite16'] + self.after_switch(i)
 		if m in ('absx', 'absy'):
