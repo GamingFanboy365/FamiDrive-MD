@@ -17,7 +17,7 @@ FPS		equ 0			; 1: FPS counter (build.sh --fps, needs RECOMP)
 		include	"system/md/const.asm"	; RAM / Variables are here
 		include	"system/md/map.asm"	; Genesis hardware map
 		include	"out/nes_info.asm"	; the NES ROM's mapper and PRG size (tools/nesinfo.py)
-PRG_BANKED	equ (NES_MAPPER=2)||(NES_MAPPER=4)||(NES_MAPPER=71)	; PRG-ROM in 16 KB banks: PRG_IMAGES
+PRG_BANKED	equ (NES_MAPPER=1)||(NES_MAPPER=2)||(NES_MAPPER=4)||(NES_MAPPER=71)	; PRG-ROM in 16 KB banks: PRG_IMAGES
 PRG_8K		equ (NES_MAPPER=4)&&((NES_MMC3_PRG1<>0)||(NES_MMC3_PRG8<>0))	; MMC3, R6's and R7's 8 KB banks apart: PRG_FRAMES
 		if NES_MMC3_PRG1<>0
 PRG_R6		equ $C000		; where R6's bank is: PRG mode 1 (R7's at $A000, the last two at $8000 and $E000),
@@ -193,6 +193,8 @@ cpuPrgImg	ds.l 1			; $8000-$FFFF: RAM_Fami_ROM, or a PRG_IMAGES image (a1)
 cpuWram		ds.w 1			; 1: PRG RAM at $6000-$7FFF (RAM_Fami_WRAM)
 mmc3Select	ds.w 1			; MMC3 (mapper 4): the last $8000 write
 mmc3Regs	ds.b 8			; and its bank registers R0-R7 (mmc3Write)
+mmc1Shift	equ mmc3Regs		; MMC1 (mapper 1), in MMC3's place: the serial port's bits so far, below a 1 (mmc1Write)
+mmc1Ctrl	equ mmc3Regs+1		; and its control register
 rcCurTable	ds.l 1			; recompiled banked PRG: the bank at $8000's rcTable (prgSwitch, rcPrgSlot)
 chrDmaHead	ds.w 1			; MMC3: the first MD tiles queued for VRAM (RAM_Fami_ChrDma)
 chrDmaTail	ds.w 1			; and where the next go
@@ -803,6 +805,8 @@ Fami_LoadRom:
 		or.b	d6,d1
 		move.w	d1,d5			; keep for cpuMapper
 		beq.s	.mapper_ok
+		cmpi.b	#1,d1
+		beq.s	.mapper_ok
 		cmpi.b	#2,d1
 		beq.s	.mapper_ok
 		cmpi.b	#3,d1
@@ -862,6 +866,10 @@ Fami_LoadRom:
 		endif
 		move.l	#$00020405,mmc3Regs(a3)	; MMC3: as the CHR copied below (the
 		move.l	#$06070001,mmc3Regs+4(a3) ; first 8 KB) and PRG image 0
+		if NES_MAPPER=1
+		move.b	#$10,mmc1Shift(a3)	; MMC1: no bits yet, PRG mode 3 (the
+		move.b	#$0C,mmc1Ctrl(a3)	; last bank at $C000)
+		endif
 		if MMC3_IRQ
 		lea	(RAM_Fami_Split).l,a5	; no split yet (MMC3_IRQ)
 		moveq	#$100/4-1,d7

@@ -354,6 +354,10 @@ wrTo_WRAM:
 
 wrTo_PRG:
 		move.w	cpuMapper(a4),d5
+		if NES_MAPPER=1
+		cmpi.w	#1,d5
+		beq.w	mmc1Write
+		endif
 		subq.w	#2,d5
 		beq.s	mapper2Write
 		subq.w	#1,d5
@@ -420,6 +424,106 @@ mapper71Write:
 		cmpi.b	#$90,d5			; $9000-$9FFF
 		bne.s	mapper2Write
 		emuNext
+
+; --------------------------------------------------------
+; Mapper $01, MMC1: a serial port. A write with bit 7 set clears it
+; (and sets PRG mode 3); otherwise bit 0 goes in, and the fifth one
+; sets the register that address bits 14-13 pick: $8000 control
+; (bits 1-0 mirroring: 2 vertical, 3 horizontal, 0 and 1 one-screen,
+; which isn't supported; 3-2 PRG mode; 4 CHR mode: 8 KB, or 4 KB
+; each), $A000 and $C000 CHR banks (CHR-ROM: copied to the pattern
+; tables and converted, as CNROM's; CHR-RAM: nothing), $E000 the 16 KB
+; PRG bank at $8000 (bit 4, PRG RAM off, is ignored). Only PRG mode 3
+; is supported, the last bank at $C000 (as at power on): the others
+; show an error.
+; Recompiled code calls this directly, with d6 the address' high byte.
+;
+; d6.b - address bits 15-8
+; d7.b - value
+; --------------------------------------------------------
+
+		if NES_MAPPER=1
+mmc1Write:
+		tst.b	d7
+		bpl.s	.bit
+		move.b	#$10,mmc1Shift(a4)	; cleared, and PRG mode 3
+		ori.b	#$0C,mmc1Ctrl(a4)
+		emuNext
+.bit:
+		move.b	mmc1Shift(a4),d5
+		lsr.b	#1,d7			; bit 0 in at the top; out comes the
+		roxr.b	#1,d5			; 1 below the bits so far after the
+		bcs.s	.full			; fifth
+		move.b	d5,mmc1Shift(a4)
+		emuNext
+.full:
+		move.b	#$10,mmc1Shift(a4)
+		lsr.b	#3,d5			; the 5 bits
+		andi.b	#$60,d6
+		beq.w	.control
+		cmpi.b	#$60,d6
+		bne.s	.chr
+		andi.w	#$0F,d5			; $E000: the PRG bank
+		bsr.w	prgSwitch
+		emuNext
+.chr:
+		tst.w	ppuChrRam(a4)		; $A000, $C000: CHR-ROM banks (CHR-RAM:
+		bne.w	.done			; nothing)
+		moveq	#0,d4			; CHR0 at $0000
+		btst	#4,mmc1Ctrl(a4)
+		bne.s	.chr_4k
+		cmpi.b	#$20,d6			; 8 KB mode: CHR0's even 4 KB bank and
+		bne.w	.done			; the next, CHR1 does nothing
+		andi.b	#$1E,d5
+		move.w	#$2000,d6
+		bra.s	.chr_copy
+.chr_4k:
+		cmpi.b	#$20,d6			; 4 KB mode: CHR1 at $1000
+		beq.s	.chr_4k_0
+		move.w	#$1000,d4
+.chr_4k_0:
+		move.w	#$1000,d6
+.chr_copy:
+		andi.l	#chrBankMask>>2,d5	; (the ROM's 4 KB banks)
+		movem.l	d0/a0,-(sp)
+		movea.l	emuChrRom(a4),a5
+		lsl.l	#8,d5
+		lsl.l	#4,d5
+		adda.l	d5,a5
+		lea	(a3,d4.w),a0		; the pattern tables (a3), then their
+		move.w	d6,d0			; MD tiles
+		lsr.w	#2,d0
+		subq.w	#1,d0
+.chr_long:
+		move.l	(a5)+,(a0)+
+		dbf	d0,.chr_long
+		cmpi.w	#$2000,d6
+		beq.s	.chr_both
+		bsr.w	chrRefresh
+		bra.s	.chr_done
+.chr_both:
+		bsr.w	Nemul_LoadChr
+.chr_done:
+		movem.l	(sp)+,d0/a0
+		emuNext
+.control:
+		move.b	d5,mmc1Ctrl(a4)
+		moveq	#$0C,d7
+		and.b	d5,d7
+		cmpi.b	#$0C,d7			; PRG mode 3 only
+		bne.s	.prg_mode
+		btst	#1,d5			; mirroring 2, 3: vertical (ppuMirror
+		beq.s	.done			; 1), horizontal (0)
+		moveq	#1,d7
+		and.b	d5,d7
+		eori.b	#1,d7
+		bsr.w	ppuSetMirror
+.done:
+		emuNext
+.prg_mode:
+		lea	(errStrMmc1Prg).l,a0
+		jmp	(MD_ShowError).l
+		endif
 
 ; --------------------------------------------------------
 ; Mapper $04, MMC3. Its registers go by address bits 14-13 and 0:
