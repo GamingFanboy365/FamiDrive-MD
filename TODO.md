@@ -120,6 +120,15 @@ finished in #1 to #6.
   Force). A game that counts on one anywhere else (a handler that never
   returns, say) still waits. VBlanks in MMC3's IRQ handler are held until
   its last RTI the same way, but only up to 8 (`irqVbls`).
+- [ ] **MMC1: the rest.** `mmc1Write` (`emu/memory.asm`) supports PRG mode 3
+  only (a 16 KB bank at $8000, the last at $C000: PRG_IMAGES, as UxROM);
+  modes 0-1 (32 KB at a time, which Super Mario Unlimited Deluxe uses) and 2
+  (the first bank fixed at $8000) show an error screen. Not yet either: its
+  one-screen mirroring, 512 KB boards (SUROM: the PRG bank's 256 KB half in
+  the CHR register), and turning PRG RAM off. CHR-ROM bank switches copy
+  and convert the whole 4 KB or 8 KB, as CNROM's do (`chrRefresh`,
+  `Nemul_LoadChr`), which takes a few frames. Recompiled code only takes
+  writes to $E000-$FFFF as PRG bank switches (`prg_switch`).
 - [ ] **Mapper 71's one-screen mirroring.** The BF9097 board's `$9000`-`$9FFF`
   register (Fire Hawk) is ignored (`mapper71Write`): the planes only show
   horizontal or vertical mirroring (`ppuSetMirror`).
