@@ -431,11 +431,13 @@ mapper71Write:
 ; sets the register that address bits 14-13 pick: $8000 control
 ; (bits 1-0 mirroring: 2 vertical, 3 horizontal, 0 and 1 one-screen,
 ; which isn't supported; 3-2 PRG mode; 4 CHR mode: 8 KB, or 4 KB
-; each), $A000 and $C000 CHR banks (CHR-ROM: copied to the pattern
-; tables and converted, as CNROM's; CHR-RAM: nothing), $E000 the 16 KB
-; PRG bank at $8000 (bit 4, PRG RAM off, is ignored). Only PRG mode 3
-; is supported, the last bank at $C000 (as at power on): the others
-; show an error.
+; each), $A000 and $C000 CHR banks (CHR-ROM: its MD tiles made with
+; the ROM, as MMC3's, chrUpdate; CHR-RAM: nothing), $E000 the 16 KB
+; PRG bank at $8000 (bit 4, PRG RAM off, is ignored). PRG mode 3 is
+; supported, the last bank at $C000 (as at power on), or for a game
+; that switches 32 KB at a time (MMC1_32K, nesinfo.py), modes 0 and 1
+; (and 3 as it starts: a 32 KB game's code to set its mode is at the
+; top of each bank); a game's other modes show an error.
 ; Recompiled code calls this directly, with d6 the address' high byte.
 ;
 ; d6.b - address bits 15-8
@@ -464,6 +466,9 @@ mmc1Write:
 		cmpi.b	#$60,d6
 		bne.s	.chr
 		andi.w	#$0F,d5			; $E000: the PRG bank
+		if MMC1_32K
+		lsr.b	#1,d5			; (32 KB: bit 0 doesn't count)
+		endif
 		bsr.w	prgSwitch
 		emuNext
 .chr:
@@ -486,32 +491,29 @@ mmc1Write:
 .chr_copy:
 		andi.l	#chrBankMask>>2,d5	; (the ROM's 4 KB banks)
 		movem.l	d0/a0,-(sp)
-		movea.l	emuChrRom(a4),a5
+		movea.l	emuChrRom(a4),a0
 		lsl.l	#8,d5
 		lsl.l	#4,d5
-		adda.l	d5,a5
-		lea	(a3,d4.w),a0		; the pattern tables (a3), then their
-		move.w	d6,d0			; MD tiles
-		lsr.w	#2,d0
+		adda.l	d5,a0
+		move.w	d6,d0			; its MD tiles made with the ROM, 2 KB
+		rol.w	#5,d0			; at a time (chrUpdate, as MMC3's)
+.chr_2kb:
+		move.w	#$800,d6
+		bsr.w	chrUpdate
+		lea	$800(a0),a0
+		addi.w	#$800,d4
 		subq.w	#1,d0
-.chr_long:
-		move.l	(a5)+,(a0)+
-		dbf	d0,.chr_long
-		cmpi.w	#$2000,d6
-		beq.s	.chr_both
-		bsr.w	chrRefresh
-		bra.s	.chr_done
-.chr_both:
-		bsr.w	Nemul_LoadChr
-.chr_done:
+		bne.s	.chr_2kb
 		movem.l	(sp)+,d0/a0
 		emuNext
 .control:
 		move.b	d5,mmc1Ctrl(a4)
 		moveq	#$0C,d7
 		and.b	d5,d7
-		cmpi.b	#$0C,d7			; PRG mode 3 only
-		bne.s	.prg_mode
+		if MMC1_32K=0
+		cmpi.b	#$0C,d7			; PRG mode 3 only (MMC1_32K: modes 0-1,
+		bne.s	.prg_mode		; and 3 for its reset code, which every
+		endif				; 32 KB bank has at its top)
 		btst	#1,d5			; mirroring 2, 3: vertical (ppuMirror
 		beq.s	.done			; 1), horizontal (0)
 		moveq	#1,d7
@@ -520,9 +522,11 @@ mmc1Write:
 		bsr.w	ppuSetMirror
 .done:
 		emuNext
+		if MMC1_32K=0
 .prg_mode:
 		lea	(errStrMmc1Prg).l,a0
 		jmp	(MD_ShowError).l
+		endif
 		endif
 
 ; --------------------------------------------------------
@@ -833,10 +837,10 @@ mmc3Prg1:
 
 prgSwitch:
 		if PRG_BANKED&&(PRG_8K=0)		; (PRG mode 1: mmc3WrData)
-		andi.l	#prgBankMask,d5
-		cmpi.w	#NES_PRG16,d5
+		andi.l	#prgImageMask,d5
+		cmpi.w	#prgImages,d5
 		bcs.s	.bank_ok
-		subi.w	#NES_PRG16,d5
+		subi.w	#prgImages,d5
 .bank_ok:
 		move.l	d5,d6			; image: bank * $8000
 		swap	d6

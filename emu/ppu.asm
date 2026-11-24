@@ -1395,7 +1395,7 @@ chrToSprites:
 ; ----------------------------------------------------------------
 
 chrConvert:
-		if (NES_MAPPER=4)&&(NES_CHR8<>0)
+		if CHR_BANKED
 		bsr.w	chrFlush		; the queued tiles first (chrUpdate)
 		endif
 		movem.l	d0-d3/d6-d7/a0,-(sp)
