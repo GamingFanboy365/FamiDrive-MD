@@ -26,7 +26,13 @@ finished in #1 to #6.
   time where the game's code does that (PRG_FRAMES, `mmc3Prg1`: in PRG mode 1,
   at $C000 and $A000, as Super Mario Bros. 3; in mode 0, at $8000 and $A000,
   as Mega Man 3), and as a 16 KB pair otherwise (PRG_IMAGES, as Super Mario
-  Bros. 2), but a game can't switch between the modes. The scanline IRQ is taken when the NMI
+  Bros. 2), but a game can't switch between the modes. Which a game does is
+  read from its code (`mmc3_use` in `tools/nesinfo.py`, `mmc3_apart` in
+  `tools/recomp6502.py`): R6 or R7 picked with an immediate value, maybe
+  through an `ORA` of a zero page byte (Panic Restaurant's `ORA $44`), stored
+  to $8000, and a bank stored to $8001 right after. A game that picks them
+  some other way runs with 16 KB pairs, and the wrong bank at $8000 or $A000
+  after a switch. The scanline IRQ is taken when the NMI
   handler returns, and again in the same frame where its handler leaves it
   on (`splitNext`: Super Mario Bros. 3's 32-pixel partition, water line and
   spade game), not by a count of lines: a handler's own time before it sets
@@ -198,6 +204,11 @@ finished in #1 to #6.
   points than on the NES.
 - [ ] **Unofficial opcodes** aren't translated; code using them runs in the
   interpreter.
+- [ ] **FPS counter in more games.** A game frame ends, for the counter, where
+  a wait loop of loads, compares and branches is left (`idle_loops` in
+  `tools/recomp6502.py`). Panic Restaurant's wait loop calls a routine that
+  stirs a random seed (`JSR $F92B`, `LDA $01`, `BNE`), so its counter shows
+  00. The loops `wait_heads` finds for NMIs could end frames too.
 
 ## Hardware
 

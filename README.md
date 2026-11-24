@@ -78,7 +78,7 @@ $C000-$FFFF, and some dumped as mapper 71 at $8000 (Dooly Bravo Land). Its one-s
 $9000-$9FFF (the BF9097 board, which Fire Hawk uses) isn't supported. MMC3 games work if they switch
 PRG-ROM at $8000-$BFFF in 16 KB pairs, as Super Mario Bros. 2 does, or switch its two 8 KB banks one
 at a time, at $A000 and $C000 in PRG mode 1, as Super Mario Bros. 3 does, or at $8000 and $A000 in
-PRG mode 0, as Mega Man 3 does (but not both modes in one game). Its scanline
+PRG mode 0, as Mega Man 3 and Panic Restaurant do (but not both modes in one game). Its scanline
 interrupt is taken when the NMI handler returns, and again in the same frame, up to four times, when
 its handler leaves it on for a line further down. What the frame's last handler sets up for the
 screen below its line (other nametable rows, other CHR banks) shows in the MD's window plane, from
@@ -176,6 +176,11 @@ handheld's differences.
 - Dooly Bravo Land (mapper 71) plays recompiled, at 60 game frames per second in its first stage,
   the only one tried. Interpreted, it's far too slow to play: its intro spends most of its time in
   delay loops, which the interpreter runs an instruction at a time, and recompiled code in one step
+- Panic Restaurant (MMC3) plays recompiled, at 60 game frames per second in most of its first stage,
+  the only one tried, with dips to about 35-48 for a second or two now and then. The FPS counter
+  shows 00 in it: its wait loop calls a routine, which the counter doesn't take for a wait loop.
+  Interpreted, it stays on a black screen: its NMI handler takes longer than a frame there, so its
+  main loop never gets to run
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its
