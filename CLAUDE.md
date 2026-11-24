@@ -2,6 +2,7 @@
 
 A NES emulator for the Mega Drive / Genesis, in 68000 assembly for the AS macro assembler.
 README.md describes the features, the build and the source layout; TODO.md lists known bugs.
+NOTES.md is how the work gets done and checked here: read it before starting.
 
 ## Building
 
