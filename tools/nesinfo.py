@@ -28,12 +28,13 @@ def mmc3_use(prg):
     value with bit 6 set stored to $8000 (bank select: LDA/LDX/LDY #, STA/STX/STY);
     without that, R6 or R7 picked that way (#$06, #$07) and its bank loaded from
     memory or as a constant right after and stored to $8001 (as Mega Man 3: LDA #$06,
-    STA $8000, LDA $F4, STA $8001; a zero page store may follow each load), which a
+    STA $8000, LDA $F4, STA $8001; a zero page store may follow each load, and an ORA
+    of a zero page byte the first, as Panic Restaurant's LDA #$06, STA $45, ORA $44), which a
     game that only switches them as a 16 KB pair (Super Mario Bros. 2: the second
     is the first, ORA #$01) doesn't do; and a store to $E001 (IRQ enable).
     (tools/recomp6502.py looks for the same.)"""
     mode1 = any(m.group(1)[0] & 0x40 for m in re.finditer(rb'[\xA9\xA2\xA0](.)[\x8D\x8E\x8C]\x00\x80', prg, re.S))
-    apart = not mode1 and re.search(rb'\xA9[\x06\x07](?:\x85.)?\x8D\x00\x80(?:\xA5.|\xAD..|\xA9.)(?:\x85.)?\x8D\x01\x80',
+    apart = not mode1 and re.search(rb'\xA9[\x06\x07](?:\x85.)?(?:\x05.)?\x8D\x00\x80(?:\xA5.|\xAD..|\xA9.)(?:\x85.)?\x8D\x01\x80',
                                     prg, re.S) is not None
     irq = re.search(rb'[\x8D\x8E\x8C]\x01\xE0', prg) is not None
     return mode1, apart, irq

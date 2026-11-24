@@ -175,11 +175,12 @@ def mmc3_mode1(prg):
 def mmc3_apart(prg):
 	"""Does the code, in PRG mode 0, switch R6's bank at $8000 and R7's
 	at $A000 apart: R6 or R7 picked with an immediate value (LDA #$06,
-	#$07) stored to $8000, and its bank loaded from memory or as a
-	constant right after and stored to $8001 (as Mega Man 3)? As
-	NES_MMC3_PRG8 from tools/nesinfo.py, which looks for the same."""
+	#$07; maybe through an ORA of a zero page byte, as Panic Restaurant)
+	stored to $8000, and its bank loaded from memory or as a constant
+	right after and stored to $8001 (as Mega Man 3)? As NES_MMC3_PRG8
+	from tools/nesinfo.py, which looks for the same."""
 	return not mmc3_mode1(prg) and re.search(
-		rb'\xA9[\x06\x07](?:\x85.)?\x8D\x00\x80(?:\xA5.|\xAD..|\xA9.)(?:\x85.)?\x8D\x01\x80', prg, re.S) is not None
+		rb'\xA9[\x06\x07](?:\x85.)?(?:\x05.)?\x8D\x00\x80(?:\xA5.|\xAD..|\xA9.)(?:\x85.)?\x8D\x01\x80', prg, re.S) is not None
 
 
 @functools.lru_cache(maxsize=4)
