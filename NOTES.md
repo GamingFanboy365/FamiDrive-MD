@@ -31,6 +31,9 @@ the bugs found here were found by them, not by looking at screenshots.
   that keeps them (Python with `newline=''`).
 - After a pull request is merged (merge commits), bring the branch up to date with
   `git fetch origin main && git merge --ff-only origin/main` before new work.
+- Before pushing more commits to a branch whose pull request was open, check that it hasn't
+  been merged in the meantime (the owner merges as soon as it's ready). If it has, the new
+  commits need a new pull request, and the merged one's description stays as it was merged.
 - README's Known issues has a line for each game that was tried: how far, how fast, what's off.
   TODO.md names the routines involved in backticks.
 
