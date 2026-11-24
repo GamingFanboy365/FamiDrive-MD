@@ -448,6 +448,11 @@ def discover(prg, extra=()):
 				if op not in OPS:
 					print('recomp6502: unofficial opcode $%02X at $%04X: left to the interpreter' % (op, pc), file=sys.stderr)
 					break
+				if any(prg.byte(pc + k) is None for k in range(1, SIZE[OPS[op][1]])):
+					# (an 8 KB bank's last bytes, the rest in a bank switched apart)
+					print('recomp6502: instruction at $%04X runs past its bank: left to the interpreter' % pc,
+					      file=sys.stderr)
+					break
 				i = Insn(pc, op, prg)
 				insns[pc] = i
 				nxt = (pc + i.n) & 0xFFFF
@@ -1743,6 +1748,9 @@ class Gen:
 			if len(own) <= 4:
 				ext = sorted(r - own)
 				found[pc] = sorted(own) + (ext if len(ext) <= 2 else [])
+				# (a JSR misdecoded from data can return where no
+				# instruction was decoded: that has no label to jump to)
+				found[pc] = [a for a in found[pc] if a in self.insns or a in self.ext]
 		return found
 
 	def idle_loops(self):
@@ -3606,12 +3614,12 @@ class Gen:
 		depth, work, heavy, sw = {}, [(f, 0)], False, False
 		while work:
 			pc, d = work.pop()
-			i = self.insns[pc]
+			i = self.insns.get(pc)		# (None: left to the interpreter)
 			if pc in depth:
 				if depth[pc] != d:
 					return None
 				continue
-			if len(depth) >= 500 or i.m in ('RTI', 'BRK', 'TSX', 'TXS'):
+			if i is None or len(depth) >= 500 or i.m in ('RTI', 'BRK', 'TSX', 'TXS'):
 				return None
 			depth[pc] = d
 			if self.switches(i):
@@ -4112,7 +4120,9 @@ def short_branches(out):
 		if any('*+' in x or '*-' in x for x in out[max(0, lo - 4):hi + 4]):
 			continue
 		span = sum(max_size(x) for x in out[lo:hi])
-		if (t > k and span <= 126) or (t <= k and span + 2 <= 126):
+		if t > k and span == 0:		# (to the next line: Bcc.s can't, and it's nothing)
+			res[k] = '%s; (b%s.w %s: the next line)' % (m.group(1), m.group(2), m.group(3))
+		elif (t > k and span <= 126) or (t <= k and span + 2 <= 126):
 			res[k] = '%sb%s.s %s' % (m.group(1), m.group(2), m.group(3))
 	return res
 
