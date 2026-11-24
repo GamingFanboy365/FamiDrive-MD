@@ -139,6 +139,12 @@ finished in #1 to #6.
   BNE delay loop in one step (`rcDelay`), but the interpreter runs it an
   instruction at a time: Dooly Bravo Land's intro, mostly delays, is far
   too slow to play interpreted.
+- [ ] **BG pattern table switches mid-screen, elsewhere.** A new BG table is
+  taken where the NES would start drawing with it (`chrBgSet`: with the
+  background on, the NMI handler's RTI, or a `$2002` poll that sees VBlank
+  over; `chrBgDue`), and converted whole (`chrLoadBg`). A switch partway
+  down the screen is only a split in MMC3 games, after a sprite 0 hit
+  (`sp0Split`); elsewhere the screen shows the last one.
 - [ ] **Other CHR switches.** MMC1's and MMC3's bank switches copy tiles
   made with the ROM (`chrUpdate`), but a new BG pattern table (`chrLoadBg`)
   and CNROM's 8 KB switches still convert every tile, which takes several
@@ -217,6 +223,14 @@ finished in #1 to #6.
   points than on the NES.
 - [ ] **Unofficial opcodes** aren't translated; code using them runs in the
   interpreter.
+- [ ] **Code reached only through tables, in banks.** Contra's recompiled
+  build finds 7483 instructions of its 128 KB, and much of its game runs
+  interpreted (`rcInterpStep`, a quarter of the time in its attract demos):
+  the fixed bank's code goes to its banks' routines ($B419, $B523, $BA7C...)
+  through address tables the recompiler doesn't follow there, so those banks'
+  units never see them as entries. It runs at about 25-50 game frames a
+  second there. The interpreted addresses `rcDispatch` sees, or tables of
+  addresses that fall on a bank's plausible code, could be entries.
 - [ ] **FPS counter in more games.** A game frame ends, for the counter, where
   a wait loop of loads, compares and branches is left (`idle_loops` in
   `tools/recomp6502.py`). Panic Restaurant's wait loop calls a routine that

@@ -138,8 +138,10 @@ handheld's differences.
   a NES
 - Graphics glitches from timing inaccuracy. The emulator can't tell which line the NES would be
   drawing, so it goes by what the game does: sprite 0 hit is reported when the game polls for
-  it, a poll that sees the hit flag clear marks the top of the screen, and delay loops count as
-  the NES time they would take. Split-screen effects timed any other way can be off by a few
+  it (in a loop that reads $2002 in one place or two), a poll that sees the hit flag clear marks
+  the top of the screen (scroll changes before it are the top's), a new BG pattern table is the
+  screen's where the NES would start drawing with it (with the background on, the NMI handler's
+  RTI, that poll), and delay loops count as the NES time they would take. Split-screen effects timed any other way can be off by a few
   lines, and only horizontal splits are supported, besides the MMC3 scanline interrupt's and, in
   MMC3 games, a switch of the BG pattern table after a sprite 0 hit (as Deja Vu's)
 - Sound is approximate: no DMC (sample) channel, the PSG only plays 50% squares so pulse duty is
@@ -192,6 +194,11 @@ handheld's differences.
   switches banks under it (on a NES that sound is long done when the next NMI comes)
 - Super Mario Unlimited Deluxe (a hack, MMC1 switching 32 KB at a time) plays recompiled, at 60
   game frames per second in World 1-1, the only level tried
+- Castlevania (UxROM, CHR-RAM) plays recompiled, at 60 game frames per second in its first stage
+  with dips to about 50-55, as far as the castle's hall. Contra (UxROM, CHR-RAM): its title, its
+  attract demos and the first screens of its first stage look right, the only part tried, at
+  about 25-50 game frames per second where busy: much of its code runs interpreted (both had
+  their background tiles change from frame to frame before, and ran at 10-11)
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its
