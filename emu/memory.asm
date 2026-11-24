@@ -674,6 +674,12 @@ mmc3Prg1:
 		cmpi.w	#7,d5
 		beq.s	.r7
 		move.l	d6,prgFrameC(a4)	; R6, at PRG_R6: bits 14, 13 = 1, 0
+		if RECOMP
+		move.l	a0,d5			; translated code: a0 = a1+$8000 (its
+		sub.l	a1,d5			; low bits 0 aren't a PC at $8000),
+		cmpi.l	#$8000,d5		; which stays with a1
+		beq.s	.done
+		endif
 		btst	#14,d4			; ($C000) or 0, 0 ($8000)
 		if PRG_R6=$C000
 		beq.s	.done

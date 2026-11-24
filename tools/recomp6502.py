@@ -175,11 +175,12 @@ def mmc3_mode1(prg):
 def mmc3_apart(prg):
 	"""Does the code, in PRG mode 0, switch R6's bank at $8000 and R7's
 	at $A000 apart: R6 or R7 picked with an immediate value (LDA #$06,
-	#$07) stored to $8000, and its bank loaded from memory or as a
-	constant right after and stored to $8001 (as Mega Man 3)? As
-	NES_MMC3_PRG8 from tools/nesinfo.py, which looks for the same."""
+	#$07; maybe through an ORA of a zero page byte, as Panic Restaurant)
+	stored to $8000, and its bank loaded from memory or as a constant
+	right after and stored to $8001 (as Mega Man 3)? As NES_MMC3_PRG8
+	from tools/nesinfo.py, which looks for the same."""
 	return not mmc3_mode1(prg) and re.search(
-		rb'\xA9[\x06\x07](?:\x85.)?\x8D\x00\x80(?:\xA5.|\xAD..|\xA9.)(?:\x85.)?\x8D\x01\x80', prg, re.S) is not None
+		rb'\xA9[\x06\x07](?:\x85.)?(?:\x05.)?\x8D\x00\x80(?:\xA5.|\xAD..|\xA9.)(?:\x85.)?\x8D\x01\x80', prg, re.S) is not None
 
 
 @functools.lru_cache(maxsize=4)
@@ -447,6 +448,11 @@ def discover(prg, extra=()):
 				op = prg.byte(pc)
 				if op not in OPS:
 					print('recomp6502: unofficial opcode $%02X at $%04X: left to the interpreter' % (op, pc), file=sys.stderr)
+					break
+				if any(prg.byte(pc + k) is None for k in range(1, SIZE[OPS[op][1]])):
+					# (an 8 KB bank's last bytes, the rest in a bank switched apart)
+					print('recomp6502: instruction at $%04X runs past its bank: left to the interpreter' % pc,
+					      file=sys.stderr)
 					break
 				i = Insn(pc, op, prg)
 				insns[pc] = i
@@ -1743,6 +1749,9 @@ class Gen:
 			if len(own) <= 4:
 				ext = sorted(r - own)
 				found[pc] = sorted(own) + (ext if len(ext) <= 2 else [])
+				# (a JSR misdecoded from data can return where no
+				# instruction was decoded: that has no label to jump to)
+				found[pc] = [a for a in found[pc] if a in self.insns or a in self.ext]
 		return found
 
 	def idle_loops(self):
@@ -3606,12 +3615,12 @@ class Gen:
 		depth, work, heavy, sw = {}, [(f, 0)], False, False
 		while work:
 			pc, d = work.pop()
-			i = self.insns[pc]
+			i = self.insns.get(pc)		# (None: left to the interpreter)
 			if pc in depth:
 				if depth[pc] != d:
 					return None
 				continue
-			if len(depth) >= 500 or i.m in ('RTI', 'BRK', 'TSX', 'TXS'):
+			if i is None or len(depth) >= 500 or i.m in ('RTI', 'BRK', 'TSX', 'TXS'):
 				return None
 			depth[pc] = d
 			if self.switches(i):
@@ -4112,7 +4121,9 @@ def short_branches(out):
 		if any('*+' in x or '*-' in x for x in out[max(0, lo - 4):hi + 4]):
 			continue
 		span = sum(max_size(x) for x in out[lo:hi])
-		if (t > k and span <= 126) or (t <= k and span + 2 <= 126):
+		if t > k and span == 0:		# (to the next line: Bcc.s can't, and it's nothing)
+			res[k] = '%s; (b%s.w %s: the next line)' % (m.group(1), m.group(2), m.group(3))
+		elif (t > k and span <= 126) or (t <= k and span + 2 <= 126):
 			res[k] = '%sb%s.s %s' % (m.group(1), m.group(2), m.group(3))
 	return res
 

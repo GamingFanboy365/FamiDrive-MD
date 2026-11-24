@@ -63,9 +63,10 @@ the bugs found here were found by them, not by looking at screenshots.
 - Paced regression: the previous source and the new one, recompiled (and interpreted for a few
   games), random input by NMI count, NES RAM and the screen compared at every NMI, for all test
   games. Expect the same; some differences are known and harmless:
-  - a game's idle-loop random seed differs whenever its speed does (Life Force's `$2D`; Tiny
-    Toon's, Excitebike's and Ice Climber's too, which test copies with that code patched out
-    avoid);
+  - a game's idle-loop random seed differs whenever its speed does, even by a NOP's worth (Life
+    Force's `$2D`; Tiny Toon's, Excitebike's, Ice Climber's, Castlevania's `$6F`, Panic
+    Restaurant's `$18`, the Flintstones' random generator at `$0659`-`$0660`; test copies with
+    that store or call NOPed out avoid it);
   - a screen shown a frame apart (timing), with the same RAM.
 - Real-time comparison of old and new builds (frame hashes over a few thousand frames): where
   they part, look at the frames and say why.
@@ -96,10 +97,18 @@ made again too:
   RAM to `$FFFF7000` (folded to 2 KB) and counts NMIs at `$FFFF7800`; the pads are read there,
   so input goes by NMI count. Recompiled, an NMI that is late still waits for the game's wait
   loop. N = 4 recompiled, 16-32 interpreted. (NROM games need other addresses: their PRG-ROM is
-  copied to `$FFFF0000`-`$FFFF7FFF`.)
+  copied to `$FFFF0000`-`$FFFF7FFF`.) Where the interpreter can't finish a game frame in N
+  VBlanks (Panic Restaurant's screen clears), it falls behind and every NMI after compares
+  different frames: rather than a huge N, hold the NMI while the game's own "busy" flag is set
+  (a `tst.b` of that NES RAM byte before the NMI is made due; Panic Restaurant's is `$02`).
 - **Free MD RAM for logs**: in MMC3 games, `$FFFF6800`-`$FFFF7EFF` (the CHR cache ends at
   `$67FF`, the split's variables start at `$7F00`); the paced patch uses `$6800`-`$7FFF`. In
   banked games `$FFFF0000`-`$FFFF1FFF` is the PRG RAM, free if the game doesn't use it.
+- **Traces** for a game that crashes: a ring buffer of the 6502 PC with A, X, Y and S at each
+  interpreted instruction (a hook at `emuVint`, or in a recompiled build at `rcInterpStep`'s
+  `.step`), and of every `rcDispatch` target (`d4`), frozen when `mos_Null` (an illegal opcode)
+  runs. In PRG_8K builds the PC is `a0`'s low 15 bits plus `$8000`. The last dispatches before
+  the interpreter took over show where the game went astray.
 - **Hooks** in logging builds: save and restore the CCR (`move.w sr,-(sp)` ...
   `move.w (sp)+,ccr`) and every register used; translated code keeps 6502 flags in the CCR and
   `d3`. To hook translated code, run `tools/nesinfo.py` and `tools/recomp6502.py` yourself, add
@@ -128,6 +137,13 @@ made again too:
   build. Press by game frame or NMI count when comparing builds.
 - A ROM's header can be wrong: Dooly Bravo Land is dumped as mapper 71 but switches banks as
   UxROM does. Check what the game's code actually writes.
+- An MMC3 game's PRG layout is guessed from its code (`NES_MMC3_PRG1` and `NES_MMC3_PRG8` in
+  `out/nes_info.asm`, from `tools/nesinfo.py`). A wrong guess runs the game with the wrong bank
+  at $8000 or $A000 after a switch: Panic Restaurant, which picks R6 and R7 through `ORA $44`,
+  sat on a black screen, interpreted and recompiled alike. Check those lines first when an MMC3
+  game gets lost early.
+- `mos_Null` at the top of a profile is the interpreter stopped on an illegal opcode (it spins
+  in place): the 6502 jumped into data. Trace it (above).
 - Recompiled code can't be compared instruction by instruction, but paced RAM comparison with the
   interpreter finds its bugs. Two found that way: flags tested after a jump past a misdecoded
   instruction, and a loop fill's start taken from the wrong path. A third, an NMI held for a
@@ -153,9 +169,6 @@ made again too:
 
 From players' reports (games still to try, with what was seen):
 
-- Panic Restaurant (MMC3): the recompiled build fails to assemble, a label `L_8EBB` undefined
-  (several `jmp (L_8EBB).l`) and a "distance of 0" short branch in bank 5. A recompiler bug; a
-  good first one.
 - Mega Man 2 and the hack Super Mario Unlimited Deluxe: mapper 1 (MMC1), not supported yet.
 - Castlevania and Contra (both UxROM, CHR-RAM): bad graphics glitches reported.
 - The Flintstones (both, MMC3): the HUD is glitched, maybe the level's bottom layer.
