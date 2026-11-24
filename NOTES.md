@@ -163,7 +163,9 @@ made again too:
 - Mappers: `wrTo_PRG` (`emu/memory.asm`) by `cpuMapper`; the loader's list in `Fami_LoadRom`
   (`md.asm`); the recompiler's `Prg` and its store translation (`mapper2Write`, `mmc1Write`,
   `mmc3...`). MMC1's state shares `mmc3Regs`' bytes: the emulator's variables are full in
-  MMC3 builds with 8 KB banks (an assembler error says so).
+  MMC3 builds with 8 KB banks (an assembler error says so). MMC1 switching 32 KB at a time
+  (MMC1_32K): each bank a unit of its own (`prg32`), dispatch by `rcCurTable` for all of
+  $8000-$FFFF. CHR-ROM bank switches (MMC1, MMC3: CHR_BANKED) go through `chrUpdate`.
 - MMC3 split: `splitBegin`, `splitNext`, `splitDone`, the window plane (`emu/ppu.asm`).
 - CHR-RAM: `ppuChrRamWrite` (each `$2007` write); CHR-ROM bank switches: `chrUpdate`.
 
@@ -171,11 +173,6 @@ made again too:
 
 From players' reports (games still to try, with what was seen):
 
-- The hack Super Mario Unlimited Deluxe: MMC1 in its 32 KB PRG mode (control $06), 8 KB CHR-ROM
-  switches, PRG RAM. Mode 3 works (Mega Man 2); 32 KB mode needs its own image layout, a
-  recompiler layout with a unit for each 32 KB bank and no fixed bank, and dispatch to match
-  (`rcDispatch`, `rcInterp`, the NMI vector). Every 32 KB bank has the same vectors at its top,
-  which tells this mode from mode 3 at build time.
 - Castlevania and Contra (both UxROM, CHR-RAM): bad graphics glitches reported.
 - The Flintstones (both, MMC3): the HUD is glitched, maybe the level's bottom layer.
 - Pac-Man (Tengen, NROM): starts, then freezes or takes no input.

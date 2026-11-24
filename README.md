@@ -9,7 +9,8 @@ Nemul, originally made by Mairtrus. Credit to Mairtrus for the original work.
 
 - Runs on real hardware (the original Nemul did not)
 - Passes nestest's tests for all official 6502 opcodes
-- Mappers 0 (NROM), 1 (MMC1, with the last PRG bank fixed, as Mega Man 2 uses it), 2 (UxROM),
+- Mappers 0 (NROM), 1 (MMC1, with the last PRG bank fixed as Mega Man 2 uses it, or 32 KB at a
+  time as the hack Super Mario Unlimited Deluxe does), 2 (UxROM),
   3 (CNROM), 4 (MMC3, the ways Super Mario Bros. 2 and 3 and Mega Man 3 use it) and 71 (Camerica),
   with CHR-ROM or CHR-RAM, and PRG RAM at $6000-$7FFF for mappers 1, 2, 4 and 71
 - Working vertical scrolling using both scroll layers (the NES map height differs from the MD's)
@@ -73,9 +74,10 @@ hide or show it. Builds without `--fps` don't contain it.
 - CHR-ROM or CHR-RAM
 
 Anything else shows an error screen saying what isn't supported. MMC1 games work in its PRG
-mode 3, a 16 KB bank at $8000 and the last at $C000 (as at power on), with vertical or horizontal
-mirroring, and CHR-ROM in 8 KB or 4 KB banks; its other PRG modes show an error screen, and its
-one-screen mirroring isn't supported. Mapper 71 picks the PRG bank with a
+mode 3, a 16 KB bank at $8000 and the last at $C000 (as at power on), or if every 32 KB bank has
+the same vectors at its top, as a game that switches 32 KB at a time needs, in its 32 KB modes;
+with vertical or horizontal mirroring, and CHR-ROM in 8 KB or 4 KB banks. Its mode with the first
+bank fixed shows an error screen, and its one-screen mirroring isn't supported. Mapper 71 picks the PRG bank with a
 write anywhere at $8000-$FFFF but $9000-$9FFF, as FCEUX does: Camerica's own games write it at
 $C000-$FFFF, and some dumped as mapper 71 at $8000 (Dooly Bravo Land). Its one-screen mirroring at
 $9000-$9FFF (the BF9097 board, which Fire Hawk uses) isn't supported. MMC3 games work if they switch
@@ -188,6 +190,8 @@ handheld's differences.
   to about 40-45 where its big frogs are, the only stage tried. Interpreted, it's too slow, and
   crashes during its intro: an NMI comes while it plays the sound an earlier NMI held back, and
   switches banks under it (on a NES that sound is long done when the next NMI comes)
+- Super Mario Unlimited Deluxe (a hack, MMC1 switching 32 KB at a time) plays recompiled, at 60
+  game frames per second in World 1-1, the only level tried
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its

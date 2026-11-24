@@ -121,14 +121,17 @@ finished in #1 to #6.
   returns, say) still waits. VBlanks in MMC3's IRQ handler are held until
   its last RTI the same way, but only up to 8 (`irqVbls`).
 - [ ] **MMC1: the rest.** `mmc1Write` (`emu/memory.asm`) supports PRG mode 3
-  only (a 16 KB bank at $8000, the last at $C000: PRG_IMAGES, as UxROM);
-  modes 0-1 (32 KB at a time, which Super Mario Unlimited Deluxe uses) and 2
-  (the first bank fixed at $8000) show an error screen. Not yet either: its
-  one-screen mirroring, 512 KB boards (SUROM: the PRG bank's 256 KB half in
-  the CHR register), and turning PRG RAM off. CHR-ROM bank switches copy
-  and convert the whole 4 KB or 8 KB, as CNROM's do (`chrRefresh`,
-  `Nemul_LoadChr`), which takes a few frames. Recompiled code only takes
-  writes to $E000-$FFFF as PRG bank switches (`prg_switch`).
+  (a 16 KB bank at $8000, the last at $C000: PRG_IMAGES, as UxROM) or, for a
+  game whose 32 KB banks all have the same vectors at their top (`mmc1_32k`
+  in `tools/nesinfo.py` and `tools/recomp6502.py`: MMC1_32K), modes 0-1, 32
+  KB at a time; not both in one game, and mode 2 (the first bank fixed at
+  $8000) shows an error screen. Not yet either: its one-screen mirroring,
+  512 KB boards (SUROM: the PRG bank's 256 KB half in the CHR register),
+  and turning PRG RAM off. Recompiled code only takes writes to $E000-$FFFF
+  as PRG bank switches (`prg_switch`). In 32 KB mode each bank is translated
+  as a program of its own (`prg32`), and every RTS goes through
+  `rcDispatch`: a game switches banks in a routine every bank has at the
+  same place, and returns into the new bank's code.
 - [ ] **Mapper 71's one-screen mirroring.** The BF9097 board's `$9000`-`$9FFF`
   register (Fire Hawk) is ignored (`mapper71Write`): the planes only show
   horizontal or vertical mirroring (`ppuSetMirror`).
@@ -136,9 +139,10 @@ finished in #1 to #6.
   BNE delay loop in one step (`rcDelay`), but the interpreter runs it an
   instruction at a time: Dooly Bravo Land's intro, mostly delays, is far
   too slow to play interpreted.
-- [ ] **Other CHR switches.** MMC3 bank switches copy tiles made with the ROM
-  (`chrUpdate`), but a new BG pattern table (`chrLoadBg`) and CNROM's 8 KB
-  switches still convert every tile, which takes several frames.
+- [ ] **Other CHR switches.** MMC1's and MMC3's bank switches copy tiles
+  made with the ROM (`chrUpdate`), but a new BG pattern table (`chrLoadBg`)
+  and CNROM's 8 KB switches still convert every tile, which takes several
+  frames.
 
 ## Sound
 
