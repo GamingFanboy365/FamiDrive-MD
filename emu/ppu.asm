@@ -95,16 +95,24 @@ wrPPU_Ctrl:
 		andi.w	#$40,d4
 		andi.w	#$80,d5
 		or.w	d5,d4
-		move.w	d4,ppuChrBank(a4)
+		move.b	d4,ppuChrBank+1(a4)
+		move.b	d5,ppuChrBank(a4)	; (and the screen's wants its own)
 		move.w	d6,splitChrBank(a4)
 		st	sp0Due(a4)		; (sp0Split: once this write's nametable is set)
 		bra.s	.no_reload
 .bg_screen:
 		endif
-		move.w	d6,ppuChrBank(a4)
-		eor.b	d6,d5
-		bpl.s	.no_reload
-		bsr.w	chrLoadBg
+		move.b	d6,ppuChrBank(a4)	; the BG table the game wants (bit 15)
+		move.b	d6,d4			; and the sprites' (bit 6) now; the
+		andi.b	#$40,d4			; BG's (bit 7, the BG set's) now, but
+		andi.b	#$80,d5			; in the NMI handler at its RTI, or
+		or.b	d5,d4			; with the background off once it's on
+		move.b	d4,ppuChrBank+1(a4)	; (chrBgDue): as the NES draws with it.
+		tst.w	cpuFamiVint(a4)		; Contra and Castlevania pick table 0
+		bne.s	.no_reload		; in their VBlank work and 1 again, each
+		btst	#3,ppuMaskOn+1(a4)	; time 256 tiles converted (chrLoadBg),
+		beq.s	.no_reload		; and the screen showed either
+		bsr.w	chrBgSet
 .no_reload:
 
 	; PPU VRAM increment
@@ -166,6 +174,10 @@ wrPPU_Mask:
 		move.w	d7,d6
 		andi.w	#$18,d6			; background or sprites shown
 		move.w	d6,ppuMaskOn(a4)
+		btst	#3,d6			; the background on: the BG table the
+		beq.s	.bg_off			; game picked meanwhile (wrPPU_Ctrl)
+		bsr.w	chrBgSet
+.bg_off:
 	; The VDP side waits for VBlank: a game running slower than the NES
 	; can write $2001 (rendering off for its VRAM updates) mid-screen,
 	; which on the MD would blank the lines being drawn.
@@ -524,6 +536,7 @@ ppuFrameStart:
 		clr.w	hsCurN(a4)
 		clr.w	ppuSp0State(a4)
 		clr.l	ppuRdSite(a4)
+		clr.l	ppuRdSite2(a4)
 		clr.w	ppuSp0Wait(a4)
 		clr.w	ppuScrollSet(a4)
 		if MMC3_IRQ
@@ -738,6 +751,7 @@ wrPPU_Addr:
 		moveq	#0,d6			; never a split by itself
 		bsr	ppuXChanged
 		clr.l	ppuRdSite(a4)		; a $2002 read before this one was for
+		clr.l	ppuRdSite2(a4)
 					; the latch, not a wait for sprite 0
 		move.w	#$2000,sr
 		emuNext
@@ -806,6 +820,7 @@ wrPPU_AddrPair:
 		move.w	d6,vdpScrlX+2(a4)
 .done:
 		clr.l	ppuRdSite(a4)
+		clr.l	ppuRdSite2(a4)
 		move.w	#$2000,sr
 		rts
 		endif
@@ -1327,6 +1342,25 @@ Nemul_LoadChr:
 		movem.l	(sp)+,d4/d6
 		rts
 
+; The BG set for the table the game picked last ($2000 bit 4: ppuChrBank
+; bit 15), if it isn't for that one already (bit 7). chrBgDue keeps d4
+; and d5: where the NES starts drawing (the NMI handler's RTI, a poll
+; of $2002 that sees VBlank over)
+chrBgDue:
+		movem.l	d4-d5,-(sp)
+		bsr.s	chrBgSet
+		movem.l	(sp)+,d4-d5
+		rts
+chrBgSet:
+		move.b	ppuChrBank(a4),d5
+		move.b	ppuChrBank+1(a4),d4
+		eor.b	d4,d5
+		bpl.s	.same
+		eori.b	#$80,ppuChrBank+1(a4)
+		bra.s	chrLoadBg
+.same:
+		rts
+
 ; The BG set, from the table $2000 bit 4 picks (ppuChrBank bit 7)
 chrLoadBg:
 		movem.l	d4/d6,-(sp)
@@ -1395,7 +1429,7 @@ chrToSprites:
 ; ----------------------------------------------------------------
 
 chrConvert:
-		if (NES_MAPPER=4)&&(NES_CHR8<>0)
+		if CHR_BANKED
 		bsr.w	chrFlush		; the queued tiles first (chrUpdate)
 		endif
 		movem.l	d0-d3/d6-d7/a0,-(sp)

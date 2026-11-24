@@ -5,12 +5,13 @@ and its CHR-ROM size (for the CHR banks' mask).
 Fami_LoadRom checks the ROM again as it starts, and shows an error screen for what isn't
 supported; for a ROM too broken to read here, this writes zeros.
 
-For an MMC3 game with CHR-ROM it also writes chr_md.bin next to OUT_ASM: the CHR-ROM as MD
+For an MMC1 or MMC3 game with CHR-ROM it also writes chr_md.bin next to OUT_ASM: the CHR-ROM as MD
 tiles, for the BG and then for sprites (CHR_MD in md.asm), which its bank switches copy
 instead of converting; then a word for each tile, its ID: the number of the first tile
 like it (CHR_ID), by which they tell the tiles that change (chrUpdate in emu/ppu.asm).
 
-For an MMC3 game it also tells, from its code, whether it puts the MMC3 in PRG mode 1
+For an MMC1 game it tells whether it switches PRG-ROM 32 KB at a time (MMC1_32K in
+md.asm). For an MMC3 game it also tells, from its code, whether it puts the MMC3 in PRG mode 1
 (8 KB banks at $A000 and $C000, as Super Mario Bros. 3) or switches the 8 KB banks at
 $8000 and $A000 apart in mode 0 (as Mega Man 3; either way PRG_8K in md.asm, a frame for
 each 8 KB bank instead of an image for each 16 KB pair), and whether it turns the scanline
@@ -38,6 +39,20 @@ def mmc3_use(prg):
                                     prg, re.S) is not None
     irq = re.search(rb'[\x8D\x8E\x8C]\x01\xE0', prg) is not None
     return mode1, apart, irq
+
+
+def mmc1_32k(prg):
+    """Does an MMC1 game switch its PRG-ROM 32 KB at a time (PRG modes 0 and 1)? Then each 32
+    KB bank is all of $8000-$FFFF in its turn, and needs the NMI, reset and IRQ vectors at its
+    top: the vectors of every odd 16 KB bank are the same, and an even bank's differ (Super
+    Mario Unlimited Deluxe). A game in PRG mode 3 (the last bank fixed at $C000, as Mega Man 2)
+    needs them only in the last bank, and if it has them in others, has them in every bank.
+    (tools/recomp6502.py looks for the same.)"""
+    n = len(prg) // 0x4000
+    if n < 4 or n % 2:
+        return False
+    vec = [prg[b * 0x4000 + 0x3FFA:b * 0x4000 + 0x4000] for b in range(n)]
+    return len(set(vec[1::2])) == 1 and any(v != vec[1] for v in vec[0::2])
 
 
 def sp0_split(prg):
@@ -90,12 +105,14 @@ with open(sys.argv[2], 'w') as out:
     out.write('NES_MMC3_IRQ\tequ %d\t\t; MMC3 scanline IRQ\n' % irq)
     out.write('NES_SP0_SPLIT\tequ %d\t\t; a $2000 write after a sprite 0 hit (MMC3: the split\'s code)\n'
               % (mapper == 4 and prg16 > 0 and sp0_split(rom[16:16 + prg16 * 0x4000])))
+    out.write('NES_MMC1_32K\tequ %d\t\t; MMC1 PRG-ROM in 32 KB banks (its PRG modes 0 and 1)\n'
+              % (mapper == 1 and prg16 > 0 and mmc1_32k(rom[16:16 + prg16 * 0x4000])))
     out.write('NES_NMI_TAIL\tequ $%04X\t\t; where the NMI handler goes on after its RTI (0: nowhere)\n'
               % (nmi_tail(rom[16:16 + prg16 * 0x4000]) if prg16 else 0))
 
 # MD tiles: 4 bits a pixel, the leftmost in the high bits (as ppuChrSpread in
 # emu/ppu_tables.asm makes them); NES colors 0-3, sprites' opaque ones +8
-if mapper == 4 and chr8 and len(rom) >= 16 + prg16 * 0x4000 + chr8 * 0x2000:
+if mapper in (1, 4) and chr8 and len(rom) >= 16 + prg16 * 0x4000 + chr8 * 0x2000:
     chr_rom = rom[16 + prg16 * 0x4000:16 + prg16 * 0x4000 + chr8 * 0x2000]
     spread = [sum((b >> k & 1) << (4 * k) for k in range(8)) for b in range(256)]
     bg, spr = bytearray(), bytearray()

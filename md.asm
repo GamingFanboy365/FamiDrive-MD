@@ -17,7 +17,9 @@ FPS		equ 0			; 1: FPS counter (build.sh --fps, needs RECOMP)
 		include	"system/md/const.asm"	; RAM / Variables are here
 		include	"system/md/map.asm"	; Genesis hardware map
 		include	"out/nes_info.asm"	; the NES ROM's mapper and PRG size (tools/nesinfo.py)
-PRG_BANKED	equ (NES_MAPPER=2)||(NES_MAPPER=4)||(NES_MAPPER=71)	; PRG-ROM in 16 KB banks: PRG_IMAGES
+PRG_BANKED	equ (NES_MAPPER=1)||(NES_MAPPER=2)||(NES_MAPPER=4)||(NES_MAPPER=71)	; PRG-ROM in 16 KB banks: PRG_IMAGES
+CHR_BANKED	equ ((NES_MAPPER=1)||(NES_MAPPER=4))&&(NES_CHR8<>0)	; CHR-ROM in banks: MD tiles made with the ROM (CHR_MD, chrUpdate)
+MMC1_32K	equ (NES_MAPPER=1)&&(NES_MMC1_32K<>0)	; MMC1 in its PRG modes 0-1: PRG_IMAGES are its 32 KB banks
 PRG_8K		equ (NES_MAPPER=4)&&((NES_MMC3_PRG1<>0)||(NES_MMC3_PRG8<>0))	; MMC3, R6's and R7's 8 KB banks apart: PRG_FRAMES
 		if NES_MMC3_PRG1<>0
 PRG_R6		equ $C000		; where R6's bank is: PRG mode 1 (R7's at $A000, the last two at $8000 and $E000),
@@ -36,6 +38,13 @@ prgBankMask	set prgBankMask*2
 		endm
 prgBankMask	set prgBankMask-1
 prgBank8Mask	equ prgBankMask*2+1	; and its 8 KB banks'
+		if MMC1_32K
+prgImages	equ NES_PRG16/2		; PRG_IMAGES: one for each 32 KB bank (MMC1_32K),
+prgImageMask	equ prgBankMask>>1
+		else
+prgImages	equ NES_PRG16		; or for each 16 KB bank at $8000
+prgImageMask	equ prgBankMask
+		endif
 chrBankMask	set 1			; its CHR-ROM's 1 KB banks, rounded up likewise
 		while chrBankMask<NES_CHR8*8
 chrBankMask	set chrBankMask*2
@@ -189,10 +198,13 @@ mdLines		ds.w 1			; lines the console draws a frame: 262 on a Mega Drive
 vOddLine	ds.w 1			; line for odd V values in VBlank (AtGames), -1: none
 vLineTbl	ds.w 512		; lines since VBlank began, for each V counter value
 				; (the second half: ppuMeasureLines' scratch)
+ppuRdSite2	equ vLineTbl+512*2-4	; and after (in that scratch): where the $2002 read before the last came from (rdPPU_Status)
 cpuPrgImg	ds.l 1			; $8000-$FFFF: RAM_Fami_ROM, or a PRG_IMAGES image (a1)
 cpuWram		ds.w 1			; 1: PRG RAM at $6000-$7FFF (RAM_Fami_WRAM)
 mmc3Select	ds.w 1			; MMC3 (mapper 4): the last $8000 write
 mmc3Regs	ds.b 8			; and its bank registers R0-R7 (mmc3Write)
+mmc1Shift	equ mmc3Regs		; MMC1 (mapper 1), in MMC3's place: the serial port's bits so far, below a 1 (mmc1Write)
+mmc1Ctrl	equ mmc3Regs+1		; and its control register
 rcCurTable	ds.l 1			; recompiled banked PRG: the bank at $8000's rcTable (prgSwitch, rcPrgSlot)
 chrDmaHead	ds.w 1			; MMC3: the first MD tiles queued for VRAM (RAM_Fami_ChrDma)
 chrDmaTail	ds.w 1			; and where the next go
@@ -674,8 +686,8 @@ MD_Vint:
 		move.w	(sp)+,4(a6)
 .same_palette:
 		jsr	hsApply				; horizontal scroll
-		if (NES_MAPPER=4)&&(NES_CHR8<>0)
-		jsr	(chrVblank).l			; MMC3: tiles that changed (chrUpdate)
+		if CHR_BANKED
+		jsr	(chrVblank).l			; MMC1, MMC3: tiles that changed (chrUpdate)
 		if MMC3_IRQ
 		jsr	(splitVblank).l			; and below the IRQ's line: the window
 		move.w	partLine(a4),d0			; a strip of other rows above the split
@@ -803,6 +815,8 @@ Fami_LoadRom:
 		or.b	d6,d1
 		move.w	d1,d5			; keep for cpuMapper
 		beq.s	.mapper_ok
+		cmpi.b	#1,d1
+		beq.s	.mapper_ok
 		cmpi.b	#2,d1
 		beq.s	.mapper_ok
 		cmpi.b	#3,d1
@@ -857,11 +871,18 @@ Fami_LoadRom:
 		if PRG_8K
 		move.l	#PRG_FRAMES+$8000,cpuPrgImg(a3)	; bank 1 at $A000 (R7) and 0
 		move.l	#PRG_FRAMES,prgFrameC(a3)	; at PRG_R6 (R6) to begin with
+		elseif MMC1_32K
+		move.l	#PRG_IMAGES+(prgImages-1)*$8000,cpuPrgImg(a3) ; the last 32 KB: its
+						; last 16 KB at $C000, as at power on
 		else
 		move.l	#PRG_IMAGES,cpuPrgImg(a3) ; bank 0 at $8000 to begin with
 		endif
 		move.l	#$00020405,mmc3Regs(a3)	; MMC3: as the CHR copied below (the
 		move.l	#$06070001,mmc3Regs+4(a3) ; first 8 KB) and PRG image 0
+		if NES_MAPPER=1
+		move.b	#$10,mmc1Shift(a3)	; MMC1: no bits yet, PRG mode 3 (the
+		move.b	#$0C,mmc1Ctrl(a3)	; last bank at $C000)
+		endif
 		if MMC3_IRQ
 		lea	(RAM_Fami_Split).l,a5	; no split yet (MMC3_IRQ)
 		moveq	#$100/4-1,d7
@@ -882,8 +903,8 @@ Fami_LoadRom:
 .clrwram:
 		move.l	d7,(a5)+
 		dbf	d1,.clrwram
-		if (NES_MAPPER=4)&&(NES_CHR8<>0)
-		lea	(RAM_Fami_ChrCache).l,a5 ; MMC3: no bank switches seen yet
+		if CHR_BANKED
+		lea	(RAM_Fami_ChrCache).l,a5 ; no bank switches seen yet
 		moveq	#32-1,d1		; (chrUpdate)
 .chr_cache:
 		clr.l	(a5)
@@ -927,8 +948,8 @@ Fami_LoadRom:
 		move.w	#1,ppuChrRam(a3)
 		bra.s	.chr_done
 .chr_rom:
-		if (NES_MAPPER=4)&&(NES_CHR8<>0)
-		lea	chrSlotPtr(a3),a5	; MMC3: the CHR-ROM each 1 KB of the
+		if CHR_BANKED
+		lea	chrSlotPtr(a3),a5	; the CHR-ROM each 1 KB of the
 		move.l	a4,d7			; pattern tables shows (chrUpdate),
 		moveq	#8-1,d1			; the first 8 KB as copied below
 .chr_slots:
@@ -1253,11 +1274,15 @@ prgImage	set prgImage+1
 		align $8000
 PRG_IMAGES:
 prgImage	set 0
+		if MMC1_32K			; (MMC1's 32 KB banks as they are)
+		binclude "out/nes_rom.bin",$10,NES_PRG16*$4000
+		else
 		rept NES_PRG16
 		binclude "out/nes_rom.bin",$10+prgImage*$4000,$4000
 		binclude "out/nes_rom.bin",$10+(NES_PRG16-1)*$4000,$4000
 prgImage	set prgImage+1
 		endm
+		endif
 		endif
 
 ; ----------------------------------------------------------------
@@ -1268,7 +1293,7 @@ prgImage	set prgImage+1
 ; tile, its ID: the number of the first tile like it.
 ; ----------------------------------------------------------------
 
-		if (NES_MAPPER=4)&&(NES_CHR8<>0)
+		if CHR_BANKED
 		rompad	(*+$1FFFF)&$FFFE0000	; 128 KB aligned (a DMA can't cross 128 KB)
 CHR_MD:		binclude "out/chr_md.bin"
 CHR_ID		equ CHR_MD+NES_CHR8*$8000

@@ -9,6 +9,9 @@
 ; build (emuNext); so do the interpreter's instructions' routines,
 ; which rcInterpStep calls in turn. (RAM_EmuLoop is an rts too.)
 ;
+; MMC1 32 KB at a time (MMC1_32K): each bank's rcTable is for all of
+; $8000-$FFFF, and there is no fixed bank's.
+;
 ; Banked PRG (PRG_BANKED): each bank's code has its own rcTable,
 ; for $8000-$BFFF while it's at $8000 (rcCurTable, set by
 ; prgSwitch); the fixed bank's rcTable is for $C000-$FFFF.
@@ -112,6 +115,22 @@ rcDispatch:
 		andi.w	#$7FFF,d6		; frame (prgPc)
 		bsr.w	prgPc
 		bra.w	rcInterp
+		elseif MMC1_32K
+		moveq	#0,d5
+		move.w	d4,d5
+		bpl.s	.ram			; below $8000
+		andi.w	#$7FFF,d5		; MMC1 32 KB at a time: all of it is
+		lsl.l	#2,d5			; the bank's (rcCurTable)
+		movea.l	rcCurTable(a4),a5
+		move.l	(a5,d5.l),d5
+		beq.s	.interpret
+		movea.l	d5,a5
+		jmp	(a5)
+.interpret:
+		andi.l	#$7FFF,d4		; not translated: interpret it, in
+		movea.l	a1,a0			; the image
+		adda.l	d4,a0
+		bra.s	rcInterp
 		elseif PRG_BANKED
 		moveq	#0,d5
 		move.w	d4,d5
@@ -221,7 +240,11 @@ rcInterpStep:					; and returns: emuNext)
 		tst.w	FamiMdVint(a4)
 		bne.s	.vblank
 		move.l	d4,d5			; translated?
-		if PRG_BANKED
+		if MMC1_32K
+		movea.l	rcCurTable(a4),a5	; (MMC1, 32 KB: all of it the bank's)
+		andi.l	#$7FFF,d5
+		lsl.l	#2,d5
+		elseif PRG_BANKED
 		lea	(rcTable).l,a5		; $C000-$FFFF: the fixed bank's code
 		btst	#14,d5
 		bne.s	.fixed
@@ -240,7 +263,7 @@ rcInterpStep:					; and returns: emuNext)
 		movea.l	-4(a5),a5		; and an entry? (rcSafe: a bit for
 .safe:						; each address, by its offset, set at
 		move.w	d4,d5			; entries)
-		if PRG_BANKED
+		if PRG_BANKED&&(MMC1_32K=0)
 		andi.w	#$3FFF,d5
 		else
 		andi.w	#rcPrgMask,d5
@@ -346,7 +369,9 @@ rcDispatchCC:
 		bmi.w	rcDispatch		; $A000-$BFFF
 		else
 rcDispatchCF:
-		if PRG_BANKED
+		if MMC1_32K			; (MMC1, 32 KB: nothing is fixed)
+		bra.w	rcDispatch
+		elseif PRG_BANKED
 		btst	#14,d4
 		beq.w	rcDispatch
 		endif
@@ -381,6 +406,10 @@ rcDispatchC:
 .a:
 		movea.l	rcCurTable(a4),a5
 .look:
+		elseif MMC1_32K
+		andi.w	#$7FFF,d5
+		lsl.l	#2,d5
+		movea.l	rcCurTable(a4),a5
 		elseif PRG_BANKED
 		lsl.w	#2,d5
 		bcs.s	.fixed
@@ -630,6 +659,7 @@ rcRti:
 		beq.s	.outer
 		subq.w	#1,cpuFamiVint(a4)	; of an NMI taken in the NMI handler
 		bne.w	.back			; (rcNmiDue): back in that handler
+		jsr	chrBgDue		; (the BG table its VBlank work picked)
 .outer:
 		if NMI_TAIL
 		bsr.w	rcTailStart

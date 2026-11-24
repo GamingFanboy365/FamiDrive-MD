@@ -175,11 +175,23 @@ rdPPU_Status:
 		add.l	a0,d5			; 6502 PC when interpreted: which read
 		move.w	ppuSp0State(a4),d6
 		cmp.l	ppuRdSite(a4),d5
-		beq.s	.again
+		bne.s	.other_site
+		clr.l	ppuRdSite2(a4)		; (one place again: not a loop of two)
+		bra.s	.again
+.other_site:
+		cmpi.w	#1,d6			; or, waiting for the hit, from where
+		bne.s	.one_site		; the read before that came, each place
+		cmp.l	ppuRdSite2(a4),d5	; read once in turn: a loop with two
+		beq.s	.again_2		; (Castlevania's: one waits for the
+.one_site:					; hit, one ends it)
+		move.l	ppuRdSite(a4),ppuRdSite2(a4)
 		move.l	d5,ppuRdSite(a4)
 		cmpi.w	#1,d6			; a first read: as it is
-		beq.s	.no_hit_d5
-		bra.s	.hit
+		beq.w	.no_hit_d5
+		bra.w	.hit
+.again_2:
+		move.l	ppuRdSite(a4),ppuRdSite2(a4)
+		move.l	d5,ppuRdSite(a4)
 .again:
 		cmpi.w	#1,d6			; read again: let it change
 		bhi.s	.hit			; (once hit, it stays set)
@@ -188,6 +200,13 @@ rdPPU_Status:
 		bmi.s	.hit			; clear): a loop waiting for that ends,
 						; one for the hit flag reads again
 		move.w	#1,ppuSp0State(a4)	; VBlank is over: the hit flag clears,
+		tst.w	hsCurN(a4)		; (scroll changes so far were VBlank
+		beq.s	.no_early		; work, here longer than VBlank: the
+		clr.w	hsCurN(a4)		; top's, not splits. Castlevania sets
+		move.w	vdpScrlX(a4),hsTopCur(a4)	; both $2005 bytes, and later
+		move.w	vdpScrlX(a4),hsTopCur+2(a4)	; its status bar's)
+.no_early:
+		bsr.w	chrBgDue		; (and the BG table it picked)
 		bsr.w	ppuLine			; and the NES is at the top of the
 		add.w	vNmi(a4),d5		; screen, line 0 (Excitebike's scroll
 		bpl.s	.top_lo			; splits are timed from here)
@@ -242,6 +261,7 @@ rdPPU_Status:
 		cmp.l	ppuRdSite(a4),d4
 		beq.s	.hid_again
 		move.l	d4,ppuRdSite(a4)
+		clr.l	ppuRdSite2(a4)
 		clr.w	ppuSp0Wait(a4)
 		bra.w	.no_hit
 .hid_again:
@@ -354,6 +374,10 @@ wrTo_WRAM:
 
 wrTo_PRG:
 		move.w	cpuMapper(a4),d5
+		if NES_MAPPER=1
+		cmpi.w	#1,d5
+		beq.w	mmc1Write
+		endif
 		subq.w	#2,d5
 		beq.s	mapper2Write
 		subq.w	#1,d5
@@ -420,6 +444,110 @@ mapper71Write:
 		cmpi.b	#$90,d5			; $9000-$9FFF
 		bne.s	mapper2Write
 		emuNext
+
+; --------------------------------------------------------
+; Mapper $01, MMC1: a serial port. A write with bit 7 set clears it
+; (and sets PRG mode 3); otherwise bit 0 goes in, and the fifth one
+; sets the register that address bits 14-13 pick: $8000 control
+; (bits 1-0 mirroring: 2 vertical, 3 horizontal, 0 and 1 one-screen,
+; which isn't supported; 3-2 PRG mode; 4 CHR mode: 8 KB, or 4 KB
+; each), $A000 and $C000 CHR banks (CHR-ROM: its MD tiles made with
+; the ROM, as MMC3's, chrUpdate; CHR-RAM: nothing), $E000 the 16 KB
+; PRG bank at $8000 (bit 4, PRG RAM off, is ignored). PRG mode 3 is
+; supported, the last bank at $C000 (as at power on), or for a game
+; that switches 32 KB at a time (MMC1_32K, nesinfo.py), modes 0 and 1
+; (and 3 as it starts: a 32 KB game's code to set its mode is at the
+; top of each bank); a game's other modes show an error.
+; Recompiled code calls this directly, with d6 the address' high byte.
+;
+; d6.b - address bits 15-8
+; d7.b - value
+; --------------------------------------------------------
+
+		if NES_MAPPER=1
+mmc1Write:
+		tst.b	d7
+		bpl.s	.bit
+		move.b	#$10,mmc1Shift(a4)	; cleared, and PRG mode 3
+		ori.b	#$0C,mmc1Ctrl(a4)
+		emuNext
+.bit:
+		move.b	mmc1Shift(a4),d5
+		lsr.b	#1,d7			; bit 0 in at the top; out comes the
+		roxr.b	#1,d5			; 1 below the bits so far after the
+		bcs.s	.full			; fifth
+		move.b	d5,mmc1Shift(a4)
+		emuNext
+.full:
+		move.b	#$10,mmc1Shift(a4)
+		lsr.b	#3,d5			; the 5 bits
+		andi.b	#$60,d6
+		beq.w	.control
+		cmpi.b	#$60,d6
+		bne.s	.chr
+		andi.w	#$0F,d5			; $E000: the PRG bank
+		if MMC1_32K
+		lsr.b	#1,d5			; (32 KB: bit 0 doesn't count)
+		endif
+		bsr.w	prgSwitch
+		emuNext
+.chr:
+		tst.w	ppuChrRam(a4)		; $A000, $C000: CHR-ROM banks (CHR-RAM:
+		bne.w	.done			; nothing)
+		moveq	#0,d4			; CHR0 at $0000
+		btst	#4,mmc1Ctrl(a4)
+		bne.s	.chr_4k
+		cmpi.b	#$20,d6			; 8 KB mode: CHR0's even 4 KB bank and
+		bne.w	.done			; the next, CHR1 does nothing
+		andi.b	#$1E,d5
+		move.w	#$2000,d6
+		bra.s	.chr_copy
+.chr_4k:
+		cmpi.b	#$20,d6			; 4 KB mode: CHR1 at $1000
+		beq.s	.chr_4k_0
+		move.w	#$1000,d4
+.chr_4k_0:
+		move.w	#$1000,d6
+.chr_copy:
+		andi.l	#chrBankMask>>2,d5	; (the ROM's 4 KB banks)
+		movem.l	d0/a0,-(sp)
+		movea.l	emuChrRom(a4),a0
+		lsl.l	#8,d5
+		lsl.l	#4,d5
+		adda.l	d5,a0
+		move.w	d6,d0			; its MD tiles made with the ROM, 2 KB
+		rol.w	#5,d0			; at a time (chrUpdate, as MMC3's)
+.chr_2kb:
+		move.w	#$800,d6
+		bsr.w	chrUpdate
+		lea	$800(a0),a0
+		addi.w	#$800,d4
+		subq.w	#1,d0
+		bne.s	.chr_2kb
+		movem.l	(sp)+,d0/a0
+		emuNext
+.control:
+		move.b	d5,mmc1Ctrl(a4)
+		moveq	#$0C,d7
+		and.b	d5,d7
+		if MMC1_32K=0
+		cmpi.b	#$0C,d7			; PRG mode 3 only (MMC1_32K: modes 0-1,
+		bne.s	.prg_mode		; and 3 for its reset code, which every
+		endif				; 32 KB bank has at its top)
+		btst	#1,d5			; mirroring 2, 3: vertical (ppuMirror
+		beq.s	.done			; 1), horizontal (0)
+		moveq	#1,d7
+		and.b	d5,d7
+		eori.b	#1,d7
+		bsr.w	ppuSetMirror
+.done:
+		emuNext
+		if MMC1_32K=0
+.prg_mode:
+		lea	(errStrMmc1Prg).l,a0
+		jmp	(MD_ShowError).l
+		endif
+		endif
 
 ; --------------------------------------------------------
 ; Mapper $04, MMC3. Its registers go by address bits 14-13 and 0:
@@ -729,10 +857,10 @@ mmc3Prg1:
 
 prgSwitch:
 		if PRG_BANKED&&(PRG_8K=0)		; (PRG mode 1: mmc3WrData)
-		andi.l	#prgBankMask,d5
-		cmpi.w	#NES_PRG16,d5
+		andi.l	#prgImageMask,d5
+		cmpi.w	#prgImages,d5
 		bcs.s	.bank_ok
-		subi.w	#NES_PRG16,d5
+		subi.w	#prgImages,d5
 .bank_ok:
 		move.l	d5,d6			; image: bank * $8000
 		swap	d6

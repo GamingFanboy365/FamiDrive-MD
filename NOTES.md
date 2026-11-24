@@ -161,16 +161,22 @@ made again too:
   on the way back, not on the way in), `plans` (fills, versioned loops; `body_plan` in routine
   copies), routine copies and inlined routines, `rcDelay` for delay loops.
 - Mappers: `wrTo_PRG` (`emu/memory.asm`) by `cpuMapper`; the loader's list in `Fami_LoadRom`
-  (`md.asm`); the recompiler's `Prg` and its store translation (`mapper2Write`, `mmc3...`).
+  (`md.asm`); the recompiler's `Prg` and its store translation (`mapper2Write`, `mmc1Write`,
+  `mmc3...`). MMC1's state shares `mmc3Regs`' bytes: the emulator's variables are full in
+  MMC3 builds with 8 KB banks (an assembler error says so). MMC1 switching 32 KB at a time
+  (MMC1_32K): each bank a unit of its own (`prg32`), dispatch by `rcCurTable` for all of
+  $8000-$FFFF. CHR-ROM bank switches (MMC1, MMC3: CHR_BANKED) go through `chrUpdate`.
 - MMC3 split: `splitBegin`, `splitNext`, `splitDone`, the window plane (`emu/ppu.asm`).
-- CHR-RAM: `ppuChrRamWrite` (each `$2007` write); CHR-ROM bank switches: `chrUpdate`.
+- CHR-RAM: `ppuChrRamWrite` (each `$2007` write); CHR-ROM bank switches: `chrUpdate`. The BG
+  pattern table: `wrPPU_Ctrl` keeps the one wanted, `chrBgSet`/`chrBgDue` convert it where the
+  NES would draw with it (`ppuChrBank`: bit 7 the BG set's table, bit 15 the wanted one).
+- Sprite 0 and the top of the screen: `rdPPU_Status` (`ppuSp0State`, the read sites
+  `ppuRdSite` and `ppuRdSite2`, the latter in `vLineTbl`'s scratch half).
 
 ## Open requests
 
 From players' reports (games still to try, with what was seen):
 
-- Mega Man 2 and the hack Super Mario Unlimited Deluxe: mapper 1 (MMC1), not supported yet.
-- Castlevania and Contra (both UxROM, CHR-RAM): bad graphics glitches reported.
 - The Flintstones (both, MMC3): the HUD is glitched, maybe the level's bottom layer.
 - Pac-Man (Tengen, NROM): starts, then freezes or takes no input.
 - Star Wars: The Empire Strikes Back (MMC3): slight graphics issues. Dig Dug (NROM): a glitch

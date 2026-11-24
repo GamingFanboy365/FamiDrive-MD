@@ -120,6 +120,18 @@ finished in #1 to #6.
   Force). A game that counts on one anywhere else (a handler that never
   returns, say) still waits. VBlanks in MMC3's IRQ handler are held until
   its last RTI the same way, but only up to 8 (`irqVbls`).
+- [ ] **MMC1: the rest.** `mmc1Write` (`emu/memory.asm`) supports PRG mode 3
+  (a 16 KB bank at $8000, the last at $C000: PRG_IMAGES, as UxROM) or, for a
+  game whose 32 KB banks all have the same vectors at their top (`mmc1_32k`
+  in `tools/nesinfo.py` and `tools/recomp6502.py`: MMC1_32K), modes 0-1, 32
+  KB at a time; not both in one game, and mode 2 (the first bank fixed at
+  $8000) shows an error screen. Not yet either: its one-screen mirroring,
+  512 KB boards (SUROM: the PRG bank's 256 KB half in the CHR register),
+  and turning PRG RAM off. Recompiled code only takes writes to $E000-$FFFF
+  as PRG bank switches (`prg_switch`). In 32 KB mode each bank is translated
+  as a program of its own (`prg32`), and every RTS goes through
+  `rcDispatch`: a game switches banks in a routine every bank has at the
+  same place, and returns into the new bank's code.
 - [ ] **Mapper 71's one-screen mirroring.** The BF9097 board's `$9000`-`$9FFF`
   register (Fire Hawk) is ignored (`mapper71Write`): the planes only show
   horizontal or vertical mirroring (`ppuSetMirror`).
@@ -127,9 +139,16 @@ finished in #1 to #6.
   BNE delay loop in one step (`rcDelay`), but the interpreter runs it an
   instruction at a time: Dooly Bravo Land's intro, mostly delays, is far
   too slow to play interpreted.
-- [ ] **Other CHR switches.** MMC3 bank switches copy tiles made with the ROM
-  (`chrUpdate`), but a new BG pattern table (`chrLoadBg`) and CNROM's 8 KB
-  switches still convert every tile, which takes several frames.
+- [ ] **BG pattern table switches mid-screen, elsewhere.** A new BG table is
+  taken where the NES would start drawing with it (`chrBgSet`: with the
+  background on, the NMI handler's RTI, or a `$2002` poll that sees VBlank
+  over; `chrBgDue`), and converted whole (`chrLoadBg`). A switch partway
+  down the screen is only a split in MMC3 games, after a sprite 0 hit
+  (`sp0Split`); elsewhere the screen shows the last one.
+- [ ] **Other CHR switches.** MMC1's and MMC3's bank switches copy tiles
+  made with the ROM (`chrUpdate`), but a new BG pattern table (`chrLoadBg`)
+  and CNROM's 8 KB switches still convert every tile, which takes several
+  frames.
 
 ## Sound
 
@@ -204,6 +223,14 @@ finished in #1 to #6.
   points than on the NES.
 - [ ] **Unofficial opcodes** aren't translated; code using them runs in the
   interpreter.
+- [ ] **Code reached only through tables, in banks.** Contra's recompiled
+  build finds 7483 instructions of its 128 KB, and much of its game runs
+  interpreted (`rcInterpStep`, a quarter of the time in its attract demos):
+  the fixed bank's code goes to its banks' routines ($B419, $B523, $BA7C...)
+  through address tables the recompiler doesn't follow there, so those banks'
+  units never see them as entries. It runs at about 25-50 game frames a
+  second there. The interpreted addresses `rcDispatch` sees, or tables of
+  addresses that fall on a bank's plausible code, could be entries.
 - [ ] **FPS counter in more games.** A game frame ends, for the counter, where
   a wait loop of loads, compares and branches is left (`idle_loops` in
   `tools/recomp6502.py`). Panic Restaurant's wait loop calls a routine that
