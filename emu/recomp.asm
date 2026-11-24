@@ -659,6 +659,7 @@ rcRti:
 		beq.s	.outer
 		subq.w	#1,cpuFamiVint(a4)	; of an NMI taken in the NMI handler
 		bne.w	.back			; (rcNmiDue): back in that handler
+		jsr	chrBgDue		; (the BG table its VBlank work picked)
 .outer:
 		if NMI_TAIL
 		bsr.w	rcTailStart

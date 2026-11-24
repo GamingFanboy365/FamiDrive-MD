@@ -175,11 +175,23 @@ rdPPU_Status:
 		add.l	a0,d5			; 6502 PC when interpreted: which read
 		move.w	ppuSp0State(a4),d6
 		cmp.l	ppuRdSite(a4),d5
-		beq.s	.again
+		bne.s	.other_site
+		clr.l	ppuRdSite2(a4)		; (one place again: not a loop of two)
+		bra.s	.again
+.other_site:
+		cmpi.w	#1,d6			; or, waiting for the hit, from where
+		bne.s	.one_site		; the read before that came, each place
+		cmp.l	ppuRdSite2(a4),d5	; read once in turn: a loop with two
+		beq.s	.again_2		; (Castlevania's: one waits for the
+.one_site:					; hit, one ends it)
+		move.l	ppuRdSite(a4),ppuRdSite2(a4)
 		move.l	d5,ppuRdSite(a4)
 		cmpi.w	#1,d6			; a first read: as it is
-		beq.s	.no_hit_d5
-		bra.s	.hit
+		beq.w	.no_hit_d5
+		bra.w	.hit
+.again_2:
+		move.l	ppuRdSite(a4),ppuRdSite2(a4)
+		move.l	d5,ppuRdSite(a4)
 .again:
 		cmpi.w	#1,d6			; read again: let it change
 		bhi.s	.hit			; (once hit, it stays set)
@@ -188,6 +200,13 @@ rdPPU_Status:
 		bmi.s	.hit			; clear): a loop waiting for that ends,
 						; one for the hit flag reads again
 		move.w	#1,ppuSp0State(a4)	; VBlank is over: the hit flag clears,
+		tst.w	hsCurN(a4)		; (scroll changes so far were VBlank
+		beq.s	.no_early		; work, here longer than VBlank: the
+		clr.w	hsCurN(a4)		; top's, not splits. Castlevania sets
+		move.w	vdpScrlX(a4),hsTopCur(a4)	; both $2005 bytes, and later
+		move.w	vdpScrlX(a4),hsTopCur+2(a4)	; its status bar's)
+.no_early:
+		bsr.w	chrBgDue		; (and the BG table it picked)
 		bsr.w	ppuLine			; and the NES is at the top of the
 		add.w	vNmi(a4),d5		; screen, line 0 (Excitebike's scroll
 		bpl.s	.top_lo			; splits are timed from here)
@@ -242,6 +261,7 @@ rdPPU_Status:
 		cmp.l	ppuRdSite(a4),d4
 		beq.s	.hid_again
 		move.l	d4,ppuRdSite(a4)
+		clr.l	ppuRdSite2(a4)
 		clr.w	ppuSp0Wait(a4)
 		bra.w	.no_hit
 .hid_again:

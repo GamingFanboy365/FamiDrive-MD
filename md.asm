@@ -198,6 +198,7 @@ mdLines		ds.w 1			; lines the console draws a frame: 262 on a Mega Drive
 vOddLine	ds.w 1			; line for odd V values in VBlank (AtGames), -1: none
 vLineTbl	ds.w 512		; lines since VBlank began, for each V counter value
 				; (the second half: ppuMeasureLines' scratch)
+ppuRdSite2	equ vLineTbl+512*2-4	; and after (in that scratch): where the $2002 read before the last came from (rdPPU_Status)
 cpuPrgImg	ds.l 1			; $8000-$FFFF: RAM_Fami_ROM, or a PRG_IMAGES image (a1)
 cpuWram		ds.w 1			; 1: PRG RAM at $6000-$7FFF (RAM_Fami_WRAM)
 mmc3Select	ds.w 1			; MMC3 (mapper 4): the last $8000 write

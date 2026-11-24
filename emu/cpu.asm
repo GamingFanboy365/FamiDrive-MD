@@ -2191,6 +2191,7 @@ mos_RTI:
 		beq.s	.outer			; (famiVInt): back in that handler
 		emuNext
 .outer:
+		bsr.w	chrBgDue		; (the BG table its VBlank work picked)
 		move.l	#emuLoop,(RAM_EmuLoop+2).l
 		if NMI_TAIL
 		bsr.w	nmiTailStart
