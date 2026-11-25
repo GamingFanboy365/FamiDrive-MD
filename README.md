@@ -73,6 +73,14 @@ hide or show it. Builds without `--fps` don't contain it.
 - It's drawn with two sprites, taking the last two NES sprite slots (62 and 63) while it's shown,
   and it disappears when the game turns sprites off.
 
+#### Another NES palette
+
+`./build.sh --palette path/to/colors.pal path/to/game.nes` (with `--recompile` or without) builds
+with the NES colors of a palette file instead of the built-in ones: a `.pal` file as NES emulators
+use them, 64 colors of 3 bytes each (red, green, blue), 192 bytes in all (of a 1536-byte file, with
+the colors for each emphasis setting, the first 64 are used). Each color becomes the closest of the
+Mega Drive's 512 (`tools/mkpalette.py`).
+
 ### Supported NES ROMs
 
 - iNES format (`.nes`)
@@ -94,7 +102,10 @@ PRG mode 0, as Mega Man 3 and Panic Restaurant do (but not both modes in one gam
 interrupt is taken when the NMI handler returns, and again in the same frame, up to four times, when
 its handler leaves it on for a line further down. What the frame's last handler sets up for the
 screen below its line (other nametable rows, other CHR banks) shows in the MD's window plane, from
-the first whole cell row below that line. What an earlier one sets up is for the lines down to the
+the first whole cell row below that line; the planes under it are blank, so that the level doesn't
+show through a status bar whose inside is the backdrop color (as The Flintstones' is), unless a
+strip of other rows above it already uses the one change of the planes' vertical scroll a frame
+has. What an earlier one sets up is for the lines down to the
 next: its horizontal scroll, other nametable rows (the planes' vertical scroll, set by a line
 interrupt), and sprites hidden if it switched their tiles, but not other background tiles. If the
 last one points the PPU at no other rows, the window shows the rows an earlier one pointed it at,
@@ -195,8 +206,14 @@ handheld's differences.
 - Panic Restaurant (MMC3) plays recompiled, at 60 game frames per second in most of its first stage,
   the only one tried, with dips to about 35-48 for a second or two now and then. The FPS counter
   shows 00 in it: its wait loop calls a routine, which the counter doesn't take for a wait loop.
-  Interpreted, it stays on a black screen: its NMI handler takes longer than a frame there, so its
-  main loop never gets to run
+  Interpreted, it stays on a black screen: it takes one NMI and no more (not looked into further)
+- The Flintstones: The Rescue of Dino & Hoppy and The Surprise at Dinosaur Peak (MMC3) play
+  recompiled, as far as the start of their first stages was tried (their status bars showed the
+  level's tiles behind their text before)
+- Star Wars: The Empire Strikes Back (MMC3) plays recompiled, as far as the start of its first
+  stage was tried. Thin lines and a short bar show along the very top of its screen as it
+  scrolls; whether a NES shows them there too (they're in lines a TV's overscan hides) isn't
+  checked yet
 - Mega Man 2 (MMC1) plays recompiled, at 60 game frames per second in Bubble Man's stage, dipping
   to about 40-45 where its big frogs are, the only stage tried. Interpreted, it's too slow to
   play; it gets as far as its stage select, the last screen tried (it used to stop before it: an

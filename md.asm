@@ -14,6 +14,9 @@ RECOMP		equ 0			; 1: run recompiled code (build.sh --recompile)
 		ifndef FPS
 FPS		equ 0			; 1: FPS counter (build.sh --fps, needs RECOMP)
 		endif
+		ifndef PALETTE
+PALETTE		equ 0			; 1: the NES palette of out/palette.asm (build.sh --palette)
+		endif
 		include	"system/md/const.asm"	; RAM / Variables are here
 		include	"system/md/map.asm"	; Genesis hardware map
 		include	"out/nes_info.asm"	; the NES ROM's mapper and PRG size (tools/nesinfo.py)
