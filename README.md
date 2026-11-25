@@ -226,6 +226,11 @@ handheld's differences.
   then, as far as the jungle's wall sensors, the only part tried; its attract demos run at
   about 45-60 (both had their background tiles change from frame to frame before, and ran at
   10-11; Contra then ran at 25-50, most of its objects' code interpreted)
+- Dig Dug (NROM) plays recompiled at full speed. As it starts, its title's screen showed half
+  drawn for some frames; one such frame is left. Its NMI handler draws that screen with
+  rendering off, which takes several frames here: the screen now goes off too from the second,
+  as it does where other games draw a screen that way (Super Mario Bros. as a level starts,
+  Castlevania between areas), which showed them half drawn too
 - Pac-Man (Tengen, NROM) plays, recompiled at full speed and interpreted at about 33-35 game
   frames per second (it stayed on a black screen interpreted, and its recompiled build didn't
   assemble). A short orange line at the top left corner of its screen is the last row of the

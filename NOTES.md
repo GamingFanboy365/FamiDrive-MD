@@ -106,6 +106,9 @@ made again too:
   VBlanks (Panic Restaurant's screen clears), it falls behind and every NMI after compares
   different frames: rather than a huge N, hold the NMI while the game's own "busy" flag is set
   (a `tst.b` of that NES RAM byte before the NMI is made due; Panic Restaurant's is `$02`).
+- **Free MD RAM in NROM builds** (the paced NROM patch): the NES RAM copy at `$FFFF9800`, its
+  counters at `$FFFF89F8` and `$FFFF89FA` (the 8 bytes after the emulator's variables, free
+  unless the game has 8 KB PRG banks). `$FFFF8FFC`-`$FFFF8FFF` are not free: `RAM_NmiVbls`.
 - **Free MD RAM for logs**: in MMC3 games, `$FFFF6800`-`$FFFF7EFF` (the CHR cache ends at
   `$67FF`, the split's variables start at `$7F00`); the paced patch uses `$6800`-`$7FFF`. In
   banked games `$FFFF0000`-`$FFFF1FFF` is the PRG RAM, free if the game doesn't use it.
@@ -182,6 +185,9 @@ made again too:
   (MMC1_32K): each bank a unit of its own (`prg32`), dispatch by `rcCurTable` for all of
   $8000-$FFFF. CHR-ROM bank switches (MMC1, MMC3: CHR_BANKED) go through `chrUpdate`.
 - MMC3 split: `splitBegin`, `splitNext`, `splitDone`, the window plane (`emu/ppu.asm`).
+- `$2001`: `wrPPU_Mask` keeps the write (`ppuMaskNew`), `MD_Vint` applies it (`ppuMaskApply`)
+  at VBlank; not at one that comes in the NMI handler, unless it's the handler's second and the
+  write turns rendering off (`RAM_NmiVbls`: Dig Dug's handler draws its title over 9 frames).
 - CHR-RAM: `ppuChrRamWrite` (each `$2007` write); CHR-ROM bank switches: `chrUpdate`. The BG
   pattern table: `wrPPU_Ctrl` keeps the one wanted, `chrBgSet`/`chrBgDue` convert it where the
   NES would draw with it (`ppuChrBank`: bit 7 the BG set's table, bit 15 the wanted one).
@@ -193,12 +199,8 @@ made again too:
 From players' reports (games still to try, with what was seen):
 
 - Star Wars: The Empire Strikes Back (MMC3): slight graphics issues. Seen so far: thin lines
-  and a short bar along the very top of the screen as it scrolls (MD lines 0-12), which may be
-  the game's own (rows it updates off screen, in a TV's overscan): needs a reference picture
-  from a NES emulator showing all 240 lines. The black band at the bottom is the game's (its
-  IRQ handler turns the background off from line 215).
-- Dig Dug (NROM): a glitch at boot only. The cause: its own code turns rendering off
-  (`LDA #$06`, `STA $2001`) to draw a screen, which on a NES is done within the frame, and its
-  NMI handler turns it on again from its copy (`$09`). Here that work takes several frames, so
-  a handler run meanwhile shows the screen half drawn. A fix would keep the handler's "on" from
-  the screen while the game's own code, having turned rendering off, is still at it.
+  and a short bar along the very top of the screen as it scrolls (MD lines 0-12). They are in
+  the nametable rows shown there (the game has no sprite 0 split, and its one IRQ, at line 215,
+  turns the background off for the bottom of the screen: the black band there is its own), so
+  most likely the seam of its own scrolling; a picture from a NES emulator showing all 240
+  lines would settle it. Ask which glitches the players meant.
