@@ -88,6 +88,23 @@ RAM_RcStack	ds.l 1			; recompiled code: stack at dispatch (emu/recomp.asm)
 RAM_HintCount	ds.w 1			; line interrupts taken (MD_Hint, ppuMeasureLines)
 		finish
 
+; The interpreter's hold of an NMI until the game's own code waits for it
+; (emuLoopHold), in the recompiled code's RTS caches' RAM.
+		if RECOMP=0
+		struct RAM_RcRet
+nhPc		ds.w 1			; where the game's code was seen (a0's low word),
+nhX		ds.b 1			; with these in X, Y and S,
+nhY		ds.b 1
+nhS		ds.b 1
+nhCnt		ds.b 1			; and the times to see it there again, the same, before it counts as waiting
+nhWin		ds.b 1			; instructions until it's looked at from where it is then
+nhLeft		ds.b 1			; VBlanks the hold may last yet
+nhShort		ds.b 1			; the last NMI handler returned in the last third of its frame, to code that waited
+nhOwed		ds.b 1			; a hold ended at a VBlank: the NMI it kept back is due as that one's handler returns
+nhLook		ds.b 1			; times nhWin ran out since the code was last looked at from where it was
+		finish
+		endif
+
 ; NMI_TAIL: NMIs held while the NMI handler's work after its RTI runs,
 ; or the same work in the game's own code (emu/cpu.asm: nmiTailStart,
 ; nmiTailEnd, nmiTailR6). By a4 too, in the RAM after the NES's.
@@ -1048,14 +1065,20 @@ emuStart:
 		endif
 		move.w	#$4EF9,(RAM_EmuLoop).l		; JMP opcode
 		move.l	#emuLoop,(RAM_EmuLoop+2).l	; default emulation loop
+		if RECOMP=0
+		clr.b	(nhShort).w
+		clr.b	(nhOwed).w
+		endif
 		moveq	#0,d0
 		moveq	#0,d1
 		moveq	#0,d2
 		move.l	#$01002000,d3
 		if RECOMP
 		jmp	rcStart
-		endif
 		bra.s	emuLoop
+		else
+		bra.w	emuLoop			; (past emuLoopHold)
+		endif
 
 ; --------------------------------------------------------
 ; a0 - Fami CPU current PC
@@ -1085,6 +1108,170 @@ emuStart:
 ; VBlank
 ; ------------------------------------------------
 
+; An NMI held until the game's own code waits for it. On a NES the NMI
+; handler takes a part of a frame, and the code it returns to has done
+; its frame's work, and waits, long before the next NMI. An interpreted
+; handler can take most of a frame, or more (Pac-Man's reads 21 tiles
+; back through $2007): the next NMI then came into the middle of that
+; work (Pac-Man's, as it copied a list for the handler to draw: the
+; handler ran off its unfinished end, forever), or, taken as the handler
+; returned, before any of it. So (mos_RTI):
+; - where an NMI came as the game's code waited for it (nhWaits: the
+;   game keeps up, and counts on its turn) and its handler returns in
+;   the last third of its frame, or after the next VBlank, the next NMI
+;   waits until that code waits again, or until the next VBlank (the
+;   one after, for a handler that outlasted its own);
+; - where it came into the game's work (the game is behind, and copes,
+;   as on a NES: Super Mario Bros. 2 mostly is) or into a loop that
+;   waits for nothing (Super Mario Bros.' JMP to itself: all its work is
+;   in the handler), NMIs come as ever, at each VBlank; but after a
+;   handler that outlasted its frame, not as it returns: that code has
+;   until the next VBlank first, or until it waits.
+; It waits when it's in a loop nhWaits knows (looked for every 32
+; instructions), or is seen at the same place with the same X, Y and S
+; a third time (whatever it does to A or memory meanwhile, as Contra's
+; loop stirring its random seed, or between, as Ice Climber's, which
+; calls a routine with a loop of its own; a loop at work steps one of
+; them), looked at from where it is then after 256 instructions that
+; didn't come there. A hold that ends at a VBlank keeps the NMI it held
+; back for when that one's handler returns (nhOwed), so none is lost.
+; (Recompiled code has its own way: rcNmiDue.)
+		if RECOMP=0
+nhArm:
+		move.w	a0,(nhPc).w
+		move.b	d1,(nhX).w
+		move.b	d2,(nhY).w
+		swap	d3
+		move.b	d3,(nhS).w
+		swap	d3
+		move.b	#2,(nhCnt).w
+		move.b	#32,(nhWin).w
+		move.b	#8,(nhLook).w
+		rts
+
+; d4 - the VBlanks the hold may last.
+nhStart:
+		move.b	d4,(nhLeft).w
+		bsr.s	nhArm
+		clr.w	FamiMdVint(a4)
+		move.l	#emuLoopHold,(RAM_EmuLoop+2).l
+		rts
+
+; Is the code at a0 in a loop that waits for something: up to 6
+; instructions on, loads, compares and branches only (nhOps), a branch
+; back to no more than 12 bytes before a0? (Or a JMP back there, past a
+; branch out: not with 8 KB banks.) Returns Z set if so.
+nhWaits:
+		movem.l	d6/a5,-(sp)
+		movea.l	a0,a5
+		moveq	#0,d4
+		moveq	#5,d6			; (bit 31: a branch seen)
+.next:
+		move.b	(a5),d4
+		move.b	nhOps(pc,d4.w),d4
+		beq.s	.no
+		bmi.s	.branch
+		btst	#6,d4
+		bne.s	.jmp
+		adda.w	d4,a5
+		dbra	d6,.next
+		bra.s	.no
+.branch:
+		bset	#31,d6
+		move.b	1(a5),d4
+		addq.l	#2,a5
+		ext.w	d4
+		bpl.s	.on			; forward: a way out, go on past it
+		lea	(a5,d4.w),a5		; where it goes back to
+.back:
+		cmpa.l	a0,a5
+		bhi.s	.no
+		lea	12(a5),a5
+		cmpa.l	a0,a5
+		bcs.s	.no
+		moveq	#0,d4			; (Z)
+		bra.s	.out
+.on:
+		moveq	#0,d4
+		dbra	d6,.next
+.no:
+		moveq	#1,d4
+.out:
+		movem.l	(sp)+,d6/a5
+		rts
+.jmp:
+		if PRG_8K
+		bra.s	.no
+		else
+		tst.l	d6			; only past a branch out
+		bpl.s	.no
+		move.b	2(a5),d4
+		lsl.w	#8,d4
+		move.b	1(a5),d4
+		andi.l	#$7FFF,d4
+		lea	(a1,d4.l),a5
+		bra.s	.back
+		endif
+
+; nhWaits' instructions: 1-3, the bytes of one it goes on past; $80: a
+; branch; $40: JMP; 0: any other
+nhOps:
+		dc.b $00,$00,$00,$00,$00,$02,$00,$00,$00,$02,$00,$00,$00,$03,$00,$00
+		dc.b $80,$00,$00,$00,$00,$00,$00,$00,$01,$00,$00,$00,$00,$00,$00,$00
+		dc.b $00,$00,$00,$00,$02,$02,$00,$00,$00,$02,$00,$00,$03,$03,$00,$00
+		dc.b $80,$00,$00,$00,$00,$00,$00,$00,$01,$00,$00,$00,$00,$00,$00,$00
+		dc.b $00,$00,$00,$00,$00,$02,$00,$00,$00,$02,$00,$00,$40,$03,$00,$00
+		dc.b $80,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+		dc.b $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+		dc.b $80,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+		dc.b $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$01,$00,$00,$00,$00,$00
+		dc.b $80,$00,$00,$00,$00,$00,$00,$00,$01,$00,$00,$00,$00,$00,$00,$00
+		dc.b $02,$00,$02,$00,$02,$02,$02,$00,$01,$02,$01,$00,$03,$03,$03,$00
+		dc.b $80,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+		dc.b $02,$00,$00,$00,$02,$02,$00,$00,$00,$02,$00,$00,$03,$03,$00,$00
+		dc.b $80,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+		dc.b $02,$00,$00,$00,$02,$00,$00,$00,$00,$00,$01,$00,$03,$00,$00,$00
+		dc.b $80,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+
+emuLoopHold:
+		tst.w	FamiMdVint(a4)		; the next VBlank: its last?
+		bne.s	.vblank
+		move.w	a0,d4
+		cmp.w	(nhPc).w,d4
+		bne.s	.away
+		cmp.b	(nhX).w,d1
+		bne.s	.away
+		cmp.b	(nhY).w,d2
+		bne.s	.away
+		swap	d3
+		cmp.b	(nhS).w,d3
+		bne.s	.away_s
+		swap	d3
+		subq.b	#1,(nhCnt).w
+		bne.w	emuVint
+		bra.s	.take			; it waits: its NMI
+.away_s:
+		swap	d3
+.away:
+		subq.b	#1,(nhWin).w
+		bne.w	emuVint
+		move.b	#32,(nhWin).w
+		bsr.w	nhWaits			; in a loop that waits?
+		beq.s	.take
+		subq.b	#1,(nhLook).w
+		bne.w	emuVint
+		bsr.w	nhArm			; (not there again for long: from here)
+		bra.w	emuVint
+.vblank:
+		subq.b	#1,(nhLeft).w
+		beq.s	.last
+		clr.w	FamiMdVint(a4)
+		bra.w	emuVint
+.last:
+		st	(nhOwed).w		; this VBlank's NMI, and the one kept
+.take:						; back as its handler returns (mos_RTI)
+		move.l	#emuLoop,(RAM_EmuLoop+2).l
+		endif
 famiVInt:
 		clr.w	FamiMdVint(a4)
 		move.w	#$80,ppuStatus(a4)
@@ -1111,6 +1298,16 @@ famiVInt:
 		tst.b	nmiTail(a4)		; what the handler left for after its
 		bne.s	.tail			; RTI still runs (nmiTailStart,
 		endif				; nmiTailR6)
+		if RECOMP=0
+		tst.b	(nhShort).w		; after a handler that left the game's
+		beq.s	.take			; code little of the frame: once that
+		clr.b	(nhShort).w		; waits again (emuLoopHold), if it
+		bsr.w	nhWaits			; doesn't already
+		beq.s	.take
+		moveq	#1,d4
+		bsr.w	nhStart
+		bra.w	emuVint
+		endif
 .take:
 		jmp	doVint			; NMI: out of line, see after cpu.asm
 .late:
@@ -1131,9 +1328,17 @@ famiVInt:
 ; Main Loop
 ; ------------------------------------------------
 
+		if RECOMP=0
+famiVIntFar:					; (famiVInt is too far for emuLoop's
+		bra.w	famiVInt		; short branch with the hold's code)
+		endif
 emuLoop:
 		tst.w	FamiMdVint(a4)
+		if RECOMP
 		bne.s	famiVInt
+		else
+		bne.s	famiVIntFar
+		endif
 emuVint:
 		clr.w	d4
 		move.b	(a0)+,d4

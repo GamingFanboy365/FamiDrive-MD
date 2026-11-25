@@ -11,8 +11,9 @@ the bugs found here were found by them, not by looking at screenshots.
 - Do it right rather than fast. Find the cause, fix that, and say in the commit what it was.
 - Commit and push at each milestone (a container can be cleared). Open a pull request only when
   asked. Never force-push or rewrite pushed history.
-- At the end of a piece of work, attach test ROMs: recompiled, without the FPS counter, named
-  `FamiDrive_<Game>_<commit>.bin` (the commit the ROM was built from).
+- At the end of a piece of work, attach test ROMs as one zip (not file by file): each game's
+  base `.nes` and its build, recompiled, without the FPS counter, named
+  `FamiDrive_<Game>_<commit>.bin` (the commit the ROM was built from), and a short README.txt.
 - Give a short progress note every so often during long work.
 - Never commit NES ROMs, built ROMs, `out/`, or disassemblies and other reference material for
   games (`reference/` is gitignored for this).
@@ -133,10 +134,15 @@ made again too:
 - The AS assembler: `(d8,An,Xn)` has an 8-bit displacement; `pea ($8001).w` is refused (a short
   address from `$8000` is negative); a short forward branch AS sized in its first pass can fail
   later ("jump distance too big"): give far branches `.w`.
-- Interpreted builds are slow, and some games barely run interpreted: Code Name: Viper stays on
-  a black screen after its title, Dooly Bravo Land's intro crawls (delay loops), Super Mario
-  Bros. 3 can't enter a level. Use them for the NMI-by-NMI comparison with a large N, not for
-  playing.
+- Interpreted builds are slow, and some games barely run interpreted: Dooly Bravo Land's intro
+  crawls (delay loops), Super Mario Bros. 3 can't enter a level, Panic Restaurant stays black
+  (one NMI in 3000 frames: its handler doesn't return). Use them for the NMI-by-NMI comparison
+  with a large N, not for playing.
+- Two interpreted builds can't be compared in real time, frame by frame: a game that runs
+  below full speed is hit by each VBlank wherever it is, and a hundred cycles' difference a
+  frame sends the runs apart within a second. Compare what matters instead: the NMIs each
+  takes over the same frames (a patch counting at `doVint`), pictures at the same frames, and
+  the paced comparison for what must not change.
 - Scripted input drifts with speed: a schedule by MD frame reaches a different place in a faster
   build. Press by game frame or NMI count when comparing builds.
 - A ROM's header can be wrong: Dooly Bravo Land is dumped as mapper 71 but switches banks as
@@ -159,7 +165,9 @@ made again too:
   Recompiled, `rcNmiDue` (`emu/recomp.asm`) takes one or holds it: until the game waits again
   (`nmiHold`, up to a frame), until the NMI handler's RTI (`vbLate`), until MMC3's IRQ handler's
   last RTI (`irqVbls`, up to 8); `rcRti` takes what's waiting. Interpreted: `famiVInt` (`md.asm`),
-  `mos_RTI` (`emu/cpu.asm`).
+  `mos_RTI` (`emu/cpu.asm`), and the hold until the game's loop waits again (`emuLoopHold`,
+  `nhWaits`, `nhStart` in `md.asm`: `RAM_EmuLoop` points at the loop in use; its variables are
+  in `RAM_RcRet`, free in an interpreted build).
 - Recompiler (`tools/recomp6502.py`): units (the fixed bank, each switchable bank), `targets`
   (joins: a branch there reloads flags from `d3`), `idle_heads` (wait loops: their NMI check is
   on the way back, not on the way in), `plans` (fills, versioned loops; `body_plan` in routine
@@ -185,9 +193,6 @@ made again too:
 From players' reports (games still to try, with what was seen):
 
 - The Flintstones (both, MMC3): the HUD is glitched, maybe the level's bottom layer.
-- Pac-Man (Tengen, NROM): starts, then freezes or takes no input. Recompiled it plays (its
-  build didn't assemble before); interpreted it stays on a black screen, not looked into yet.
-  A small orange dash shows at the top left corner of its screen.
 - Star Wars: The Empire Strikes Back (MMC3): slight graphics issues. Dig Dug (NROM): a glitch
   at boot only.
 - Custom palette support.

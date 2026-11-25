@@ -214,6 +214,14 @@ finished in #1 to #6.
   heavy: it comes back to the copy, `rcNmiIn`. A jump engine's entries
   get copies of their own, which the copies of routines that run it
   tail-call.)
+- [ ] **The interpreter's NMI hold: what counts as waiting.** `nhWaits`
+  (`md.asm`) knows a wait loop by its shape (loads, compares and a branch
+  back, 6 instructions at most), and `emuLoopHold` a loop that comes round
+  with the same X, Y and S. A game whose wait loop calls a routine, or
+  counts in X or Y, isn't seen to keep up, and gets NMIs as before the
+  hold (into its work, if its handler is slow). And a loop at work that
+  counts in memory only looks like waiting. Panic Restaurant interpreted
+  is another matter: its first NMI's handler doesn't return.
 - [ ] **Gameplay tests.** NES RAM is compared with Nestopia's only for the
   attract demo, up to the NES's first lag frame; gameplay checks are by eye.
   A test that replays input per game frame (not per video frame) could
