@@ -52,7 +52,9 @@ through its tasks for one ready to run.
 The translated code goes to `out/recomp.asm`. It is the game's code in another form, so like the
 built ROM it stays out of git and shouldn't be published. Code the recompiler can't find ahead of
 time (for example, reached only through jump tables it doesn't recognise) still runs, through the
-interpreter, just slower.
+interpreter, just slower. Besides the jump tables it can follow from the code that reads them, it
+looks through the bytes no code covers for tables of routines' addresses (as Contra's and Life
+Force's objects' routines are listed, and read through a pointer).
 
 #### FPS counter
 
@@ -164,9 +166,10 @@ handheld's differences.
   outlasts a frame, and the next NMI reads the pads again before the game takes the A button.
   Interpreted, skipping its intro with Start while the curtain rises also leaves part of the
   title screen undrawn
-- Life Force (mapper 2) plays recompiled, at about 47-51 game frames per second in its first
-  stage. Its vertical stage shows no status bar (seen in the attract demo, not looked into yet),
-  and only its first stage and the demo were tried
+- Life Force (mapper 2) plays recompiled, at about 55-60 game frames per second at the start of
+  its first stage (47-55 before the recompiler found the routines its objects reach through
+  tables). Its vertical stage shows no status bar (seen in the attract demo, not looked into
+  yet), and only the start of its first stage and the demo were tried
 - Mega Man 3 (MMC3) plays recompiled, so far at about 40-50 game frames per second in Top Man's
   stage where it's busy (60 where it's quiet, and on its title screen), its music at full
   speed; that stage is the only one tried. Interpreted, it runs at about 12, and its title
@@ -195,10 +198,12 @@ handheld's differences.
 - Super Mario Unlimited Deluxe (a hack, MMC1 switching 32 KB at a time) plays recompiled, at 60
   game frames per second in World 1-1, the only level tried
 - Castlevania (UxROM, CHR-RAM) plays recompiled, at 60 game frames per second in its first stage
-  with dips to about 50-55, as far as the castle's hall. Contra (UxROM, CHR-RAM): its title, its
-  attract demos and the first screens of its first stage look right, the only part tried, at
-  about 25-50 game frames per second where busy: much of its code runs interpreted (both had
-  their background tiles change from frame to frame before, and ran at 10-11)
+  with dips to about 50-55, as far as the castle's hall. Contra (UxROM, CHR-RAM) plays
+  recompiled, at 60 game frames per second in its first stage with a dip to about 53 now and
+  then, as far as the jungle's wall sensors, the only part tried; its attract demos run at
+  about 45-60 (both had their background tiles change from frame to frame before, and ran at
+  10-11; Contra then ran at 25-50, most of its objects' code interpreted)
+- Pac-Man (Tengen, NROM) plays recompiled; interpreted, it stays on a black screen
 - Some games do not work
 - Tested in emulators (Genesis Plus GX, BlastEm) and on an AtGames handheld, not on an original Mega Drive
 - An AtGames handheld seems to draw frames a little faster than a Mega Drive (about 61.7 a second by its

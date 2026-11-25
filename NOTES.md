@@ -65,9 +65,13 @@ the bugs found here were found by them, not by looking at screenshots.
   games. Expect the same; some differences are known and harmless:
   - a game's idle-loop random seed differs whenever its speed does, even by a NOP's worth (Life
     Force's `$2D`; Tiny Toon's, Excitebike's, Ice Climber's, Castlevania's `$6F`, Panic
-    Restaurant's `$18`, the Flintstones' random generator at `$0659`-`$0660`; test copies with
-    that store or call NOPed out avoid it);
+    Restaurant's `$18`, the Flintstones' random generator at `$0659`-`$0660` (the second
+    game's at `$0686`-`$068D`), Contra's `$34`, which its objects then follow (`STA $34` at
+    $C05B); test copies with that store or call NOPed out avoid it);
   - a screen shown a frame apart (timing), with the same RAM.
+  A game that takes few NMIs (Deja Vu: 5 in the whole run) isn't tested by this: compare it in
+  real time, with input that gets into the game (Deja Vu: A at the file screen, then A again
+  through its text).
 - Real-time comparison of old and new builds (frame hashes over a few thousand frames): where
   they part, look at the frames and say why.
 - Speed: Super Mario Bros. 3, World 1-1, game frames a second in 60-frame windows, two input
@@ -159,7 +163,10 @@ made again too:
 - Recompiler (`tools/recomp6502.py`): units (the fixed bank, each switchable bank), `targets`
   (joins: a branch there reloads flags from `d3`), `idle_heads` (wait loops: their NMI check is
   on the way back, not on the way in), `plans` (fills, versioned loops; `body_plan` in routine
-  copies), routine copies and inlined routines, `rcDelay` for delay loops.
+  copies), routine copies and inlined routines, `rcDelay` for delay loops. Where code starts:
+  `analyze` (vectors, `jump_tables` from the code that reads them, `data_tables` from the bytes
+  no code covers); every table target is an entry (`extra`: `rcDispatch` goes there with
+  nothing the code before it left, and `rcSafe` lets the interpreter go on there).
 - Mappers: `wrTo_PRG` (`emu/memory.asm`) by `cpuMapper`; the loader's list in `Fami_LoadRom`
   (`md.asm`); the recompiler's `Prg` and its store translation (`mapper2Write`, `mmc1Write`,
   `mmc3...`). MMC1's state shares `mmc3Regs`' bytes: the emulator's variables are full in
@@ -178,7 +185,9 @@ made again too:
 From players' reports (games still to try, with what was seen):
 
 - The Flintstones (both, MMC3): the HUD is glitched, maybe the level's bottom layer.
-- Pac-Man (Tengen, NROM): starts, then freezes or takes no input.
+- Pac-Man (Tengen, NROM): starts, then freezes or takes no input. Recompiled it plays (its
+  build didn't assemble before); interpreted it stays on a black screen, not looked into yet.
+  A small orange dash shows at the top left corner of its screen.
 - Star Wars: The Empire Strikes Back (MMC3): slight graphics issues. Dig Dug (NROM): a glitch
   at boot only.
 - Custom palette support.
