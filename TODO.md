@@ -214,6 +214,14 @@ finished in #1 to #6.
   heavy: it comes back to the copy, `rcNmiIn`. A jump engine's entries
   get copies of their own, which the copies of routines that run it
   tail-call.)
+- [ ] **The interpreter's NMI hold: what counts as waiting.** `nhWaits`
+  (`md.asm`) knows a wait loop by its shape (loads, compares and a branch
+  back, 6 instructions at most), and `emuLoopHold` a loop that comes round
+  with the same X, Y and S. A game whose wait loop calls a routine, or
+  counts in X or Y, isn't seen to keep up, and gets NMIs as before the
+  hold (into its work, if its handler is slow). And a loop at work that
+  counts in memory only looks like waiting. Panic Restaurant interpreted
+  is another matter: its first NMI's handler doesn't return.
 - [ ] **Gameplay tests.** NES RAM is compared with Nestopia's only for the
   attract demo, up to the NES's first lag frame; gameplay checks are by eye.
   A test that replays input per game frame (not per video frame) could
@@ -223,14 +231,17 @@ finished in #1 to #6.
   points than on the NES.
 - [ ] **Unofficial opcodes** aren't translated; code using them runs in the
   interpreter.
-- [ ] **Code reached only through tables, in banks.** Contra's recompiled
-  build finds 7483 instructions of its 128 KB, and much of its game runs
-  interpreted (`rcInterpStep`, a quarter of the time in its attract demos):
-  the fixed bank's code goes to its banks' routines ($B419, $B523, $BA7C...)
-  through address tables the recompiler doesn't follow there, so those banks'
-  units never see them as entries. It runs at about 25-50 game frames a
-  second there. The interpreted addresses `rcDispatch` sees, or tables of
-  addresses that fall on a bank's plausible code, could be entries.
+- [ ] **Code reached only through tables: what's left.** `data_tables`
+  (`tools/recomp6502.py`) finds tables of routines' addresses in the bytes no
+  code covers, by what they look like (Contra: 7483 instructions found
+  before, 14445 with it). It doesn't look in MMC3's 8 KB slots (Super Mario
+  Bros. 3, Mega Man 3, Panic Restaurant), nor follow the fixed bank's tables
+  into a bank (which bank isn't known there), and it leaves short tables
+  (under 5 addresses) that their routines don't follow, and tables of
+  addresses less 1 (for RTS). A table of pointers to data that looked like
+  one would get its data translated as code (harmless, but it takes room).
+  Reading them as the code does (a pointer loaded from a table, then
+  `LDA (ptr),Y` into a `JMP (ptr)`: Contra's at $E663) would be exact.
 - [ ] **FPS counter in more games.** A game frame ends, for the counter, where
   a wait loop of loads, compares and branches is left (`idle_loops` in
   `tools/recomp6502.py`). Panic Restaurant's wait loop calls a routine that

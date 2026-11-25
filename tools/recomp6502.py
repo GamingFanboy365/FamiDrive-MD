@@ -2509,11 +2509,11 @@ class Gen:
 			self.e('swap d3', 'move.b #$%02X,(a2,d3.w)' % (ret >> 8), 'subq.b #1,d3',
 			       'move.b #$%02X,(a2,d3.w)' % (ret & 0xFF), 'subq.b #1,d3', 'swap d3')
 			if self.fast and self.fast.get('routine'):	# leaving a copy: drop the 68000's returns
-				if i.arg >= 0x8000 and (not self.prg.banked or i.arg in self.insns or i.arg in self.ext):
+				if i.arg in self.insns or i.arg in self.ext:
 					self.e('movea.l (RAM_RcStack).w,sp', 'jmp %s' % lab(i.arg))
 				else:
 					self.e(*(self.slot_jump(i.arg) or ['move.w #$%04X,d4' % i.arg, 'jmp rcDispatch']))
-			elif i.arg >= 0x8000 and (not self.prg.banked or i.arg in self.insns or i.arg in self.ext):
+			elif i.arg in self.insns or i.arg in self.ext:	# (else not translated: an unofficial opcode there)
 				self.e('jmp %s' % lab(i.arg))
 			else:
 				self.e(*(self.slot_jump(i.arg) or ['move.w #$%04X,d4' % i.arg, 'jmp rcDispatch']))
@@ -3770,8 +3770,8 @@ class Gen:
 		flags kept than this unit's calls do."""
 		mine, calls = 0, False
 		for i in self.insns.values():
-			if i.m == 'JSR' and i.arg == f and i.pc + 3 in self.insns:
-				mine |= self.live_in[i.pc + 3]
+			if i.m == 'JSR' and i.arg == f and (i.pc + 3 in self.insns or not i.table):
+				mine |= self.live_in.get(i.pc + 3, ALL)	# (not translated: the interpreter's)
 				calls = True
 		return ('X%04X_%04X' if calls and self.ext_ret.get(f, ALL) & ~mine else 'R%04X_%04X') % (f, f)
 
@@ -3784,8 +3784,8 @@ class Gen:
 		# its own liveness: it returns only to its callers (the banks', for X)
 		ctx = self.ext_ret.get(f, ALL) if prefix == 'X' or self.copy_label(f)[0] == 'R' and f in self.copies_for else 0
 		for i in self.insns.values():
-			if i.m == 'JSR' and i.arg == f and i.pc + 3 in self.insns and prefix == 'R':
-				ctx |= self.live_in[i.pc + 3]
+			if i.m == 'JSR' and i.arg == f and (i.pc + 3 in self.insns or not i.table) and prefix == 'R':
+				ctx |= self.live_in.get(i.pc + 3, ALL)	# (not translated: the interpreter's)
 		if f in self.engine_entries or f in self.double_rts:	# (it returns to the callers of copies that
 			ctx = ALL						# tail-call it, or two levels up)
 		saved = {pc: self.insns[pc].live_out for pc in pcs}
@@ -3805,7 +3805,7 @@ class Gen:
 		pcs = sorted(self.callable[f][0])
 		outer, end = self.fast, self.tag('Ie', i.pc)
 		saved = {pc: self.insns[pc].live_out for pc in pcs}
-		for pc, out in copy_liveness(self.insns, set(pcs), self.live_in[i.pc + 3], self.live_in, self.sums).items():
+		for pc, out in copy_liveness(self.insns, set(pcs), self.live_in.get(i.pc + 3, ALL), self.live_in, self.sums).items():
 			self.insns[pc].live_out = out
 		last = max(pcs, key=lambda pc: pc + self.insns[pc].n)
 		self.fast = {'pcs': set(pcs), 'prefix': '%sI%04X' % (outer['prefix'] if outer else '', i.pc), 'routine': True,
@@ -4179,24 +4179,114 @@ def long_jumps(out):
 	return res
 
 
-def analyze(prg, extra, entries=()):
+def data_tables(prg, insns, peer=None, strict=True):
+	"""Tables of routines' addresses that code reads other ways than
+	jump_tables finds, as Contra's: a table of pointers to tables of
+	routines, one for each kind of object, read through a RAM pointer
+	(LDA (ptr),Y) into the one JMP (ptr) goes through. In the bytes no
+	code found covers: a run of 3 words or more, each the address of
+	code in this unit, or (a bank's) in the fixed bank's, not inside an
+	instruction found there (peer: the fixed bank's), that looks like
+	code (code_at); at least 3 different, few of them as $C0C0 (fill),
+	and starting where routines do: after an RTS, an RTI or a JMP (or
+	the table itself: it ends before the address of a routine in it, as
+	routines often follow their table), or past a branch over the byte
+	before. A run of
+	code bytes can look like a table too (its operands as the low bytes,
+	opcodes as the high), more in short runs: strict takes only runs
+	with 5 addresses or more, 3 of them after an RTS, an RTI or a JMP,
+	and half of them starting where routines do; else 3 or more, half of
+	them starting where routines do or code already found, in a run
+	that ends at the address of one of them (its routines follow it: a
+	run of code bytes doesn't end so). (Code at an address in
+	such a run that isn't a table is translated too, as an entry, but
+	runs only if the game goes there.) Not MMC3 prg8's slots. Returns
+	the addresses in the tables that have any not already found."""
+	if prg.prg8:
+		return set()
+	if prg.banked:
+		norm = lambda a: a
+	else:				# (NROM: 16 KB is at $8000 and at $C000)
+		norm = lambda a: a & prg.mask | (0x10000 - len(prg.data))
+	cover, inside = set(), set()
+	for i in insns.values():
+		cover.update(norm(a) for a in range(i.pc, i.pc + i.n))
+	for i in list(insns.values()) + list((peer or {}).values()):
+		inside.update(norm(a) for a in range(i.pc + 1, i.pc + i.n))
+	known = {norm(a) for a in insns} | set(peer or ())
+
+	def start(t):			# after an RTS, an RTI or a JMP
+		return prg.byte(t - 1) in (0x60, 0x40) or prg.byte(t - 3) == 0x4C
+
+	def over(t):			# past a branch over the byte before
+		b, d = prg.byte(t - 2), prg.byte(t - 1)
+		return b in (0x10, 0x30, 0x50, 0x70, 0x90, 0xB0, 0xD0, 0xF0) and 0 < d < 0x80
+
+	found = set()
+	for lo, hi in sorted({(norm(lo), norm(hi)) for lo, hi in prg.regions}):
+		a = lo
+		while a < hi:
+			run, b, mine = [], a, set()
+			while b + 1 <= hi and b not in cover and b + 1 not in cover and b not in mine:
+				t = prg.word(b)
+				if t < 0x8000 or prg.byte(t) is None or norm(t) in inside or not code_at(prg, t):
+					break
+				run.append(t)
+				mine.add(norm(t))
+				b += 2
+			if len(run) < 3:
+				a += 1
+				continue
+			a = b
+			ts = set(run)
+			s = sum(1 for t in ts if start(t) or norm(t) == b)	# (b: the routine after it)
+			o = sum(1 for t in ts if over(t) and not start(t) and norm(t) != b)
+			fill = sum(1 for t in run if t & 0xFF == t >> 8)
+			if 3 * fill >= len(run) or not {norm(t) for t in ts} - known:
+				continue
+			if not strict:		# (and code already found counts)
+				o += sum(1 for t in ts if norm(t) in known and not (start(t) or over(t) or norm(t) == b))
+			if 2 * (s + o) >= len(ts) and ((len(ts) >= 5 and s >= 3) if strict else
+						       (len(ts) >= 3 and s + o >= 2 and b in mine)):
+				found |= ts
+	return found
+
+
+def analyze(prg, extra, entries=(), peer=None, scan=2):
 	"""A unit's code: from its vectors, extra entry points (--entries),
 	entries from other units' code, and the jump tables found in it.
 	Jump tables may list other units' code too (banked PRG): 'tables'
-	keeps those, for outside()."""
+	keeps those, for outside(). scan: the tables of routines in data
+	(data_tables) it looks for: none (0), those strict takes (1), or
+	then the rest (2), once no more code is found with the first (as a
+	run of code bytes can look like one: once found as code, it isn't
+	looked at). peer: the fixed bank's code (a bank's, banked PRG)."""
 	user = list(extra)
 	extra = list(extra) + sorted(set(entries) - set(extra))
 	insns, vectors, inline = discover(prg, extra)
-	while True:
-		foreign, loads = [], set()
-		found, rts = jump_tables(prg, insns, foreign, loads)
-		more = {a for a in found if prg.has(a)} - set(insns)
-		if not more:
-			break
-		extra = list(extra) + sorted(more)
-		insns, vectors, inline = discover(prg, extra)
+	data = set()
+	for strict in (True, False)[:scan] or (None,):
+		while True:
+			while True:
+				foreign, loads = [], set()
+				found, rts = jump_tables(prg, insns, foreign, loads)
+				# (entries, those already found as code too: code comes
+				# there through rcDispatch, not from the code before)
+				more = {a for a in found if prg.has(a)} - set(extra)
+				if not more:
+					break
+				extra = list(extra) + sorted(more)
+				insns, vectors, inline = discover(prg, extra)
+			new = data_tables(prg, insns, peer, strict) - data if strict is not None else set()
+			if not new:
+				break
+			data |= new
+			more = {a for a in new if prg.has(a)} - set(extra)
+			if more:
+				extra = list(extra) + sorted(more)
+				insns, vectors, inline = discover(prg, extra)
 	extra = list(extra) + sorted({a for a in inline if prg.has(a)} - set(extra))
-	tables = sorted(found | inline)
+	tables = sorted(found | inline | data)
 	return {'insns': insns, 'vectors': vectors, 'extra': extra, 'tables': tables, 'user': user,
 		'rts': {a for a in rts if prg.has(a)}, 'entries': set(entries), 'banked': prg.banked,
 		'slot': prg.slot, 'region': prg.region, 'foreign': sorted(set(foreign)), 'loads': loads}
@@ -4500,16 +4590,20 @@ def main():
 		fixed.peers = banks[:-1]	# (the last one is at $C000)
 		for b in banks:
 			b.peers = [fixed]
+		# (the tables of routines in data, data_tables: first those its
+		# strict rules take, in every unit, then the rest. The last bank,
+		# at $C000, has the fixed bank's bytes: not looked at at $8000)
 		back = set()
-		while True:
-			uf = analyze(fixed, extra, back)
-			into = outside(uf, 0x8000, 0xC000)
-			ubs = [analyze(b, [], [a for a in sorted(into) if plausible_code(b, a)] if b in fixed.peers else [])
-			       for b in banks]
-			more = set().union(*(outside(ub, 0xC000, 0x10000) for ub in ubs)) - back
-			if not more:
-				break
-			back |= more
+		for scan in (1, 2):
+			while True:
+				uf = analyze(fixed, extra, back, scan=scan)
+				into = outside(uf, 0x8000, 0xC000)
+				ubs = [analyze(b, [], [a for a in sorted(into) if plausible_code(b, a)], uf['insns'], scan)
+				       if b in fixed.peers else analyze(b, [], [], scan=0) for b in banks]
+				more = set().union(*(outside(ub, 0xC000, 0x10000) for ub in ubs)) - back
+				if not more:
+					break
+				back |= more
 		back = set().union(*(outside(ub, 0xC000, 0x10000) for ub in ubs))
 		# flags live where one unit's code goes to another's: each unit's
 		# liveness with the others' from the last round, until it settles

@@ -2165,7 +2165,11 @@ mos_ROR_absx:
 
 mos_RTI:
 		tst.w	cpuFamiVint(a4)
+		if RECOMP
 		beq.s	.nonint
+		else
+		beq.w	.nonint			; (past the hold's code below)
+		endif
 		
 		swap	d3			; Restore SR, PC
 		moveq	#0,d6
@@ -2196,10 +2200,56 @@ mos_RTI:
 		if NMI_TAIL
 		bsr.w	nmiTailStart
 		endif
+		if RECOMP
 		tst.w	vbLate(a4)		; a VBlank came while the handler ran:
 		beq.s	.on_time		; the next NMI now, not a frame later
 		clr.w	vbLate(a4)
 		move.w	#1,FamiMdVint(a4)
+		else
+		clr.b	(nhShort).w		; (emuLoopHold, md.asm)
+		if NMI_TAIL
+		tst.b	nmiTail(a4)		; (the handler's work after its RTI
+		beq.s	.no_tail		; holds NMIs its own way: famiVInt)
+		clr.b	(nhOwed).w
+		tst.w	vbLate(a4)
+		beq.s	.on_time
+		clr.w	vbLate(a4)
+		move.w	#1,FamiMdVint(a4)
+		bra.s	.on_time
+.no_tail:
+		endif
+		tst.b	(nhOwed).w		; the NMI a hold kept back until this
+		beq.s	.none_owed		; one's VBlank: now
+		clr.b	(nhOwed).w
+		move.w	#1,FamiMdVint(a4)
+		bra.s	.on_time
+.none_owed:
+		jsr	(nhWaits).l
+		bne.s	.at_work
+		move.w	vbLate(a4),d4		; the NMI came as the code it returns
+		or.w	FamiMdVint(a4),d4	; to waited for it: that has its turn
+		beq.s	.in_time		; before the next one, if a VBlank came
+		moveq	#2,d4			; while the handler ran,
+		bra.s	.hold
+.in_time:
+		jsr	ppuClock		; or if it returns in the last third
+		move.w	d5,d4			; of the frame (famiVInt)
+		add.w	d5,d5
+		add.w	d4,d5
+		move.w	mdLines(a4),d4
+		add.w	d4,d4
+		cmp.w	d4,d5
+		scc	(nhShort).w
+		bra.s	.on_time
+.at_work:
+		move.w	vbLate(a4),d4		; a VBlank came while the handler ran:
+		or.w	FamiMdVint(a4),d4	; the next NMI not a frame later, but
+		beq.s	.on_time		; not before that code had till the
+		moveq	#1,d4			; next VBlank, or waits
+.hold:
+		clr.w	vbLate(a4)
+		jsr	(nhStart).l
+		endif
 .on_time:
 		if MMC3_IRQ
 		move.w	irqNmiSave(a4),cpuInIrq(a4)	; (one that came in the IRQ handler
