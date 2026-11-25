@@ -192,7 +192,13 @@ made again too:
 
 From players' reports (games still to try, with what was seen):
 
-- The Flintstones (both, MMC3): the HUD is glitched, maybe the level's bottom layer.
-- Star Wars: The Empire Strikes Back (MMC3): slight graphics issues. Dig Dug (NROM): a glitch
-  at boot only.
-- Custom palette support.
+- Star Wars: The Empire Strikes Back (MMC3): slight graphics issues. Seen so far: thin lines
+  and a short bar along the very top of the screen as it scrolls (MD lines 0-12), which may be
+  the game's own (rows it updates off screen, in a TV's overscan): needs a reference picture
+  from a NES emulator showing all 240 lines. The black band at the bottom is the game's (its
+  IRQ handler turns the background off from line 215).
+- Dig Dug (NROM): a glitch at boot only. The cause: its own code turns rendering off
+  (`LDA #$06`, `STA $2001`) to draw a screen, which on a NES is done within the frame, and its
+  NMI handler turns it on again from its copy (`$09`). Here that work takes several frames, so
+  a handler run meanwhile shows the screen half drawn. A fix would keep the handler's "on" from
+  the screen while the game's own code, having turned rendering off, is still at it.

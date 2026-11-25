@@ -2111,7 +2111,9 @@ splitNext:
 ; earlier handler's rows, or with blank rows, the planes are blank
 ; (their rows 32-59) from the window's first line, in place of that
 ; handler's strip if it had one, or with none: they would show through
-; the window's transparent pixels.
+; the window's transparent pixels. Under a window of the last handler's
+; own rows too, if no strip is shown (one change of the planes' vertical
+; scroll a frame: MD_Hint).
 splitDone:
 		cmpi.w	#$FFFF,splitV(a4)
 		bne.s	.own
@@ -2132,10 +2134,15 @@ splitDone:
 		tst.w	splitBlank(a4)		; the planes blank
 		bpl.s	.planes
 		cmpi.w	#$FFFF,winV(a4)
-		beq.s	.strip
+		beq.s	.own_rows
 		move.w	winLine(a4),d2
 		cmp.w	irqLine(a4),d2
 		bne.s	.strip
+		bra.s	.planes
+.own_rows:					; (its own rows: blank under them too,
+		tst.w	d0			; with no strip to show: The
+		bne.s	.strip			; Flintstones' status bar's inside is
+		bra.s	.planes_line		; the backdrop, and its level showed there)
 .planes:
 		tst.w	d0			; (that handler's strip, or none)
 		beq.s	.planes_line
