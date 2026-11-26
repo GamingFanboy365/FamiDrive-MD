@@ -14,6 +14,9 @@ RECOMP		equ 0			; 1: run recompiled code (build.sh --recompile)
 		ifndef FPS
 FPS		equ 0			; 1: FPS counter (build.sh --fps, needs RECOMP)
 		endif
+		ifndef PALETTE
+PALETTE		equ 0			; 1: the NES palette of out/palette.asm (build.sh --palette)
+		endif
 		include	"system/md/const.asm"	; RAM / Variables are here
 		include	"system/md/map.asm"	; Genesis hardware map
 		include	"out/nes_info.asm"	; the NES ROM's mapper and PRG size (tools/nesinfo.py)
@@ -86,6 +89,7 @@ cpuIRQ		equ $7FFE
 RAM_EmuLoop	ds.w 3
 RAM_RcStack	ds.l 1			; recompiled code: stack at dispatch (emu/recomp.asm)
 RAM_HintCount	ds.w 1			; line interrupts taken (MD_Hint, ppuMeasureLines)
+RAM_NmiVbls	ds.b 1			; VBlanks that came in the NMI handler since it was taken (MD_Vint: $2001)
 		finish
 
 ; The interpreter's hold of an NMI until the game's own code waits for it
@@ -621,8 +625,19 @@ MD_Vint:
 		tst.w	cpuFamiVint(a4)			; $2001 takes effect here, not
 		beq.s	.mask				; mid-screen, and not while the game
 		cmpi.w	#2,ppuSp0State(a4)		; is in its VBlank work (in its NMI
-		bne.s	.mask_later			; handler, before sprite 0 hit):
-.mask:							; that only shows from the next frame
+		beq.s	.mask				; handler, before sprite 0 hit):
+							; that only shows from the next frame.
+		addq.b	#1,(RAM_NmiVbls).w		; But a handler still at it at its
+		bcc.s	.counted			; second VBlank that turned rendering
+		st	(RAM_NmiVbls).w			; off draws a screen, over frames what
+.counted:						; a NES does in one: off, then (Dig
+		cmpi.b	#2,(RAM_NmiVbls).w		; Dug's draws its title so at power on,
+		bcs.s	.mask_later			; for 9 frames, which showed half drawn)
+		move.w	ppuMaskNew(a4),d0
+		bpl.s	.mask_later
+		andi.w	#$18,d0
+		bne.s	.mask_later
+.mask:
 		jsr	ppuMaskApply
 .mask_later:
 		jsr	hsChoose			; the game frame to show: its
@@ -1355,6 +1370,7 @@ emuVint:
 ; Take the NMI (from famiVInt)
 doVint:
 		move.l	#emuVint,(RAM_EmuLoop+2).l
+		clr.b	(RAM_NmiVbls).w			; (MD_Vint: $2001)
 		if NMI_TAIL
 		tst.w	cpuFamiVint(a4)			; where the handler's RTI comes back
 		bne.s	.nested				; to, unless it goes on elsewhere

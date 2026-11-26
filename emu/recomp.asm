@@ -536,6 +536,7 @@ rcNmiDue:
 		endif
 .on:
 		move.w	d5,nmiHold(a4)
+		clr.b	(RAM_NmiVbls).w		; (MD_Vint: $2001)
 		subq.w	#1,nmiCredit(a4)	; (one for each VBlank)
 		bpl.s	.take
 		clr.w	nmiCredit(a4)
