@@ -206,10 +206,13 @@ From players' reports (games still to try, with what was seen):
   screen. It didn't build recompiled before MMC1 was supported.
 - Castlevania III (mapper 5, MMC5) and Super Mario Bros. 2 (Unl) (mapper 40): asked for; neither
   mapper is supported (TODO.md).
-- "Konami games still have the sprite issue": which games and what the issue looks like isn't
-  known yet (Contra, Castlevania and Life Force are the Konami games tried here). Ask, or look
-  for sprites missing or flickering in them: more than 8 on a line, the 80 the MD can show, or
-  the sprite limit games rely on to hide some.
+- "Konami games still have the sprite issue": Contra and Castlevania (the owner says so), the
+  two fixed for their background tiles earlier. What the sprite issue looks like isn't known
+  yet: ask. Things to look for in them: sprites missing or flickering (more than 8 on a line,
+  the NES's limit, which games rely on to hide some, or the MD's 20 a line and 80 a screen),
+  sprites with the wrong tiles (their pattern table, CHR-RAM tiles converted late), or sprites
+  in the wrong place by a line. (Contra's player blinks on alternate frames after a respawn,
+  as on a NES: that isn't it.)
 - Dig Dug (NROM): the report after the `$2001` change says it "still has the same boot up
   graphical issue(s)", and that it doesn't matter. One half drawn frame is known to be left; if
   more shows on their console, their build may have been an older one.
