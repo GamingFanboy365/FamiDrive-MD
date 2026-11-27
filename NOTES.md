@@ -198,6 +198,23 @@ made again too:
 
 From players' reports (games still to try, with what was seen):
 
+- Mega Man 5 (MMC3): runs, with graphics issues. Its Capcom logo screen shows the wrong tiles
+  (letters and digits of a font where the logo's pieces and "PRESENTS" belong, and stripes below:
+  a screenshot was sent), and in play about half of the picture scrolls as Mega Man moves. Not
+  looked at yet: see which CHR banks and which split (its IRQ) those screens use.
+- Castlevania II: Simon's Quest (MMC1): runs, with a few graphics issues at the top of the
+  screen. It didn't build recompiled before MMC1 was supported.
+- Castlevania III (mapper 5, MMC5) and Super Mario Bros. 2 (Unl) (mapper 40): asked for; neither
+  mapper is supported (TODO.md).
+- "Konami games still have the sprite issue": which games and what the issue looks like isn't
+  known yet (Contra, Castlevania and Life Force are the Konami games tried here). Ask, or look
+  for sprites missing or flickering in them: more than 8 on a line, the 80 the MD can show, or
+  the sprite limit games rely on to hide some.
+- Dig Dug (NROM): the report after the `$2001` change says it "still has the same boot up
+  graphical issue(s)", and that it doesn't matter. One half drawn frame is known to be left; if
+  more shows on their console, their build may have been an older one.
+- Confirmed fixed or better by the players: The Flintstones' status bar, Deja Vu's and Super
+  Mario Unlimited Deluxe's frame rates, the palette option.
 - Star Wars: The Empire Strikes Back (MMC3): slight graphics issues. Seen so far: thin lines
   and a short bar along the very top of the screen as it scrolls (MD lines 0-12). They are in
   the nametable rows shown there (the game has no sprite 0 split, and its one IRQ, at line 215,

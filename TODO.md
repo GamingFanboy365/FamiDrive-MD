@@ -132,6 +132,19 @@ finished in #1 to #6.
   as a program of its own (`prg32`), and every RTS goes through
   `rcDispatch`: a game switches banks in a routine every bank has at the
   same place, and returns into the new bank's code.
+- [ ] **Mapper 5 (MMC5).** Asked for, for Castlevania III: Dracula's Curse,
+  which doesn't build now (the loader and `tools/recomp6502.py` refuse the
+  mapper). MMC5 is the largest of the NES mappers: PRG in 8 KB banks in four
+  modes with PRG RAM switchable among them, CHR banks apart for the
+  background and for 8x16 sprites, a scanline counter of its own (not the
+  MMC3's), a fill mode and an extended attribute mode in its own RAM, a
+  multiplier, and two more pulse channels. What Castlevania III uses of it
+  has to be found first.
+- [ ] **Mapper 40.** Asked for, for the unlicensed cartridge conversion of the
+  Famicom Disk System's Super Mario Bros. 2 ("Super Mario Bros. 2 (Unl)"):
+  8 KB PRG banks, one of them switchable at $C000 and one fixed at $6000,
+  CHR as NROM's, and an IRQ that counts CPU cycles (4096 of them), not
+  scanlines, for the game's status bar split.
 - [ ] **Mapper 71's one-screen mirroring.** The BF9097 board's `$9000`-`$9FFF`
   register (Fire Hawk) is ignored (`mapper71Write`): the planes only show
   horizontal or vertical mirroring (`ppuSetMirror`).
